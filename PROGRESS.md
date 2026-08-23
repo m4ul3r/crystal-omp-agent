@@ -64,6 +64,19 @@ _Last updated: session of Aug 23 2026 (goal run: PLAIN BADGE won; staircase + fo
     needed the Bridget cries coord-event at (8,5) completed BEFORE
     re-talking Whitney (.StoppedCrying path); flush_dialog mid-scene
     loses the handout — drive it with A-mash until wJohtoBadges bit sets.
+14. **ECRUTEAK ARRIVED** (`ecruteak-arrived.state`, frame ~3908118): from
+    `plain-badge.state` got SQUIRTBOTTLE (Floria chain: meet her on
+    Route 36 FIRST at (33,12) — shop Floria is despawned until then;
+    teacher only gives bottle after talking to shop Floria), beat wild
+    SUDOWOODO L20 at Route 36 (35,9), crossed Route 36 -> 37 -> ECRUTEAK.
+    QUILAVA L28 84/84. Route-35 trainers farmed on the way.
+    GOTCHAS: (a) cut trees RESPAWN on any map reload — recut each pass,
+    nav's static grid can't plan through them (manual walk hops);
+    (b) Route 36 is 60 wide — goto targets off its real dims fail as
+    "no static path"; check grid dims first; (c) whiteout mid-journey
+    teleports to last Pokecenter AND full-heals — sometimes a free heal
+    service, but replans must re-read position after.
+
 
 
 ## Route notes
@@ -366,3 +379,72 @@ Gotchas hit:
 Next objective suggestion: Route 35/36 north (Sudowoodo needs SquirtBottle
 from Goldenrod flower shop after Plain badge) or Route 34 south beach
 cooltrainers for XP; 4th badge = Morty (Ecruteak, FOG) via Route 36/37.
+
+## FOG BADGE WON — badge 4 (claude-lex, Aug 23)
+
+**Milestones: `fog-badge.state` (in gym) and `fog-badge-healed.state`
+(Ecruteak PC, frame 2668953, RESUME HERE).** Party: QUILAVA L32 95/95
+(Quick Attack/CUT/Smokescreen/Ember), POLIWAG L4, TOGEPI egg.
+Badges ZEPHYR+HIVE+PLAIN+FOG. ₽8362. TM30 Shadow Ball received.
+Bag: 8 SUPER POTION, 5 POTION, 5 AWAKENING (unused — Morty never
+landed Hypnosis).
+
+Route (from `plain-badge-healed.state`): Squirt Bottle -> Route 35 ->
+National Park -> Route 36 Sudowoodo -> Route 37 -> Ecruteak -> Burned
+Tower (rival + beasts) -> Morty. Waypoints/gotchas:
+- Goldenrod PC door cells (3,7)/(4,7) carry the (inert, mobile-only)
+  GS Ball coord events — planner seals them. Micro-step out: goto(3,6),
+  step_hold D. Same class of block: Route-35 gate is door (19,1);
+  the "north edge" city connection cells are decorative dead ends.
+- Squirt Bottle chain: meet Floria BESIDE SUDOWOODO first (33,12 R36),
+  then shop: talk Floria (WANDERS around 5,6 — talk_to can face an
+  empty cell and still report 'talked'; retry against live npc_cells
+  until EVENT_TALKED_TO_FLORIA_AT_FLOWER_SHOP), then teacher (2,4).
+- Dept-store staircases (COLL_STAIRCASE) refuse vertical entry —
+  elevator instead (bg_event panel, select_label floor).
+- Route 37 -> Ecruteak crossing is at route x=8 ONLY (x9-13 blocked
+  by city-side trees despite walkable row-0 cells).
+- Burned Tower: rival trigger (11,9) is the only bridge into its pocket
+  (stage at (12,9), step L). Rival #3 (Totodile line): HAUNTER 20 /
+  CROCONAW 22 / ZUBAT 20 / MAGNEMITE 18. LOST TWICE before winning:
+  whiteout #1 cost ~1300; a fight() wedge in attempt 2 flailed in the
+  pack and TOSSED/ATE ~9 potions mid-battle. Winning policy: Ember vs
+  ghost/steel, heal <55%, else default best-move.
+- After the beasts scene, EUSINE STANDS AT (10,12) BLOCKING the only
+  descent from the pit walkway. Talk to him (face D from (10,11)); he
+  leaves; then lower floor -> exit ladder (7,15).
+- Ecruteak Gym: floor is fall-warp tiles (all -> (4,14)). Safe path
+  (cell chain): (4,15) (5,15) (5,14) (5,13) (6,13) (6,12) (6,11) (5,11)
+  (4,11) (3,11) (3,10) (3,9) (3,8) (3,7) (4,7) (5,7) (6,7) (6,6) (6,5)
+  (5,5) (5,4) (5,3) (5,2). Waypoint-walk it manually (nav side-wall
+  data refuses parts of it); trainers on it are all ghosts.
+- MORTY (Gastly 21, Haunter 21, Gengar 25, Haunter 23): swept 8 Embers,
+  zero damage taken, at L31 with full 25 Ember PP. First attempt FAILED:
+  Spite+misses drained Ember to 0 by Gengar, and fight() can't handle
+  0-PP move selection (see bugs). Ensure full PP before entering.
+
+Harness bugs found this leg (trek.py/battle.py fixed where noted):
+- battle.play() wedge guard ADDED (battle.py): 2 consecutive misfired
+  actions -> force plain attack; 12 -> return 'stuck'. Root wedges seen:
+  (a) use_battle_item flailing when select_abs desyncs — can consume or
+  TOSS items blind; (b) attack() returns ok=True when the game rejects
+  a 0-PP move, so the guard doesn't catch it — STILL OPEN, policies must
+  track PP via me['moves'] (id,pp) pairs.
+- In-battle level-up learn flow DECLINED Flame Wheel at L31 (no
+  relearner in GSC — permanently lost until Swift L42). fight()'s
+  _resolve_learn_flow needs a "learn, forget chosen move" mode.
+- heal_pokecenter FIXED: now asserts it's inside a Pokécenter and that
+  the party is actually healed (egg-aware via game_state, observe()
+  drops the egg flag).
+- whiteout postcondition trap: after a wipe the party is auto-healed,
+  so "hp > 0" proves nothing; check map/money instead. Scripts must
+  save ONLY on verified success and NEVER between fight() and settle
+  (two mid-battle saves poisoned the fork; recovered via milestones).
+- wMenuCursorY is the live 1-based party-menu cursor; the party menu
+  WRAPS so press-counting never works (_party_cursor_to added).
+
+Next: 5th badge options — Chuck (Cianwood, needs Surf: get HM03 from
+Kimono Girls in Dance Theater (23,21) Ecruteak — POLIWAG can learn
+Surf) then Route 38/39 west to Olivine; or Jasmine later (needs
+SecretPotion). Suggest: Kimono Girls -> HM03 -> teach POLIWAG ->
+Olivine via 38/39 -> Chuck.
