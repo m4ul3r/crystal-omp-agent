@@ -48,6 +48,8 @@ RUN_METHODS = {
     "use_item": None,
     "grind": None,
     "settle": None,
+    "route": None,
+    "travel": None,
 }
 
 
