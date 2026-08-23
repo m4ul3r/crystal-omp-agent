@@ -176,13 +176,43 @@ class Battle:
             "types": list(rd("Type", 2)),
         }
 
+    def _my_move_list_up(self, rows):
+        """The player's MOVE LIST is open outside attack(): a ▶/cursor row
+        directly followed by one of my known move names. A-mashing here
+        keeps re-picking the cursor's (possibly DISABLED) move forever."""
+        names = [self.names.moves.get(mid, "") for mid, _ in self.me()["moves"]]
+        names = [n for n in names if n]
+        if not names:
+            return False
+        from .menus import _cursor_x
+        for r in rows:
+            x = _cursor_x(r)
+            if x >= 0:
+                label = r[x + 1:].strip()
+                if any(label.startswith(n) for n in names):
+                    return True
+        return False
+
+    def _disabled_move_id(self):
+        """Move currently DISABLED by enemy Disable; wPlayerDisableCount
+        is the remaining-turn counter, wDisabledMove the move id."""
+        try:
+            if self.emu.read_u8("wPlayerDisableCount") == 0:
+                return None
+            return self.emu.read_u8("wDisabledMove")
+        except Exception:
+            return None
+
     def best_move(self):
         """Slot index of the highest expected-damage move with PP left;
         None means every slot is dry (Struggle territory)."""
+        disabled = self._disabled_move_id()
         me, enemy = self.me(), self.enemy()
         best, best_score = None, -1.0
         for i, (mid, pp) in enumerate(me["moves"]):
             if pp == 0 or mid not in self.data.moves:
+                continue
+            if disabled is not None and mid == disabled:
                 continue
             mv = self.data.moves[mid]
             stab = 1.5 if mv["type"] in me["types"] else 1.0
@@ -256,6 +286,13 @@ class Battle:
 
     def attack(self, move_idx=None):
         """From the main battle menu: FIGHT -> move slot -> A."""
+        if move_idx is not None:
+            # a requested move with no PP left gets "rejected" by the game
+            # AFTER the menu confirm, which reads as success here and wedges
+            # the turn loop -- fall back to the best move that still has PP
+            moves = self.me()["moves"]
+            if move_idx >= len(moves) or moves[move_idx][1] == 0:
+                move_idx = None
         if not self._battle_option(1):
             return False
         if not self._wait_move_menu():
@@ -395,6 +432,7 @@ class Battle:
         last_action = None
         caught = False
         was_menu = False
+        fails = 0     # consecutive misfired actions (wedge guard)
         while self.active():
             if self.emu.frame - f0 > max_frames:
                 return "timeout"
@@ -414,6 +452,12 @@ class Battle:
                     self._drive_forced_switch()
                     continue
                 joined = "".join(rows).upper()
+                if self._my_move_list_up(rows):
+                    # the move list is open outside attack() (e.g. cursor
+                    # parked on a DISABLED move): A would re-pick it and
+                    # loop forever -- back out to the main menu
+                    self.menu.press("B:6 .:12")
+                    continue
                 if not want_nickname and (
                         "GIVE A NICKNAME" in joined
                         or ("YES" in joined and "NO" in joined)):
@@ -432,6 +476,13 @@ class Battle:
             act = policy(rows, me, enemy) if policy else None
             if act is None:
                 act = self._default_policy(me, enemy, potion_frac)
+            if fails >= 2 and act != "flee":
+                # wedge guard: an action that misfired twice in a row will
+                # misfire forever (bad item lookup, unreachable menu row).
+                # Degrade to a plain attack so the battle always progresses
+                # instead of flailing in the pack (which can even toss
+                # items) until the frame cap.
+                act = "attack"
             kind = act[0] if isinstance(act, tuple) else act
             arg = act[1] if isinstance(act, tuple) and len(act) > 1 else None
             ok = True
@@ -447,9 +498,13 @@ class Battle:
                 ok = self.attack(arg if isinstance(arg, int) else None)
             if not ok:
                 # a menu interaction misfired: back out and re-sync
+                fails += 1
+                if fails >= 12:
+                    return "stuck"   # even plain attacks misfire: bail
                 self.menu.press("B:4 .:12")
                 was_menu = False
                 continue
+            fails = 0
             last_action = kind
             # let the turn resolve back to the main menu (or the battle end)
             self.menu.wait_for(
