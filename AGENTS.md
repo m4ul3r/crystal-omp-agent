@@ -65,6 +65,7 @@ from the leg's own arguments.
 | Talk to an NPC / trigger a trainer | `Driver.talk_to(x, y)` or `trek talk X Y` — walks adjacent (handles counters), faces them, flushes dialog, fights trainer battles that trigger |
 | Buy from a Poké Mart | `Driver.mart_buy(x, y, item, qty)` or `trek mart X Y ITEM QTY` — clerk at (x,y); B-only exit (see gotcha 13) |
 | Catch / flee / switch mid-battle | custom policy: `d.fight(policy=lambda rows, me, enemy: ('ball',))`; options: `'flee'`, `('attack', slot)`, `('switch', party_idx)`, `('item','POTION')`, `('ball','POKE BALL')` — all verified live |
+| Name a caught Pokémon | `d.catch(nickname="BUBBLES")` (str, species-keyed dict, or callable) or `trek catch NICKNAME` — types it on the naming keyboard; without a name the prompt is declined |
 | Use items out of battle | `Driver.use_item('POTION', target_slot=0)` |
 | Menus anywhere | `Menus.select_label('SAVE')` (cursor-glyph driven), `select_abs(i)` (scrolling lists), `wait_for_label('USE')` |
 | Read any game variable | `crystal sym <pattern>` then `crystal read <symbol> -n N [--text]` |

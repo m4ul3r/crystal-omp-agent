@@ -15,7 +15,7 @@ Cursor positions are read from the engine's own variables:
 import re
 from pathlib import Path
 
-from .menus import Menus, battle_menu_up, _cursor_x
+from .menus import Menus, battle_menu_up, naming_keyboard_up, _cursor_x
 
 MOVE_LENGTH = 7  # animation, effect, power, type, accuracy, pp, effect chance
 
@@ -358,6 +358,16 @@ class Battle:
             rows = self.emu.screen_text()
             if not battle_menu_up(rows):
                 was_menu = False
+                if naming_keyboard_up(rows):
+                    # "Give a nickname?" answered YES: stop mashing A --
+                    # every press adds a junk character. Caller handles it.
+                    return "naming"
+                joined = "".join(rows).upper()
+                if "GIVE A NICKNAME" in joined or \
+                        ("YES" in joined and "NO" in joined):
+                    # nickname prompt, no name requested: decline (B=NO)
+                    self.menu.press("B:6 .:12")
+                    continue
                 self.menu.press("A:2 .:8")     # advance battle text
                 continue
             if not was_menu:

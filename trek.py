@@ -21,6 +21,29 @@ from crystalagent.symfile import Symbols
 
 DIRS = {"U": "UP", "D": "DOWN", "L": "LEFT", "R": "RIGHT"}
 
+# Naming-keyboard grids (9 cols x 4 char rows), parsed from
+# data/text/name_input_chars.asm: each cell is 2 chars, space = empty key.
+# Row 4 is controls: cols 0-2 case switch, 3-5 DEL, 6-8 END.
+def _parse_name_grid(repo):
+    import re as _re
+    from pathlib import Path as _Path
+    tables = {}
+    text = (_Path(repo) / "data/text/name_input_chars.asm").read_text()
+    for name in ("NameInputUpper", "NameInputLower"):
+        m = _re.search(name + r":\n((?:\tdb \"[^\"]*\"\n)+)", text)
+        rows = _re.findall(r'db "([^"]*)"', m.group(1))
+        grid = {}
+        for y, row in enumerate(rows[:4]):
+            for x in range(9):
+                ch = row[x * 2]
+                if ch != " ":
+                    grid[ch] = (x, y)
+        tables[name] = grid
+    return tables
+
+
+NAME_GRIDS = None
+
 
 class Driver:
     def __init__(self, state_path=None):
@@ -36,6 +59,7 @@ class Driver:
         self.nav = MapData(paths.REPO_ROOT)
         self.menu = Menus(self.emu)
         self.bdata = BattleData(paths.REPO_ROOT, sym, paths.ROM)
+        self._pending_nickname = None
 
     # -- observations ------------------------------------------------------
 
@@ -167,12 +191,69 @@ class Driver:
         s = self.emu.screen_text()
         return any("DEL" in r for r in s) and any("END" in r for r in s)
 
-    def dismiss_keyboard(self):
-        """Confirm a naming screen with the minimal name."""
+    def dismiss_keyboard(self, name=None):
+        """Confirm a naming screen. With a name, actually type it; without,
+        confirm with the minimal name (fast path)."""
+        if name:
+            print(f"  naming keyboard: typing {name!r}", flush=True)
+            self.type_name(name)
+            return
         print("  naming keyboard: confirming", flush=True)
         self.press("START:4 .:20 A:4 .:30")          # jump to END, confirm
         if self.keyboard_open():                      # empty name refused:
             self.press("A:2 .:10 START:4 .:20 A:4 .:30")  # type one letter
+
+    def type_name(self, name, max_len=10):
+        """Type `name` on the naming keyboard (uppercase only -- the game
+        renders names in caps anyway). The grid is deterministic
+        (data/text/name_input_chars.asm); every move/press is verified
+        against WRAM (cursor struct + name length), since input on this
+        screen drops presses that land mid-animation."""
+        global NAME_GRIDS
+        if NAME_GRIDS is None:
+            NAME_GRIDS = _parse_name_grid(paths.REPO_ROOT)
+        grid = NAME_GRIDS["NameInputUpper"]
+
+        def kb_cursor():
+            p = self.emu.read("wNamingScreenCursorObjectPointer", 2)
+            ptr = p[0] | (p[1] << 8)
+            st = self.emu.read((1, ptr), 14)
+            return st[12], st[13]
+
+        def kb_step(btn, want):
+            for _ in range(5):
+                self.press(f"{btn}:8 .:16")
+                if kb_cursor() == want:
+                    return want
+            return kb_cursor()
+
+        def name_len():
+            return self.emu.read_u8("wNamingScreenCurNameLength")
+
+        chars = [c for c in name.upper()[:max_len] if c in grid]
+        if not chars:
+            chars = ["A"]
+        print(f"  typing name {''.join(chars)!r}", flush=True)
+        self.press("START:6 .:20")               # snap to END zone (8,4)
+        x, y = kb_step("U", (8, 3))              # control row moves by ZONE,
+        for ch in chars:                         # so navigate on char rows
+            tx, ty = grid[ch]
+            for _ in range(12):                  # horizontal first
+                if x == tx:
+                    break
+                x, y = kb_step("R" if tx > x else "L",
+                               (x + (1 if tx > x else -1), y))
+            for _ in range(6):                   # then vertical
+                if y == ty:
+                    break
+                x, y = kb_step("D" if ty > y else "U",
+                               (x, y + (1 if ty > y else -1)))
+            before = name_len()
+            for _ in range(3):                   # A adds the character
+                self.press("A:8 .:16")
+                if name_len() > before or name_len() >= max_len:
+                    break
+        self.press("START:6 .:20 A:10 .:40")     # snap to END, confirm
 
     def flush_dialog(self, max_frames=6000, quiet_frames=40):
         """Press A while a textbox is up; return once it's been gone a bit.
@@ -196,12 +277,22 @@ class Driver:
 
     def fight(self, max_frames=90000, policy=None):
         """Play a battle out with real move selection (best expected
-        damage, auto-POTION at low HP, flee hopeless wilds)."""
+        damage, auto-POTION at low HP, flee hopeless wilds). Pauses at a
+        naming keyboard (post-catch nickname prompt) to type
+        self._pending_nickname if one is set."""
         if not self.battle():
             return self.lead()
         f0 = self.emu.frame
         b = Battle(self.emu, self.names, self.bdata)
         outcome = b.play(policy=policy, max_frames=max_frames)
+        for _ in range(3):                       # naming handoff loop
+            if outcome != "naming" or not self.keyboard_open():
+                break
+            name, self._pending_nickname = self._pending_nickname, None
+            name = self._resolve_nickname(name)
+            self.dismiss_keyboard(name)
+            outcome = b.play(policy=policy, max_frames=max_frames)
+        self._pending_nickname = None
         self.flush_dialog(3000)
         lead = self.lead()
         print(f"  battle [{outcome}, {self.emu.frame - f0} frames] -> "
@@ -209,9 +300,22 @@ class Driver:
               flush=True)
         return lead
 
-    def catch(self, ball="POKE BALL", max_balls=10):
+    def _resolve_nickname(self, nickname):
+        """str passes through; dict is keyed by the newly caught mon's
+        species name; callable gets the species name."""
+        if nickname is None or isinstance(nickname, str):
+            return nickname
+        s = game_state(self.emu, self.names)
+        species = s["party"][-1]["name"] if s["party"] else None
+        if callable(nickname):
+            return nickname(species)
+        return nickname.get(species)
+
+    def catch(self, ball="POKE BALL", max_balls=10, nickname=None):
         """Throw `ball` at the current wild until it connects or the budget
-        runs out; flees rather than KO the target once out of balls."""
+        runs out; flees rather than KO the target once out of balls.
+        `nickname`: str (applied to whatever is caught), dict keyed by
+        species name, or callable(species_name) -> str|None."""
         thrown = [0]
 
         def pol(rows, me, enemy):
@@ -221,7 +325,11 @@ class Driver:
             thrown[0] += 1
             return ("ball", ball)
 
-        return self.fight(policy=pol)
+        self._pending_nickname = nickname
+        try:
+            return self.fight(policy=pol)
+        finally:
+            self._pending_nickname = None
 
     def use_item(self, item_name, target_slot=0, field=True):
         """Use an item from the pack outside battle (heals/status on party
@@ -645,7 +753,7 @@ def main():
     leg, rest = argv[0], list(argv[1:])
     spec = {
         "walk": (1, 1), "goto": (2, 2), "talk": (2, 2),
-        "grind": (0, 2), "catch": (0, 0),
+        "grind": (0, 2), "catch": (0, 1),
         "mart": (4, 4),
         "fight": (0, 0), "flush": (0, 0), "route29": (0, 0), "heal": (0, 0),
         "to_violet": (0, 0), "errand1": (0, 0), "errand2": (0, 0),
@@ -681,7 +789,7 @@ def main():
         gargs = [rest[0], int(rest[1])] if len(rest) > 1 else rest
         print(d.grind(*gargs), flush=True)
     elif leg == "catch":
-        d.catch()
+        d.catch(nickname=rest[0] if rest else None)
     elif leg == "fight":
         d.fight()
     elif leg == "flush":

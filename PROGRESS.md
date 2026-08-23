@@ -61,6 +61,7 @@ UNION CAVE. Grind POLIWAG up alongside Cyndaquil. Next badge is HIVE
 | session | owns | working state |
 |---------|------|---------------|
 | tower agent | Sprout Tower -> Elder Li | `joey.state` (frame 238979, SPROUT_TOWER_2F) |
+| ox-alpha (visibility) | fresh boot -> starter -> early New Bark progress | `visibility.state` |
 | ox-alpha (p9) | done: mart_buy + step_hold + 2nd party member (`two-mon.state`) | `saves/ox-alpha.state` |
 
 Rule: never write another session's working state or a milestone checkpoint;
@@ -116,7 +117,20 @@ promote progress under NEW filenames. See AGENTS.md "Multiple agents".
     Fixed en route: /shot.png used to tick the emulator without reloading
     (screen drifted from disk while idle) and called a nonexistent
     PIL `.update()` — screenshots never worked before; both fixed.
-
+- **Round 4 additions (naming, this session):**
+  - `Driver.type_name()` + `catch(nickname=...)` / `trek catch NICKNAME`:
+    types real names on the post-catch naming keyboard. Grid parsed from
+    data/text/name_input_chars.asm; every move + A press verified against
+    WRAM (cursor struct via wNamingScreenCursorObjectPointer -> VAR1/VAR2,
+    and wNamingScreenCurNameLength) because the naming screen drops presses
+    landing mid-animation. Gotchas: the control row (case/DEL/END) moves by
+    ZONE not cell — navigate only on char rows; START snaps to END;
+    'é'.upper() == 'É' bit us a second time.
+  - Default with no nickname requested: the YES/NO prompt is now declined
+    (B), so catches keep species names instead of junk 'AA'. Verified all
+    three paths live: named ('BUBBLES' BELLSPROUT), declined
+    ('BELLSPROUT' stays), legacy minimal still exits cleanly. Existing
+    'AA'/'AAAAAAAAAA' names can't be fixed in-game (no rename primitive).
 
 ## Checkpoints
 

@@ -121,6 +121,11 @@ def battle_menu_up(rows):
     return "FIGHT" in joined and "RUN" in joined
 
 
+def naming_keyboard_up(rows):
+    """The naming keyboard is identifiable by its DEL and END keys."""
+    return any("DEL" in r for r in rows) and any("END" in r for r in rows)
+
+
 def textbox_up(rows):
     """The bottom two textbox rows hold text (non-blank, non-border)."""
     bottom = rows[14] + rows[15] + rows[16] + rows[17] if len(rows) >= 18 else ""
