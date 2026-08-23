@@ -75,15 +75,12 @@ def main():
         # heal lead if badly hurt (max potion), else keep going
         lvl, hp, mhp = lead_level(d)
         if hp * 3 < mhp:
+            d.close_menus()
             ok = d.use_item("MAX POTION", target_slot=0)
+            if not ok:
+                ok = d.use_item("MAXPOTION", target_slot=0)
             print("[heal]", ok)
             if not ok:
-                print("heal failed; retreating")
                 break
-
-    lvl, hp, mhp = lead_level(d)
-    print(f"end {d.map_name()} {d.pos()} L{lvl} {hp}/{mhp} fights={fights}")
-
-
 if __name__ == "__main__":
     main()

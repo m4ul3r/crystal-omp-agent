@@ -196,6 +196,7 @@ PAGE = r"""<!doctype html>
  <div class="stat"><div class="k">Location</div><div class="v" id="s-map">—</div><div class="s" id="s-pos"></div></div>
  <div class="stat"><div class="k">Trainer</div><div class="v" id="s-name">—</div><div class="s" id="s-money"></div></div>
  <div class="stat"><div class="k">Johto badges</div><div class="badges" id="s-badges"></div><div class="s" id="s-badgen"></div></div>
+ <div class="stat"><div class="k">Kanto badges</div><div class="badges" id="s-kbadges"></div><div class="s" id="s-kbadgen"></div></div>
  <div class="stat"><div class="k">Lead</div><div class="v" id="s-lead">—</div><div class="s" id="s-leadhp"></div></div>
 </section>
 
@@ -301,10 +302,12 @@ async function poll(){
   $('s-pos').textContent='('+loc.x+', '+loc.y+') · group '+loc.map_group+' #'+loc.map_number;
   $('mapname').textContent=loc.map;
   $('s-name').textContent=s.player.name;
-  $('s-money').textContent='₽'+fmt(s.player.money)+' · rival '+s.player.rival;
-  const jb=s.player.johto_badges,ALL=['ZEPHYR','HIVE','PLAIN','FOG','STORM','MINERAL','GLACIER','RISING'];
-  $('s-badges').innerHTML=ALL.map(n=>'<span class="badge'+(jb.includes(n)?' on':'')+'" title="'+n+'"></span>').join('');
-  $('s-badgen').textContent=jb.length+'/8'+(s.player.kanto_badges.length?' · kanto '+s.player.kanto_badges.length+'/8':'');
+  const jb=s.player.johto_badges,JALL=['ZEPHYR','HIVE','PLAIN','FOG','STORM','MINERAL','GLACIER','RISING'];
+  $('s-badges').innerHTML=JALL.map(n=>'<span class="badge'+(jb.includes(n)?' on':'')+'" title="'+n+'"></span>').join('');
+  $('s-badgen').textContent=jb.length+'/8';
+  const kb=s.player.kanto_badges,KALL=['BOULDER','CASCADE','THUNDER','RAINBOW','SOUL','MARSH','VOLCANO','EARTH'];
+  $('s-kbadges').innerHTML=KALL.map(n=>'<span class="badge'+(kb.includes(n)?' on':'')+'" title="'+n+'"></span>').join('');
+  $('s-kbadgen').textContent=kb.length+'/8'+(s.player.kanto_badges.length?' · '+s.player.kanto_badges.join(' '):'');
   const lead=s.party[0];
   if(lead){$('s-lead').textContent=lead.name+' Lv '+lead.level;
    $('s-leadhp').textContent=lead.hp+'/'+lead.max_hp+' HP'+(lead.status.length?' · '+lead.status.join(' '):'');}

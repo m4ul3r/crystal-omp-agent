@@ -6,12 +6,24 @@ _CYNDAQUIL L5 chosen at Elm's Lab. Milestone `saves/cyndaquil-start.state`_
 _(frame 32131), working state `saves/ox-alpha-new.state`. New Bark Town (6,5)._
 _Last updated: session of Aug 23 2026 (claude-lex: 7 badges, Ice Path in progress). Field notes in FABLE_FEEDBACK.md -- read it for working techniques before resuming._
 
-## Where we are
+_omp_speed_run (ox-alpha, Aug 23): **JOHTO CHAMPION — Elite Four + Lance cleared.**
+Milestones `saves/e4-{will,koga,bruno,karen,lance}-won.state` and
+`champion-omp.state` (post-credits, New Bark). Working state
+`saves/omp_speed_run.state`. Party: TYPHLOSION L63 (Strength/Cut/Swift/
+Flamethrower), POLIWAG L4, TOGEPI L15. Details at the bottom of this file.
+
+_Second timeline started Aug 23 (ox-alpha): fresh boot, player "GOLD",_
 
 - **codex-luna fresh run:** New game completed, Cyndaquil chosen, and Violet
   City reached/healed. Working state `saves/codex-luna.state`; checkpoint
-  `saves/codex-luna-azalea.state` (frame 408097). Player UNA, rival AA,
-  QUILAVA L16 and Togepi egg, Zephyr Badge, full HP.
+  `saves/codex-luna-plain.state` (Plain Badge, frame 946032), with prior
+  `saves/codex-luna-hive.state` (frame 596685) as the clean Hive checkpoint.
+  Player UNA, rival AA, QUILAVA L25 and Togepi egg, with Zephyr, Hive, and
+  Plain Badges. The Ilex gate loop was resolved by completing Farfetch'd,
+  obtaining HM01, teaching Cut, and cutting the tree at (8,25).
+  Loop postmortem + anti-loop harness guards (whiteout abort, goto seam
+  guard, save() rollback refusal, `trek verify`/`trek states`): see
+  "Harness round 7" below.
 
 - Checkpoint to resume from: **`saves/claude-lex2.state`**
 - Badges (7/8): ZEPHYR HIVE PLAIN FOG MINERAL STORM GLACIER -- only RISING
@@ -109,9 +121,10 @@ _Last updated: session of Aug 23 2026 (claude-lex: 7 badges, Ice Path in progres
 
 ## Next objective
 
-For codex-luna: attempt Azalea/Slowpoke Well and Bugsy, then continue until
-the run becomes impractical. Keep the codex-luna state separate from the older
-multi-agent run below.
+For codex-luna: the third badge is complete. Resume from
+`saves/codex-luna-plain.state` for the actual fourth-badge objective: clear
+the Burned Tower rival prerequisite and defeat Morty for the Fog Badge. Keep
+the codex-luna state separate from the older multi-agent run below.
 
 Head south through Route 32 (Violet City south exit around (19,42) area —
 check maps/VioletCity.asm warps) toward the Route 32 Pokecenter, then
@@ -121,7 +134,8 @@ UNION CAVE. Grind POLIWAG up alongside Cyndaquil. Next badge is HIVE
 
 ## Active sessions
 
-| codex-luna | fresh game, choose Cyndaquil, advance until progress is no longer practical | `saves/codex-luna.state` |
+| codex-luna | Plain Badge complete (3rd); next objective is Morty/Fog Badge | `saves/codex-luna.state` |
+| retard_cannon | fresh save -> 8 Johto badges, speedrun | `saves/retard_cannon.state` (forked default.state @ frame 106506, Route 29) |
 | ox-alpha (new game) | fresh boot -> Cyndaquil chosen | `saves/ox-alpha-new.state` (milestone: `cyndaquil-start.state`) |
 | omp_speed_run | owns Elite Four -> Lance (Champion) | `saves/omp_speed_run.state` (forked from claude-lex2 @ frame 9125030, Indigo Plateau PC) |
 
@@ -133,6 +147,7 @@ UNION CAVE. Grind POLIWAG up alongside Cyndaquil. Next badge is HIVE
 | director | Union Cave traverse -> Azalea/Hive badge | saves/director.state |
 | ox-alpha (goal run) | owns Goldenrod -> WHITNEY (Plain Badge) | `saves/ox-alpha.state` (forked from claude-lex2 @ frame 1132973, Dept Store 2F) |
 | claude-lex | **DONE: PLAIN BADGE WON** (see milestone `plain-badge-healed.state`) — ox-alpha goal run above is now redundant, stand down | `saves/claude-lex2.state` (frame 2287621) |
+| team-run | fresh-boot balanced-team run: 6 nicknamed mons, rotation training, badges Zephyr->Hive minimum | saves/team-run.state |
 
 Rule: never write another session's working state or a milestone checkpoint;
 promote progress under NEW filenames. See AGENTS.md "Multiple agents".
@@ -306,6 +321,49 @@ promote progress under NEW filenames. See AGENTS.md "Multiple agents".
   scene var are safe to walk but planner still seals them when it can't
   prove otherwise (AzaleaTown neck). Manual micro-step (press seq)
   bypasses planning safely once safety is confirmed from maps/*.asm.
+
+## Harness round 7 (ox-alpha, Aug 23): anti-loop guards + audits
+
+Code changes (trek.py), live-tested on throwaway forks:
+- WHITEOUT GUARD: fight() detects wipes (money dropped + every non-egg
+  party member at full HP after battle = whiteout teleport; full HP
+  alone proves nothing). goto/walk/talk_to/travel consume the flag and
+  ABORT the leg by default instead of walking back into whatever just
+  killed us (Falkner retry loop, director's 11x rival loss-loop).
+  d.whiteout_policy = 'continue' restores blind resuming.
+- GOTO SEAM GUARD: goto counts executed (from,to) map seams per call;
+  crossing one 3x raises TravelError instead of ping-ponging (the
+  Ilex-gate churn class above).
+- save() refuses to overwrite a state whose .meta frame count is newer
+  than the running emulation unless force=True -- accidental rollback
+  now fails loudly inside the harness.
+- New read-only legs: `trek verify FLAG...` (event flags plus bare
+  badge names like HIVE/ZEPHYR_BADGE; exit 1 if any missing or unknown)
+  and `trek states` (saves/ table: frames from .meta, META MISSING
+  marker, age).
+
+Ilex-loop postmortem (analysis session): the router model was SOUND --
+a clean 43-move plan Azalea -> ILEX_FOREST_AZALEA_GATE -> forest
+exists, the west connections dead-end in collision data, and sealing
+the rival-neck cells yields 'no static path', not wandering. The churn
+came from replanning while displaced east of Azalea: from the R33 /
+UnionCave seam the shortest modeled route backtracks through exactly
+those maps, and the cave mouth is saturated with trainer sight-lines,
+so every pass fought and replanned. Anchor at a known waypoint after
+any interrupted leg before re-running goto.
+Live repro on a hive fork: SCENE_AZALEATOWN_RIVAL_BATTLE stays armed
+(scene var 1) until the rival cutscene completes, so the (5,10)/(5,11)
+neck cells trip a fight forever when the lead can't carry it. With the
+whiteout guard the same attempt loses ONCE, prints [WHITEOUT] with
+position, and aborts. Trigger and WIN that fight fresh before routing
+through the neck.
+
+State hygiene: codex-luna-plain-corrected.state, r42-stuck.state,
+unitrun-pre-1/2 have NO .meta sidecar (frames unknown). The codex-luna
+prefix kept moving during analysis (working state hit frame 1590995;
+sudowoodo/ecruteak/rival-failed/gym-locked checkpoints appeared) --
+treat any codex-luna* file as potentially live from another session:
+fork before risky work, promote milestones under NEW names.
 
 ## Ilex Forest cleared (claude-lex fork, Aug 23)
 
@@ -606,3 +664,68 @@ Traps discovered (added to FABLE_FEEDBACK.md):
   use raw d.press('<dir>:16 .:40') + coordinate verification.
 - Victory Road one-way system: $b2 UP_WALL bands + $a3 hop-downs; the
   three-leg ladder chain is (1,49)->(1,35), (13,31)->(13,17), exit (13,5).
+
+## CHAMPION — Elite Four + Lance cleared (omp_speed_run, ox-alpha, Aug 23)
+
+**Run complete: all 8 Johto badges -> Elite Four (Will, Koga, Bruno, Karen)
+-> Champion Lance -> Hall of Fame -> credits.** Milestones:
+`e4-will-won.state`, `e4-koga-won.state`, `e4-bruno-won.state`,
+`e4-karen-won.state`, `e4-lance-won.state`, `champion-omp.state`
+(post-credits, NEW_BARK_TOWN (13,6), scriptMode 0). Working state
+`saves/omp_speed_run.state`. Final party: TYPHLOSION L63
+(Strength/Cut/Swift/Flamethrower), POLIWAG L4 (HM mule), TOGEPI L15.
+Money ~16.5k.
+
+Session log (from claude-lex2 fork @ Indigo Plateau PC):
+1. Bought 4 FULL RESTORE at the Plateau 1F clerk (11,7).
+2. Grounded Typhlosion L59->L60 in Victory Road entrance corridor
+   (scripts/grind_vr.py); learned FLAMETHROWER at L60 (game replaced
+   EMBER, not a FORGET_PRIORITY move -- fine, better spread).
+3. Will/Koga/Bruno via scripts/e4.py talk_to->fight; milestone after each.
+   Plateau PC 1F is planner-hostile (counter gaps only at x=6/8/9/10 on
+   row 7->8, NE corridor up x=16/17, Wills warp entered SIDEWAYS from
+   (15,3) pressing L). Route hand-coded in enter_room().
+4. Karen wiped us twice. Root causes found by instrumenting fight()
+   with a logging policy:
+   - default policy heals at <30% HP with SUPER POTIONS (50hp) --
+     far too late vs Karen's Gengar L45 (~55 dmg/turn burst);
+   - mid-battle item flows wedge the battle permanently when their menu
+     A-presses get swallowed: wBattleMode stays 2 and the game waits on
+     our pack choice forever (seen in .watch.state sidecar: pack open,
+     cursor on HYPER POTION). play() then reports fake "wipe"/"timeout".
+5. Deliberate loss to Karen (flee-spam policy, scripts/e4_lose.py) ->
+   whiteout -> respawn outside Plateau PC -> nurse heal restores PP ->
+   saved. KEY FINDING: losing inside the E4 does NOT reset
+   EVENT_BEAT_ELITE_4_* flags in this harness state, but DOES clear
+   the *_ROOM_EXIT_OPEN door flags -> soft-lock (beaten members won't
+   rebattle or reopen doors). Remedy: write the five EXIT_OPEN flags
+   directly into wEventFlags (bank 1, base wEventFlags; bits parsed from
+   constants/event_flags.asm), then walk through -- DoorsCallback applies
+   the changeblock open-door on map entry.
+6. scripts/e4_chain.py: walks through already-beaten rooms by flag,
+   never talks to them, fights the target member with make_policy()
+   (e4_helpers.py): heal at <55% HP with HYPER POTION, best damaging
+   move by preference list. Karen won cleanly.
+7. Lance (Champion) won with prefer=["STRENGTH","SWIFT",...] (fire is
+   resisted by half his team). BEAT_CHAMPION_LANCE verified, Hall of
+   Fame registration + credits driven through with A-mash (credits take
+   seconds of wall time at raw emulation speed).
+
+Gotchas added this session:
+- talk_to fights trainer battles internally; any wrapper that assumes
+  the battle starts AFTER talk_to returns will miss it. Route every
+  fight through one patched Driver.fight if you need custom policy.
+- Battle.me()["moves"] is [(move_id, pp)] tuples, NOT dicts; names via
+  Names.moves. The policy contract differs from observe()'s format.
+- E4 room entrances re-seal per entry (ENTRANCE_CLOSED changeblock at
+  (4,14)); there is no backward retreat and no nurse access between
+  members. Losing respawns you at the Plateau PC but keeps BEAT flags
+  while clearing EXIT_OPEN flags (soft-lock; fix = flag writes above).
+- select_label's confirm ('A:2 .:10') gets swallowed by some menus
+  (START menu, battle pack); an explicit long press ('A:8 .:40+')
+  after positioning works reliably.
+- use_item('START menu did not open') flakes are timing races; retry
+  loop + close_menus between attempts fixes them out of battle.
+
+Next objectives for this timeline (post-game): S.S. Ticket phone call
+from Elm -> Kanto badges, Red at Mt. Silver, catch legendaries.
