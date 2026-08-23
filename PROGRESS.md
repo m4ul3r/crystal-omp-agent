@@ -50,6 +50,16 @@ Then ZEPHYR BADGE at Violet Gym (door (18,17), FALKNER, bird types —
 Smokescreen/Leer won't cut it; keep TACKLE spam, consider grinding to L13+).
 Checkpoints: `sprout-elder.state`, then `zephyr-badge.state`.
 
+## Active sessions
+
+| session | owns | working state |
+|---------|------|---------------|
+| tower agent | Sprout Tower -> Elder Li | `joey.state` (frame 238979, SPROUT_TOWER_2F) |
+| ox-alpha | unassigned — forked from violet-arrived @176067 | `saves/ox-alpha.state` |
+
+Rule: never write another session's working state or a milestone checkpoint;
+promote progress under NEW filenames. See AGENTS.md "Multiple agents".
+
 ## Harness state (as of this session)
 
 - Audit-and-fix session: `catch()` was broken since birth (undefined

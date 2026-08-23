@@ -116,3 +116,21 @@ ROM's `Moves` table via `pokecrystal.sym`. Don't hardcode game data.
 
 Checkpoint naming: `<milestone>.state` (e.g. `violet-badge1.state`). Keep
 names stable and referenced in PROGRESS.md.
+
+## Multiple agents, one saves/ dir
+
+Milestone checkpoints (`violet-arrived.state`, `zephyr-badge.state`, …) are
+**shared read-only history**; `default.state` is contested — never assume it
+still holds what PROGRESS.md says. Each concurrent session must:
+
+1. Fork its own working state from the newest good milestone and name it
+   after itself: `cp saves/<milestone>.state saves/<agent>.state` (plus the
+   `.meta` sidecar).
+2. Always pass that file explicitly so nothing else gets mutated:
+   - trek: `.venv/bin/python trek.py <leg> saves/<agent>.state <args>`
+   - CLI:  `./crystal --state saves/<agent>.state ...`
+   - or export `CRYSTAL_STATE=$PWD/saves/<agent>.state` once per shell.
+3. Claim its objective in PROGRESS.md *before* starting work ("session X
+   owns Sprout Tower, working state `saves/x.state`") and record results
+   when done. Promote a finished objective by saving a new milestone
+   checkpoint — a new filename, never an overwrite of an existing one.
