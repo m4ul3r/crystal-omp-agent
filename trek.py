@@ -15,7 +15,7 @@ from crystalagent.charmap import Charmap
 from crystalagent.emu import Crystal, parse_sequence
 from crystalagent.menus import Menus, battle_menu_up
 from crystalagent.names import Names
-from crystalagent.nav import MapData, STEP
+from crystalagent.nav import MapData, STEP, WARPS
 from crystalagent.state import game_state, status_line
 from crystalagent.symfile import Symbols
 
@@ -72,6 +72,24 @@ class Driver:
             if b[0]:
                 cells.add((b[16] - 4, b[17] - 4))
         return cells
+
+    def settle(self, quiet=3, spacing=20, max_frames=900):
+        """Wait until map + position stop changing: door/cutscene warps
+        finish asynchronously a beat AFTER the step that triggered them,
+        so anything acting on the map right after a step must settle."""
+        last, still = None, 0
+        f0 = self.emu.frame
+        while self.emu.frame - f0 < max_frames:
+            if self.battle():
+                return
+            cur = self.pos()
+            if cur == last:
+                still += spacing
+                if still >= quiet * spacing:
+                    return
+            else:
+                last, still = cur, 0
+            self.press(f".:{spacing}")
 
     # -- actions -----------------------------------------------------------
 
@@ -240,6 +258,7 @@ class Driver:
                 if r == "battle":
                     self.fight()
                 elif r == "warp":
+                    self.settle()
                     print(f"  -> {self.map_name()} {self.pos()[2:]}", flush=True)
                     done += 1
                     stuck = 0
@@ -272,17 +291,25 @@ class Driver:
                 return True
             path = self.nav.find_path(self.map_name(), cur, goal, self.npc_cells())
             if not path:
-                self.press(".:60")  # an NPC may be standing on the only path
+                # distinguish "NPC in the way" from "statically unreachable":
+                # if a relaxed (ignore-NPC) route exists, take it and let
+                # step_dir handle the bumps -- waiting never moves trainers.
+                relaxed = self.nav.find_path(self.map_name(), cur, goal)
+                if not relaxed:
+                    print(f"  no static path {cur} -> {goal}", flush=True)
+                    return False
+                self.press(".:40")   # brief beat for genuinely moving NPCs
                 replans += 1
                 if replans % 5 == 0:
-                    print(f"  no path {cur} -> {goal}, waiting for NPCs",
+                    print(f"  threading {cur} -> {goal} past NPCs",
                           flush=True)
-                continue
+                path = relaxed
             for mv in path:
                 r = self.step_dir(mv)
                 if r == "battle":
                     self.fight()
                 elif r == "warp":
+                    self.settle()
                     print(f"  warped -> {self.map_name()} {self.pos()[2:]}", flush=True)
                     return self.pos()[2:] == goal
                 elif r == "blocked":
@@ -330,7 +357,59 @@ class Driver:
                     elif r == "moved":
                         moved += 1
         return "max-battles"
-        return "max-battles"
+
+    def _approach_cell(self, x, y):
+        """Cell to stand on to talk to the NPC at (x,y): an adjacent
+        walkable cell if one exists, else (counters!) two cells out along
+        a ray whose middle cell is blocked."""
+        here = self.pos()[2:]
+        name = self.map_name()
+        npcs = self.npc_cells()
+        grid = self.nav.grid(name)
+        wid, hgt = len(grid[0]), len(grid)
+        for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+            c = (x + dx, y + dy)
+            if self.nav.find_path(name, here, c, npcs) is not None:
+                return c
+        for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+            mid, far = (x + dx, y + dy), (x + 2 * dx, y + 2 * dy)
+            if not (0 <= far[0] < wid and 0 <= far[1] < hgt):
+                continue
+            if mid in npcs or grid[mid[1]][mid[0]] in WARPS:
+                continue   # would need to pass an NPC or a warp
+            if self.nav.find_path(name, here, far, npcs) is not None:
+                return far
+        return None
+
+    def talk_to(self, x, y, label=""):
+        """Walk next to the NPC at (x,y) (or across a counter from them),
+        face them, and talk. Fights any trainer battle that triggers
+        (sight-lines are slow: polls for wBattleMode after the dialog).
+        Returns 'battle' | 'talked' | False."""
+        if self.battle():
+            self.fight()
+        self.settle()
+        spot = self._approach_cell(x, y)
+        if spot is None:
+            print(f"  no approach to ({x},{y})", flush=True)
+            return False
+        if not self.goto(*spot, label or f"approach ({x},{y})"):
+            return False
+        fdx = (x > spot[0]) - (x < spot[0])
+        fdy = (y > spot[1]) - (y < spot[1])
+        facing = {(-1, 0): "L", (1, 0): "R", (0, -1): "U", (0, 1): "D"}[
+            (fdx, fdy)]
+        self.step_dir(facing)          # blocked step = turn toward the NPC
+        self.press("A:2 .:20")
+        outcome = self.flush_dialog(30000)
+        # trainer triggers land slowly; poll before declaring it plain talk
+        f0 = self.emu.frame
+        while not self.battle() and self.emu.frame - f0 < 2400:
+            self.press(".:60")
+        if self.battle() or outcome == "battle":
+            self.fight()
+            return "battle"
+        return "talked"
 
     def save(self, name=None):
         target = Path(paths.SAVES_DIR) / name if name else self.state_path
@@ -437,13 +516,15 @@ def main():
     argv = sys.argv[1:]
     if not argv or argv[0] in ("-h", "--help"):
         sys.exit("usage: trek.py <leg> [<state>] [args...]\n"
-                 "legs: walk PATH | goto X Y | grind [PACE] [LEVEL] | catch | "
-                 "fight | flush | heal | route29 | to_violet |\n"
-                 "      errand1 errand2 errand3 errand4 violet\n"
-                 "<state>: savestate path ('' or omitted = saves/default.state)")
+             "legs: walk PATH | goto X Y | talk X Y | grind [PACE] [LEVEL] | "
+             "catch | fight |\n"
+             "      flush | heal | route29 | to_violet |\n"
+             "      errand1 errand2 errand3 errand4 violet\n"
+             "<state>: savestate path ('' or omitted = saves/default.state)")
     leg, rest = argv[0], list(argv[1:])
     spec = {
-        "walk": (1, 1), "goto": (2, 2), "grind": (0, 2), "catch": (0, 0),
+        "walk": (1, 1), "goto": (2, 2), "talk": (2, 2),
+        "grind": (0, 2), "catch": (0, 0),
         "fight": (0, 0), "flush": (0, 0), "route29": (0, 0), "heal": (0, 0),
         "to_violet": (0, 0), "errand1": (0, 0), "errand2": (0, 0),
         "errand3": (0, 0), "errand4": (0, 0), "violet": (0, 0),
@@ -458,7 +539,8 @@ def main():
     if rest and (rest[0] == "" or rest[0].endswith(".state")):
         state_arg = rest.pop(0) or None
     if not lo <= len(rest) <= hi:
-        usage = {"walk": "PATH", "goto": "X Y", "grind": "[PACE] [LEVEL]"}.get(leg, "")
+        usage = {"walk": "PATH", "goto": "X Y", "talk": "X Y",
+                 "grind": "[PACE] [LEVEL]"}.get(leg, "")
         sys.exit(f"usage: trek.py {leg} [<state>] {usage}".rstrip())
     try:
         d = Driver(state_arg)
@@ -469,6 +551,8 @@ def main():
         d.walk(rest[0])
     elif leg == "goto":
         d.goto(int(rest[0]), int(rest[1]))
+    elif leg == "talk":
+        print(d.talk_to(int(rest[0]), int(rest[1])), flush=True)
     elif leg == "grind":
         gargs = [rest[0], int(rest[1])] if len(rest) > 1 else rest
         print(d.grind(*gargs), flush=True)

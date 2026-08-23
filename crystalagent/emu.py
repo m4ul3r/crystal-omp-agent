@@ -109,6 +109,22 @@ class Crystal:
     def read_text(self, name, length):
         return self.charmap.decode(self.read(name, length))
 
+    def write(self, name_or_addr, data):
+        """Write bytes (or a single int) to WRAM/HRAM; banked symbols OK."""
+        bank, addr = self.resolve(name_or_addr)
+        if isinstance(data, int):
+            data = bytes([data])
+        mem = self.py.memory
+        if 0xD000 <= addr < 0xE000 and bank < 1:
+            raise ValueError(
+                f"$D000-$DFFF is SVBK-switched WRAM; write it through a "
+                f"banked symbol (`crystal sym`), not raw address {addr:#06x}")
+        targets = [(bank, addr + i) for i in range(len(data))] \
+            if addr < 0x8000 or (0xD000 <= addr < 0xE000 and bank >= 1) \
+            else [addr + i for i in range(len(data))]
+        for t, b in zip(targets, data):
+            mem[t] = b
+
     # -- time --------------------------------------------------------------
 
     @property

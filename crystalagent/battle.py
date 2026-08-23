@@ -71,6 +71,12 @@ class BattleData:
         return m
 
 
+def _norm_item(name):
+    """Normalize an item name for lookup: the repo writes the POKé glyph
+    as '#' ("# BALL"), while callers say "POKE BALL"."""
+    return re.sub(r"[^A-Z0-9]", "", name.upper().replace("#", "POKE"))
+
+
 def bag_item_index(emu, names, item_name, pocket="items"):
     """0-based position of an item inside a pack pocket's WRAM list.
     Entries are (id, quantity) pairs."""
@@ -79,13 +85,15 @@ def bag_item_index(emu, names, item_name, pocket="items"):
     else:
         count_sym, list_sym = "wNumItems", "wItems"
     count = min(emu.read_u8(count_sym), 20)
-    want = next((i for i, n in names.items.items() if n == item_name), None)
-    if want is None or count == 0:
+    want = _norm_item(item_name)
+    got = next((i for i, n in names.items.items()
+                if _norm_item(n) == want), None)
+    if got is None or count == 0:
         return None
     bank, addr = emu.sym[list_sym]
     raw = emu.read((bank, addr), count * 2)
     for i in range(count):
-        if raw[i * 2] == want:
+        if raw[i * 2] == got:
             return i
     return None
 

@@ -34,6 +34,7 @@ driver (loads the ROM once, seconds instead of per-call overhead):
 ```sh
 .venv/bin/python trek.py goto X Y          # BFS pathfind + walk to (x,y)
 .venv/bin/python trek.py walk 'L*5 U*2'
+.venv/bin/python trek.py talk X Y          # approach NPC/trainer at (x,y) and talk
 .venv/bin/python trek.py grind 'D U' 13    # pace in grass until level 13
 .venv/bin/python trek.py catch             # throw balls at the current wild
 .venv/bin/python trek.py fight             # play out current battle smartly
@@ -61,7 +62,8 @@ from the leg's own arguments.
 | Structured state (party/battle/money/badges) | `crystal state`, or `Driver.lead()` / `game_state()` |
 | Walkable map, BFS with ledges + NPC avoidance | `trek.Driver.goto(x,y)`; debug render: `MapData.render(map_const)` |
 | Fight battles | `Driver.fight()` — best-move selection from ROM move data, auto-POTION at <30% HP, flees hopeless wilds |
-| Catch / flee / switch mid-battle | custom policy: `d.fight(policy=lambda rows, me, enemy: ('ball',))`; options: `'flee'`, `('attack', slot)`, `('switch', party_idx)`, `('item','POTION')`, `('ball','POKE BALL')` |
+| Talk to an NPC / trigger a trainer | `Driver.talk_to(x, y)` or `trek talk X Y` — walks adjacent (handles counters), faces them, flushes dialog, fights trainer battles that trigger |
+| Catch / flee / switch mid-battle | custom policy: `d.fight(policy=lambda rows, me, enemy: ('ball',))`; options: `'flee'`, `('attack', slot)`, `('switch', party_idx)`, `('item','POTION')`, `('ball','POKE BALL')` — all verified live |
 | Use items out of battle | `Driver.use_item('POTION', target_slot=0)` |
 | Menus anywhere | `Menus.select_label('SAVE')` (cursor-glyph driven), `select_abs(i)` (scrolling lists), `wait_for_label('USE')` |
 | Read any game variable | `crystal sym <pattern>` then `crystal read <symbol> -n N [--text]` |
@@ -103,6 +105,11 @@ ROM's `Moves` table via `pokecrystal.sym`. Don't hardcode game data.
 11. **Overworld screens decode as structure glyphs, not semantics.** Use
     coordinates for ground truth, `screen --png` + image read only when you
     need terrain visuals.
+12. **Door/cutscene warps finish asynchronously.** `step_dir` reports the
+    step onto a door tile as "moved" while the map transition is still
+    animating — map/pos/NPC reads right after are for the OLD map (cost a
+    gym attempt). Call `Driver.settle()` (or let walk/goto/talk_to do it)
+    before acting on a fresh warp.
 
 ## Session protocol
 

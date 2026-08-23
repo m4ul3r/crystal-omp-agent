@@ -1,15 +1,14 @@
 # PROGRESS — Pokémon Crystal run
 
-_Last updated: session of Aug 23 2026 (harness upgrade session)._
+_Last updated: session of Aug 23 2026 (tooling round 2 + ZEPHYR BADGE)._
 
 ## Where we are
 
-- Checkpoint to resume from: **`saves/violet-arrived.state`** (frame 176067)
-- Position: inside VIOLET_POKECENTER_1F at the nurse counter, fully healed
-- Party: CYNDAQUIL "AA" L11, 33/33 HP
-- Money: ₽3364 · Badges: none yet
-- Bag: 1× POTION, no Poké Balls yet (balls come after delivering the egg —
-  already done; see `egg-delivered.state`)
+- Checkpoint to resume from: **`saves/zephyr-badge.state`** (frame 296052)
+- Position: inside VIOLET_GYM at (5,2), Falkner beaten
+- Party: CYNDAQUIL "AA" L14, 19/40 HP (heal before next fights)
+- Money: ₽3764 · Badges: **ZEPHYR**
+- Bag: no POTIONs, no balls
 
 ## Story progress
 
@@ -27,6 +26,10 @@ _Last updated: session of Aug 23 2026 (harness upgrade session)._
 7. **VIOLET CITY REACHED** (`violet-arrived.state`, frame 176067): walked
    Route 30 -> Route 31 -> gate -> Violet City, healed at Pokecenter
    (CYNDAQUIL L11 33/33). Several wilds won en route.
+8. **ZEPHYR BADGE WON** (`zephyr-badge.state`, frame 296052): both Bird
+   Keepers (Abe, Rod) beaten by the stalled p5 session, then Falkner
+   finished off by this session's new `talk_to` primitive. Lost the first
+   attempt at L13/17HP (whiteout), re-entered and won cleanly at L14.
 
 ## Route notes
 
@@ -44,41 +47,48 @@ _Last updated: session of Aug 23 2026 (harness upgrade session)._
 
 ## Next objective
 
-Sprout Tower (door at Violet City (23,5)): grind to ~L12 first if needed,
-fight through the tower sages, beat ELDER LI (BELLSPROUT) for HM01 Cut.
-Then ZEPHYR BADGE at Violet Gym (door (18,17), FALKNER, bird types —
-Smokescreen/Leer won't cut it; keep TACKLE spam, consider grinding to L13+).
-Checkpoints: `sprout-elder.state`, then `zephyr-badge.state`.
+Heal at the Violet Pokecenter, buy/catch supplies (no balls or potions
+left), then Route 32 south toward UNION CAVE / AZALEA. Or grind Route 31/
+Violet outskirts for a 2nd party member (ball throws now verified working).
+Suggested checkpoints: `route32.state`, then `hive-badge.state` later.
 
 ## Active sessions
 
 | session | owns | working state |
 |---------|------|---------------|
 | tower agent | Sprout Tower -> Elder Li | `joey.state` (frame 238979, SPROUT_TOWER_2F) |
-| ox-alpha | unassigned — forked from violet-arrived @176067 | `saves/ox-alpha.state` |
+| ox-alpha (p9) | done this round: tooling round 2 + ZEPHYR BADGE (`zephyr-badge.state`) | — |
 
 Rule: never write another session's working state or a milestone checkpoint;
 promote progress under NEW filenames. See AGENTS.md "Multiple agents".
 
-## Harness state (as of this session)
+## Harness state (as of tooling round 2)
 
-- Audit-and-fix session: `catch()` was broken since birth (undefined
-  `max_frames` NameError + KO'd target when out of balls) — now throws up to
-  `max_balls`, flees once dry. `grind` stops mid-pace on level/HP thresholds
-  and no longer spins when blocked. trek CLI validates args (no tracebacks),
-  accepts `<state>` optionally (`''` or omitted = default; forks must end in
-  `.state`), and gained a `catch` leg. `-q/--quiet` now accepted after the
-  subcommand too. Raw reads of $D000-$DFFF without a bank raise instead of
-  returning wrong-bank garbage.
-- Smart battles implemented and live-tested: `Driver.fight()` picks the best
-  damaging move (power × type chart × STAB × accuracy from ROM data),
-  auto-POTION below 30% HP (verified mid-battle), flees hopeless wilds
-  (verified). ~3.5k frames per wild battle.
-- Out-of-battle item use works end-to-end (`use_item('POTION')` healed
-  21→26 and returned to a clean field).
-- NOT yet exercised with real inventory: ball throws, party switching
-  mid-battle (`switch_to`). Primitives are tested; first real use, watch it
-  on a fork.
+- Round 1 audit fixes (catch(), grind early-exit, CLI validation, banked-WRAM
+  reads) — see commit history.
+- **Round 2 additions (all live-tested on disposable forks):**
+  - `Driver.talk_to(x,y)` + `trek talk X Y`: walks adjacent (or across a
+    counter — nurse case) to any NPC, faces them, talks; fights trainer
+    battles that trigger and polls the slow sight-line transition. Verified
+    vs nurse (plain dialog) AND Falkner (badge fight won).
+  - `Driver.settle()`: door/cutscene warps finish asynchronously AFTER the
+    step that triggered them — walk/goto/talk now settle before reading the
+    map. This race cost p5 its gym attempt ("in: VIOLET_CITY" while actually
+    inside the gym).
+  - `goto` no longer deadlocks on NPCs: distinguishes "statically blocked"
+    (gives up immediately with `no static path`) from "NPC in the way"
+    (threads through NPC cells; step_dir handles bumps).
+  - `emu.write(addr|sym, data)` for test setup; banked-WRAM guarded like
+    read.
+  - Item lookup normalized: repo names item 5 `"# BALL"` (POKé glyph);
+    callers say `"POKE BALL"` — both work now. This bug made ball lookups
+    impossible before.
+  - Verified with real inventory: mid-battle `switch_to` (won a wild after
+    switching) and real ball throw via `catch()` (`[caught]` on POLIWAG).
+  - Gotcha learned: RAM-injected party members MUST also get nickname+OT
+    bytes written (`wPartyMonNicknames`/`wPartyMonOTs`, 11B slots) or the
+    text engine hard-freezes on "Go! ?????".
+
 
 ## Checkpoints
 
@@ -89,7 +99,9 @@ promote progress under NEW filenames. See AGENTS.md "Multiple agents".
 | egg-delivered.state | 81004 | egg handed to Elm |
 | default.state | 106033 | pre-Journey fork point (Route 29) |
 | joey.state | 198202 | Joey beaten, ended inside Violet gate |
-| violet-arrived.state | 176067 | **current** — Violet City, healed, L11 |
+| violet-arrived.state | 176067 | Violet City, healed, L11 |
+| gym-attempt.state | 279328 | p5's stalled badge attempt (superseded) |
+| zephyr-badge.state | **296052** | **current** — ZEPHYR BADGE won, L14 |
 
 ## Gotchas discovered this run
 
@@ -97,3 +109,7 @@ promote progress under NEW filenames. See AGENTS.md "Multiple agents".
 - Battle menu cursor is `wMenuCursorY/X`, not `wMenuCursorPosition`
   (that one only writes on confirm) — cost a full debugging session.
 - Move-selection menu has no literal "PP" text; detect it by ▶+move-name.
+- Door/cutscene warps complete asynchronously AFTER the triggering step;
+  always `settle()` before trusting map/pos (new gotcha #12 in AGENTS.md).
+- RAM-injected party mons need nickname+OT bytes or text freezes on
+  "Go!" — test-setup-only hazard.
