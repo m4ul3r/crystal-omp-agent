@@ -117,6 +117,25 @@ promote progress under NEW filenames. See AGENTS.md "Multiple agents".
     Fixed en route: /shot.png used to tick the emulator without reloading
     (screen drifted from disk while idle) and called a nonexistent
     PIL `.update()` — screenshots never worked before; both fixed.
+- **Round 5 additions (this session, live-tested on disposable forks):**
+  - **Cross-map routing** (`nav.find_route` + `trek goto X Y [MAP]`):
+    MapData now parses `connection` lines from data/maps/attributes.asm and
+    `warp_event` tables from maps/*.asm, so BFS routes between maps.
+    Landing math derived from EnterMapConnection + the connection macro
+    (verified: Cherrygrove (16,0) U -> Route30 (6,53)). Warp tiles are
+    never mid-path cells; single-map find_path now refuses to cross doors
+    (fixes walking back over the lab door after exiting).
+  - Live-verified: New Bark -> Route29 -> Cherrygrove end-to-end (fought
+    3 wilds en route), Route31 -> gate -> exact cell, Route31 -> Route30
+    south end. goto replans after every warp because step_hold drifts ~2
+    cells past the modeled landing (new gotcha #14 in AGENTS.md).
+  - `trek` now REFUSES to run implicitly on saves/default.state unless
+    CRYSTAL_ALLOW_DEFAULT=1 -- a session ran `walk` without a state arg
+    and silently mutated the shared fork point. default.state was NOT
+    damaged by the audit run (its steps were blocked at (43,17); only ~300
+    idle frames drifted, frame 106033 -> 106506).
+  - Note: `trek flush` already existed (flushes dialog to quiet); it now
+    prints its outcome ("done"/"battle"/"timeout").
 - **Round 4 additions (naming, this session):**
   - `Driver.type_name()` + `catch(nickname=...)` / `trek catch NICKNAME`:
     types real names on the post-catch naming keyboard. Grid parsed from
@@ -139,7 +158,7 @@ promote progress under NEW filenames. See AGENTS.md "Multiple agents".
 | healed-1.state | 39549 | after first Pokecenter heal |
 | pre-rival.state | 68317 | before rival ambush on Route 29 |
 | egg-delivered.state | 81004 | egg handed to Elm |
-| default.state | 106033 | pre-Journey fork point (Route 29) |
+| default.state | 106506 | pre-Journey fork point (Route 29) |
 | joey.state | 198202 | Joey beaten, ended inside Violet gate |
 | violet-arrived.state | 176067 | Violet City, healed, L11 |
 | gym-attempt.state | 279328 | p5's stalled badge attempt (superseded) |

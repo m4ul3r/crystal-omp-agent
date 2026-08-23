@@ -480,10 +480,16 @@ class Driver:
                     self.settle()
                     print(f"  -> {self.map_name()} {self.pos()[2:]}", flush=True)
                     moved = True
+                    # step_hold keeps the key down through the transition,
+                    # so the player glides past the modeled landing cell;
+                    # replan from the live position rather than trust the
+                    # rest of the precomputed path
+                    break
                 elif r == "moved":
                     moved = True
                 elif r == "blocked":
-                    print(f"  blocked {mv} at {cur_map} {self.pos()[2:]}"
+                    print(f"  blocked {mv} at {self.map_name()} "
+                          f"{self.pos()[2:]}"
                           f"{' [textbox]' if self.textbox() else ''}",
                           flush=True)
                     if self.textbox():

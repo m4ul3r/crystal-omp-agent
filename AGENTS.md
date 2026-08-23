@@ -32,7 +32,9 @@ For anything longer than a couple of inputs use the persistent-process
 driver (loads the ROM once, seconds instead of per-call overhead):
 
 ```sh
-.venv/bin/python trek.py goto X Y          # BFS pathfind + walk to (x,y)
+.venv/bin/python trek.py goto X Y [MAP]   # BFS pathfind + walk to (x,y);
+                                          # MAP (e.g. VIOLET_CITY) routes
+                                          # across maps via warps+connections
 .venv/bin/python trek.py walk 'L*5 U*2'
 .venv/bin/python trek.py talk X Y          # approach NPC/trainer at (x,y) and talk
 .venv/bin/python trek.py grind 'D U' 13    # pace in grass until level 13
@@ -43,8 +45,10 @@ driver (loads the ROM once, seconds instead of per-call overhead):
 ```
 
 Signature: `trek.py <leg> [<state>] [args...]`. The state file mutates in
-place and is re-saved at the end; omit `<state>` (or pass `''`) for
-`saves/default.state`. Fork first if the leg is risky:
+place and is re-saved at the end. Omitting `<state>` REFUSES to run unless
+`CRYSTAL_ALLOW_DEFAULT=1` is exported -- `saves/default.state` is a shared
+fork point and silent mutation cost a session real progress once. Fork
+first if the leg is risky:
 
 ```sh
 cp saves/default.state saves/attempt.state     # (+ the .meta sidecar!)
@@ -115,6 +119,11 @@ ROM's `Moves` table via `pokecrystal.sym`. Don't hardcode game data.
     fresh warp.
 13. **Never flush_dialog near an open shop list.** Blind A presses buy
     single items at ¥200 a pop. `mart_buy` exits with B-only presses.
+14. **Warp arrival drifts past the modeled landing cell.** step_hold keeps
+    the direction held through the transition, so you glide ~2 cells past
+    where nav's BFS says you land (e.g. gate door -> (9,4) but you stop on
+    (7,4)). goto replans after every warp for this reason -- don't reuse a
+    hand-built path across a warp without re-reading position.
 
 ## Session protocol
 
