@@ -17,6 +17,7 @@ from crystalagent.emu import Crystal, parse_sequence
 from crystalagent.menus import Menus, battle_menu_up
 from crystalagent.names import Names
 from crystalagent.nav import MapData, STEP, WARPS, WALKABLE, HOPS, CONN_NAME
+from crystalagent.nav import WATER as _NAV_WATER
 from crystalagent.state import game_state, status_line
 from crystalagent.symfile import Symbols
 
@@ -131,7 +132,8 @@ class TrekNav(MapData):
                                 exits.append(((land[0], land[1]), d))
                         continue
                     c = grid[ny][nx]
-                    if c in WALKABLE or c in WARPS or c in HOPS:
+                    if c in WALKABLE or c in WARPS or c in HOPS or \
+                            (self.surf and c in _NAV_WATER):
                         plain.append((nxt, d))
                     elif c in _SIDE_WALL_BLOCKED and \
                             d not in _SIDE_WALL_BLOCKED[c]:
@@ -488,15 +490,20 @@ class Driver:
         for count_sym, list_sym in (("wNumItems", "wItems"),
                                     ("wNumBalls", "wBalls"),
                                     ("wNumKeyItems", "wKeyItems")):
-            n = min(e.read_u8(count_sym), 20)
+            n = min(e.read_u8(count_sym), 26)
             if not n:
                 continue
             bank, addr = e.sym[list_sym]
-            raw = e.read((bank, addr), n * 2)
+            # key items are 1 byte each (no quantity); other pockets are
+            # (id, qty) pairs -- the pair stride used to hide every other
+            # key item and report garbage quantities
+            step = 1 if list_sym == "wKeyItems" else 2
+            raw = e.read((bank, addr), n * step)
             for i in range(n):
-                name = _norm_item(self.names.items.get(raw[i * 2],
-                                                       f"?{raw[i * 2]}"))
-                bag[name] = bag.get(name, 0) + raw[i * 2 + 1]
+                name = _norm_item(self.names.items.get(raw[i * step],
+                                                       f"?{raw[i * step]}"))
+                qty = raw[i * step + 1] if step == 2 else 1
+                bag[name] = bag.get(name, 0) + qty
         bank, addr = e.sym["wTMsHMs"]          # one count byte per TM/HM
         counts = e.read((bank, addr), _NUM_TMS + _NUM_HMS)
         for i, n in enumerate(counts):
@@ -595,9 +602,34 @@ class Driver:
             return "warp"
         return "moved" if now != before else "blocked"
 
+    def _is_water_cell(self, x, y):
+        try:
+            grid = self.nav.grid(self.map_name())
+            return grid[y][x] in _NAV_WATER
+        except (KeyError, IndexError):
+            return False
+
+    def _mount_surf(self, mv):
+        """Face the water and start surfing: walking into water does NOT
+        prompt in GSC -- you must face it and press A ('The water is
+        calm... SURF?' -> YES). Ends riding ON the water cell."""
+        self.step_dir(mv)              # blocked step = turn toward water
+        for _ in range(10):
+            s = "".join(self.emu.screen_text()).upper()
+            if "YES" in s and "NO" in s:
+                break
+            self.press("A:4 .:30")
+        else:
+            return "blocked"
+        self.press("A:5 .:40")         # YES
+        self.settle(max_frames=600)    # mount animation slides onto water
+        return ("moved" if self.emu.read_u8("wPlayerState") == 4
+                else "blocked")
+
     def _step(self, mv):
         """step_dir, but switch to a held step when the target cell is a
-        warp tile so doors actually trigger."""
+        warp tile so doors actually trigger, and to the surf-mount flow
+        when stepping from land onto water."""
         x, y = self.pos()[2:]
         dx, dy = STEP[mv]
         if self._is_warp_cell(x + dx, y + dy):
@@ -605,6 +637,9 @@ class Driver:
             if r != "moved" and r != "warp":
                 r = self._step_warp_tap(mv)
             return r
+        if self.nav.surf and self._is_water_cell(x + dx, y + dy) and \
+                self.emu.read_u8("wPlayerState") != 4:
+            return self._mount_surf(mv)
         return self.step_dir(mv)
 
     def _step_warp_tap(self, mv):
@@ -792,7 +827,16 @@ class Driver:
 
     _LEARN_MARKERS = ("TRYING TO LEARN", "WANTS TO LEARN",
                       "DELETE A MOVE", "FORGET A MOVE", "MAKE ROOM",
-                      "STOP LEARNING")
+                      "STOP LEARNING", "FORGOTTEN")
+
+    # moves we're happy to sacrifice when learning something new, most
+    # expendable first: pure-status filler, then weak/situational attacks.
+    # Declining a level-up move is PERMANENT in GSC (no relearner) -- the
+    # old decline-everything default silently cost Quilava FLAME WHEEL.
+    FORGET_PRIORITY = ["SMOKESCREEN", "LEER", "GROWL", "CHARM", "TAIL WHIP",
+                       "DEFENSE CURL", "SAND-ATTACK", "TACKLE", "MUD-SLAP",
+                       "CUT", "QUICK ATTACK", "BUBBLE"]
+    learn_moves = True   # accept level-up moves by default
 
     def _learn_prompt_up(self, rows):
         joined = "".join(rows).upper()
@@ -800,23 +844,36 @@ class Driver:
 
     def _battle_text_handler(self, rows):
         """Modal-text hook for Battle.play: drive the level-up move-learning
-        flow to a deterministic DECLINE (keep the current moveset). The
-        flow is a two-stage prompt: "Delete a move and make room?"
-        (answer NO) -> "Stop learning <MOVE>?" (answer YES -- the trap:
-        B here means "don't stop" and loops the flow forever). Blind
-        A-mashing derails into party menus and wedges the battle
-        (Bugsy gym, Scyther 0 HP, wBattleMode stuck at 2).
+        flow. With self.learn_moves (default) the new move is LEARNED by
+        forgetting the first FORGET_PRIORITY match on the move list;
+        with learn_moves=False it declines deterministically ("Stop
+        learning <MOVE>?" -> YES; B there means "don't stop" and loops).
+        Blind A-mashing derails into party menus and wedges the battle.
         Returns True when this frame's input was consumed."""
         if not self._learn_prompt_up(rows):
             return False
         joined = "".join(rows).upper()
+        if "FORGOTTEN" in joined:
+            # "Which move should be forgotten?" move menu is up
+            cur = [r.strip().upper() for r in rows if "▶" in r or "▷" in r]
+            target = next((m for m in self.FORGET_PRIORITY if m in joined),
+                          None)
+            if target is None or any(target in r for r in cur):
+                self.press("A:6 .:25")     # forget the move under the cursor
+            else:
+                self.press("D:4 .:16")     # cursor toward the target (wraps)
+            return True
         if "YES" in joined and "NO" in joined:
             if "STOP LEARNING" in joined:
-                self.press("A:6 .:20")   # YES: confirm stopping
+                # decline path confirm; in learn mode B loops back so the
+                # make-room prompt can be answered YES this time
+                self.press("B:6 .:20" if self.learn_moves else "A:6 .:20")
+            elif self.learn_moves:
+                self.press("A:6 .:25")     # YES: make room for the new move
             else:
-                self.press("B:6 .:20")   # NO: keep the current moveset
+                self.press("B:6 .:20")     # NO: keep the current moveset
         else:
-            self.press("A:4 .:16")       # advance the flow's text pages
+            self.press("A:4 .:16")         # advance the flow's text pages
         return True
 
     def _resolve_learn_flow(self, max_frames=8000):
@@ -874,8 +931,19 @@ class Driver:
                 return True, idx
         return False, None
 
+    def _party_knows(self, move_name):
+        """(knows, party_index): does any party member know `move_name`?"""
+        for idx, mon in enumerate(self.observe()["party"]):
+            if any(m.get("name") == move_name for m in mon.get("moves", [])):
+                return True, idx
+        return False, None
+
     def _teach_hm01(self, forget_move=None):
-        """Teach HM01 CUT to the first ABLE party member via PACK ->
+        return self.teach_hm("H1", "CUT", forget_move)
+
+    def teach_hm(self, hm_tag, move_name, forget_move=None):
+        """Teach the HM whose pocket row reads '<hm_tag> <move_name>'
+        (e.g. 'H3', 'SURF') to the first ABLE party member via PACK ->
         TM/HM pocket. `forget_move` names the move to delete if the
         learner already knows four (default: whatever the cursor starts
         on, slot 1). Label/WRAM-driven throughout: menus remember their
@@ -885,7 +953,7 @@ class Driver:
             return "".join(self.emu.screen_text()).upper()
         def bail(msg):
             self.close_menus()
-            raise RuntimeError(f"use_cut: {msg}")
+            raise RuntimeError(f"teach_hm {move_name}: {msg}")
         self.press("START:4 .:40")
         if not self._wait_screen(lambda s: "EXIT" in s):
             bail("START menu never opened")
@@ -898,10 +966,11 @@ class Driver:
         else:
             bail("TM/HM pocket never opened")
         self.press(".:35")
-        # cursor onto the HM01 row: rendered as "H1 CUT", NOT "HM01"
+        # cursor onto the HM row: rendered e.g. "H1 CUT", NOT "HM01"
         # (and "FURY CUTTER" contains "CUT" -- match the H prefix too)
         def on_hm01():
-            return any("H1" in r and "CUT" in r for r in self.cursor_rows())
+            return any(hm_tag in r and move_name in r
+                       for r in self.cursor_rows())
         for _ in range(10):                           # go to list top
             if on_hm01():
                 break
@@ -955,7 +1024,7 @@ class Driver:
         self.press("A:5 .:80")                        # choose the mon
         # either it learns outright (<4 moves) or asks to delete a move
         for _ in range(20):
-            if self._party_knows_cut()[0]:
+            if self._party_knows(move_name)[0]:
                 break
             s = scr()
             if "YES" in s and "NO" in s:
@@ -974,13 +1043,14 @@ class Driver:
             if not self.textbox():
                 break
             self.press("A:4 .:50")
-        # postcondition: overworld interactive again, CUT actually known
+        # postcondition: overworld interactive again, move actually known
         if not self.close_menus():
-            raise RuntimeError("use_cut: a menu is still open after "
-                               "teaching HM01")
-        knows, _idx = self._party_knows_cut()
+            raise RuntimeError(f"teach_hm {move_name}: a menu is still "
+                               "open after teaching")
+        knows, _idx = self._party_knows(move_name)
         if not knows:
-            raise RuntimeError("use_cut: teaching HM01 failed verification")
+            raise RuntimeError(f"teach_hm {move_name}: teaching failed "
+                               "verification")
     def _party_cursor_to(self, row, max_steps=12):
         """Move the party-menu cursor to 1-based `row` using the live
         wMenuCursorY (the menu wraps, so press counts from an unknown
@@ -1646,10 +1716,25 @@ class Driver:
         try:
             grid = self.nav.grid(name)
             if 0 <= c[0] < len(grid[0]) and 0 <= c[1] < len(grid):
-                return grid[c[1]][c[0]] in WALKABLE or grid[c[1]][c[0]] in HOPS
+                b = grid[c[1]][c[0]]
+                from crystalagent.nav import WATER
+                return b in WALKABLE or b in HOPS or \
+                    (self.nav.surf and b in WATER)
             return False
         except KeyError:
             return False
+
+    def enable_surf(self):
+        """Turn on water routing once someone in the party knows SURF.
+        The land->water step pops 'The water is calm... SURF?' -- goto's
+        blocked-step handler flushes it (A = YES) and replans, so no other
+        machinery changes. Verifies the party actually knows the move."""
+        for mon in self.observe()["party"]:
+            if any(m.get("name") == "SURF" for m in mon.get("moves", [])):
+                self.nav.surf = True
+                print("  [surf] water routing enabled", flush=True)
+                return True
+        raise RuntimeError("enable_surf: nobody in the party knows SURF")
 
     def _approach_cell(self, x, y):
         """Cell to stand on to talk to the NPC at (x,y): an adjacent

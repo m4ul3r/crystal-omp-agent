@@ -11,6 +11,8 @@ from collections import deque
 from pathlib import Path
 
 WALKABLE = {0x00, 0x14, 0x18}          # floor, long grass, tall grass
+WATER = {0x29}                          # COLL_WATER: routable when surfing
+                                        # (whirlpools/waterfalls stay walls)
 WARPS = set(range(0x70, 0x80))         # doors, stairs, carpets, ladders, caves
 HOPS = {0xA0: "R", 0xA1: "L", 0xA2: "U", 0xA3: "D"}  # one-way ledges
 CONN_NAME = {"R": "east", "L": "west", "U": "north", "D": "south"}
@@ -151,12 +153,15 @@ class MapData:
             return int(m.group(1), 0) - int(m.group(2), 0)
         return int(expr, 0)
 
+    surf = False   # set True (Driver.enable_surf) to route across WATER
+
     def _enterable(self, const_name, x, y):
         grid = self.grid(const_name)
         if not (0 <= y < len(grid) and 0 <= x < len(grid[0])):
             return False
         c = grid[y][x]
-        return c in WALKABLE or c in WARPS or c in HOPS
+        return c in WALKABLE or c in WARPS or c in HOPS or \
+            (self.surf and c in WATER)
 
     def _warp_landing(self, const_name, edge):
         """Where stepping onto warp cell `edge` on `const_name` puts you:
@@ -248,7 +253,8 @@ class MapData:
                                 exits.append(((land[0], land[1]), d))
                         continue
                     c = grid[ny][nx]
-                    if c in WALKABLE or c in WARPS or c in HOPS:
+                    if c in WALKABLE or c in WARPS or c in HOPS or \
+                            (self.surf and c in WATER):
                         plain.append((nxt, d))
                 elif cross and CONN_NAME[d] in self.conns.get(M, {}):
                     land = self._conn_landing(M, CONN_NAME[d], x, y)

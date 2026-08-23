@@ -6,7 +6,9 @@ gives every field (wPartyMon1HP - wPartyMon1, etc.) -- no magic numbers.
 
 MON_NAME_LENGTH = 11
 
-JOHTO_BADGES = ["ZEPHYR", "HIVE", "PLAIN", "FOG", "STORM", "MINERAL", "GLACIER", "RISING"]
+# bit order per constants/ram_constants.asm: MINERAL is bit 4, STORM bit 5
+# (display order on the trainer card differs -- don't "fix" this back)
+JOHTO_BADGES = ["ZEPHYR", "HIVE", "PLAIN", "FOG", "MINERAL", "STORM", "GLACIER", "RISING"]
 KANTO_BADGES = ["BOULDER", "CASCADE", "THUNDER", "RAINBOW", "SOUL", "MARSH", "VOLCANO", "EARTH"]
 
 _STATUS_BITS = [(0x08, "PSN"), (0x10, "BRN"), (0x20, "FRZ"), (0x40, "PAR")]
