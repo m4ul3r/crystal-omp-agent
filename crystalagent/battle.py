@@ -100,6 +100,17 @@ def bag_item_index(emu, names, item_name, pocket="items"):
     return None
 
 
+def bag_quantity(emu, names, item_name, pocket="items"):
+    """How many of an item sit in a pack pocket's WRAM list ((id, qty)
+    pairs), or None if absent."""
+    idx = bag_item_index(emu, names, item_name, pocket)
+    if idx is None:
+        return None
+    list_sym = "wBalls" if pocket == "balls" else "wItems"
+    bank, addr = emu.sym[list_sym]
+    return emu.read((bank, addr + idx * 2 + 1), 1)[0]
+
+
 def goto_pocket(menu, pocket, timeout_frames=500):
     """LEFT/RIGHT across the pack pockets until the jumptable sits in the
     requested pocket's menu state (items/balls/key = 2/4/6). Works in and
@@ -302,7 +313,19 @@ class Battle:
         if move_idx is None:          # out of PP everywhere: mash A = Struggle
             self.menu.press("A:2 .:12")
             return True
-        return self._move_menu_select(move_idx)
+        if not self._move_menu_select(move_idx):
+            return False
+        # A game-side rejection ("... is DISABLED!", "no PP left for the
+        # move") reads as menu success here, so play()'s fails counter
+        # never trips and the same rejected move gets re-picked forever
+        # (the historic Bridget wedges). Verify the turn actually started.
+        # False positive cost: one B-press re-sync if the ENEMY announces
+        # a Disable inside this short window -- cheap.
+        rejected = self.menu.wait_for(
+            lambda r: any(m in "".join(r).upper()
+                          for m in ("NO PP", "DISABLED")),
+            timeout_frames=90)
+        return not rejected
 
     def flee(self):
         return self._battle_option(4)
@@ -314,7 +337,8 @@ class Battle:
             return False
         if not self._goto_pocket("balls"):
             return self._cancel_pack()
-        if not self.menu.select_abs(idx):
+        if not self.menu.select_abs(idx) or \
+                not self._verify_pack_cursor(ball):
             return self._cancel_pack()
         if not self.menu.wait_for_label("USE") or \
                 not self.menu.select_label("USE", max_presses=4):
@@ -328,17 +352,35 @@ class Battle:
             return False
         if not self._goto_pocket("items"):
             return self._cancel_pack()
-        if not self.menu.select_abs(idx):
+        if not self.menu.select_abs(idx) or \
+                not self._verify_pack_cursor(item_name):
             return self._cancel_pack()
         if not self.menu.wait_for_label("USE") or \
                 not self.menu.select_label("USE", max_presses=4):
             return self._cancel_pack()
-        # healing items pop the party menu; pick the target mon
+        # consumption lands once the battle text resolves; a quantity
+        # that never drops means the USE misfired (wrong item, no effect)
+        before = bag_quantity(self.emu, self.names, item_name)
         if self.menu.wait_for(
                 lambda r: any("CANCEL" in x for x in r), timeout_frames=400):
             self.menu.select_abs(target_slot)
             self.menu.press("A:6 .:25")
-        return True
+        f0 = self.emu.frame
+        while before is not None and self.emu.frame - f0 < 500:
+            after = bag_quantity(self.emu, self.names, item_name)
+            if after is None or after < before:
+                return True
+            self.menu.press(".:20")
+        return before is None    # untrackable (key pocket etc.): trust flow
+
+    def _verify_pack_cursor(self, item_name):
+        """select_abs desyncs can park the cursor on the wrong row; confirm
+        the highlighted text really is the item BEFORE confirming USE
+        (once burned ~9 potions in a wedge)."""
+        self.menu.press(".:10")
+        got = self.menu.cursor_row()
+        want = _norm_item(item_name)
+        return bool(got and want and want in _norm_item(got[1]))
 
     def switch_to(self, party_index):
         """From the main battle menu: PKMN -> slot -> SWITCH."""

@@ -817,7 +817,12 @@ class Driver:
         self._pending_nickname = None
         self._resolve_learn_flow(4000)   # sweep post-battle leftovers
         self.flush_dialog(3000)
-        self.emu.save(self.state_path)   # keep watch.py near-live mid-leg
+        # Scratch sidecar, NOT the working state: a snapshot taken during
+        # battle resolution must never become a resumable fork if the leg
+        # crashes before the next real save. watch.py can still open
+        # <name>.watch.state from its checkpoint browser.
+        if self.state_path:
+            self.emu.save(Path(self.state_path).with_suffix(".watch.state"))
         lead = self.lead()
         print(f"  battle [{outcome}, {self.emu.frame - f0} frames] -> "
               f"{lead['name']} L{lead['level']} {lead['hp']}/{lead['max_hp']}",
@@ -1207,6 +1212,11 @@ class Driver:
             print(f"  no {item_name} in bag", flush=True)
             return False
         self.press("START:4 .:25")               # open START menu
+        if not self.menu_open():
+            # Post-warp the START press sometimes lands during the fade;
+            # blind D/A presses here WALK THE PLAYER (once onto a ladder).
+            print("  START menu did not open", flush=True)
+            return False
         if not self.menu.select_label("PACK", max_presses=8):
             self.press("B:4 .:10")
             print("  could not open PACK", flush=True)
@@ -1426,7 +1436,11 @@ class Driver:
               f"{goal_map} {goal}", flush=True)
         return False
 
-    # -- cross-map routing (edge source: data/mapgraph.json) ----------------
+    # Deliberate-trip opt-in (FABLE_FEEDBACK failure pattern 5): after
+    # confirming from maps/<Map>.asm that a scene script is safe
+    # (talk-only, sets scene NOOP), set d.trip_scenes = True for the one
+    # goto that must cross its cell, then clear it. Never leave it on.
+    trip_scenes = False
 
     def _refresh_nav_blocks(self):
         """Mark every coord_event cell that would fire RIGHT NOW unwalkable
@@ -1462,11 +1476,15 @@ class Driver:
                     fires = True           # can't tell -> assume the worst
                 else:
                     fires = cur == v
-                if fires and script_is_disruptive(self.nav._repo, camel,
-                                                  script):
-                    cells.add((x, y))
-            if cells:
-                blocks[const] = cells
+                if not fires:
+                    continue
+                if not script_is_disruptive(self.nav._repo, camel, script):
+                    continue
+                if self.trip_scenes:
+                    print(f"  [trip_scenes] crossing {const} scene cell "
+                          f"{(x, y)} unblocked", flush=True)
+                    continue
+                cells.add((x, y))
         self.nav.blocked = blocks
 
     def _mg_edges(self):
