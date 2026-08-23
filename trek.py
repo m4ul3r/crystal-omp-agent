@@ -16,7 +16,7 @@ from crystalagent.charmap import Charmap
 from crystalagent.emu import Crystal, parse_sequence
 from crystalagent.menus import Menus, battle_menu_up
 from crystalagent.names import Names
-from crystalagent.nav import MapData, STEP, WARPS, WALKABLE, HOPS
+from crystalagent.nav import MapData, STEP, WARPS, WALKABLE, HOPS, CONN_NAME
 from crystalagent.state import game_state, status_line
 from crystalagent.symfile import Symbols
 
@@ -49,6 +49,207 @@ def mapgraph():
         _mapgraph_json = json.loads(p.read_text())
     return _mapgraph_json
 
+
+# One-way side-wall collision bytes ($b0-$b7 hi nybble $b0): each is
+# enterable from exactly ONE facing (engine home/map.asm .Up/.Down/
+# .Left/.Right). nav's grids mark them solid, which hid legal passages --
+# e.g. Route 32's fence gap at (11..14, 6), the intended bypass of the
+# Cooltrainer chokepoint near the north entrance.
+_ONE_WAY_ENTRY = {
+    "D": {0xB2, 0xB6, 0xB7},   # COLL_UP_WALL / UP_RIGHT / UP_LEFT
+    "U": {0xB3, 0xB4, 0xB5},   # COLL_DOWN_WALL / DOWN_RIGHT / DOWN_LEFT
+    "R": {0xB1, 0xB5, 0xB7},   # COLL_LEFT_WALL / DOWN_LEFT / UP_LEFT
+    "L": {0xB0, 0xB4, 0xB6},   # COLL_RIGHT_WALL / DOWN_RIGHT / UP_RIGHT
+}
+
+
+class TrekNav(MapData):
+    """nav.MapData + two routing extensions, kept local to trek.py so the
+    shared crystalagent/nav.py stays untouched:
+
+    - one-way side walls (_ONE_WAY_ENTRY) expand directionally in BFS;
+    - `blocked[map]` cells (live coord_event cutscene triggers, refreshed
+      by Driver._refresh_nav_blocks) are never routed through -- not even
+      as the goal. Without this, BFS happily plans over e.g. Route 32
+      (18,8), where the Cooltrainer scene re-fires forever (the script
+      never calls setscene) and shoves the player back toward Violet.
+    """
+
+    def __init__(self, repo):
+        super().__init__(repo)
+        self.blocked = {}
+
+    def _bfs(self, start_state, goal_state, avoid_map, avoid, cross):
+        avoid = set(avoid)
+
+        def blocked(m, x, y):
+            return (x, y) in self.blocked.get(m, ())
+
+        def expand(state):
+            M, (x, y) = state
+            grid = self.grid(M)
+            hgt, wid = len(grid), len(grid[0])
+            here = grid[y][x]
+            plain, exits = [], []
+            for d, (dx, dy) in STEP.items():
+                # standing on a ledge lip and moving in its hop direction
+                # jumps over the cliff tile, landing 2 cells away (the game
+                # checks the tile you stand ON: engine .TryJump)
+                if here in HOPS and HOPS[here] == d:
+                    lx, ly = x + 2 * dx, y + 2 * dy
+                    if M == avoid_map and (lx, ly) in avoid:
+                        continue
+                    if blocked(M, lx, ly):
+                        continue
+                    if self._enterable(M, lx, ly):
+                        plain.append(((M, (lx, ly)), d))
+                    continue
+                nx, ny = x + dx, y + dy
+                nxt = (M, (nx, ny))
+                if 0 <= nx < wid and 0 <= ny < hgt:
+                    if M == avoid_map and (nx, ny) in avoid:
+                        continue
+                    if blocked(M, nx, ny):
+                        continue
+                    if nxt == goal_state:
+                        plain.append((nxt, d))
+                        continue
+                    w = self.warps.get(M, {}).get((nx, ny))
+                    if w is not None:
+                        # stepping ONTO a warp tile fires it (arrival never
+                        # re-triggers, so landing on a warp tile is fine --
+                        # gate doors land on exactly such tiles); you can
+                        # never stand on one mid-path otherwise
+                        if cross:
+                            land = self._warp_landing(M, (nx, ny))
+                            if land:
+                                exits.append(((land[0], land[1]), d))
+                        continue
+                    c = grid[ny][nx]
+                    if (c in WALKABLE or c in WARPS or c in HOPS
+                            or c in _ONE_WAY_ENTRY.get(d, ())):
+                        plain.append((nxt, d))
+                elif cross and CONN_NAME[d] in self.conns.get(M, {}):
+                    land = self._conn_landing(M, CONN_NAME[d], x, y)
+                    if land:
+                        exits.append(((land[0], land[1]), d))
+            return plain + exits
+
+        prev = {start_state: None}
+        q = deque([start_state])
+        while q:
+            cur = q.popleft()
+            if cur == goal_state:
+                moves = []
+                while prev[cur]:
+                    pcur, mv = prev[cur]
+                    moves.append(mv)
+                    cur = pcur
+                return moves[::-1]
+            for nxt, mv in expand(cur):
+                if nxt not in prev:
+                    prev[nxt] = (cur, mv)
+                    q.append(nxt)
+        return None
+
+
+_coord_event_cache = None
+_FILE_CONSTS = {}
+_shared_nav_md = None
+
+
+def _file_const(stem):
+    """maps/<Camel>.asm file stem -> map CONST (via MapData's pairing);
+    falls back to the stem itself when there is no attributes entry."""
+    if stem not in _FILE_CONSTS:
+        const = None
+        try:
+            md = _shared_nav()
+            for c, camel in md.camel.items():
+                if camel == stem:
+                    const = c
+                    break
+        except Exception:
+            pass
+        _FILE_CONSTS[stem] = const or stem
+    return _FILE_CONSTS[stem]
+
+
+def _shared_nav():
+    global _shared_nav_md
+    if _shared_nav_md is None:
+        _shared_nav_md = TrekNav(paths.REPO_ROOT)
+    return _shared_nav_md
+
+
+def coord_events(repo):
+    """{map_const: [(x, y, scene_token)]} parsed from every
+    maps/<Camel>.asm def_coord_events table. Cached per process."""
+    global _coord_event_cache
+    if _coord_event_cache is not None:
+        return _coord_event_cache
+    out = {}
+    for path in Path(repo, "maps").glob("*.asm"):
+        section = None
+        for line in path.read_text(errors="replace").splitlines():
+            s = line.strip()
+            if s.startswith("def_"):
+                section = s[4:].rstrip("s")
+                continue
+            if section != "coord_event" or not s.startswith("coord_event"):
+                continue
+            args = [a.strip() for a in s[len("coord_event"):].split(",")]
+            if len(args) >= 4:
+                out.setdefault(_file_const(path.stem), []).append(
+                    (int(args[0]), int(args[1]), args[2]))
+    _coord_event_cache = out
+    return out
+
+
+_scene_const_cache = None
+
+
+def scene_consts(repo):
+    """{map_const: [SCENE_* names in declaration order]} from every map's
+    def_scene_scripts table (position = runtime scene id, matching the
+    scene_const macro's const_def). Cached per process."""
+    global _scene_const_cache
+    if _scene_const_cache is not None:
+        return _scene_const_cache
+    out = {}
+    for path in Path(repo, "maps").glob("*.asm"):
+        names, in_scenes = [], False
+        for line in path.read_text(errors="replace").splitlines():
+            s = line.strip()
+            if s.startswith("def_"):
+                in_scenes = s == "def_scene_scripts"
+                continue
+            if in_scenes and s.startswith("scene_script"):
+                names.append(s.split(",")[1].strip() if "," in s else None)
+        if names:
+            out[_file_const(path.stem)] = names
+    _scene_const_cache = out
+    return out
+
+
+_scene_var_cache = None
+
+
+def scene_vars(repo):
+    """{map_const: WRAM symbol} from data/maps/scenes.asm scene_var lines
+    (maps absent from that table have no persistent scene id). Cached."""
+    global _scene_var_cache
+    if _scene_var_cache is None:
+        import re as _re
+        p = Path(repo, "data", "maps", "scenes.asm")
+        out = {}
+        for line in p.read_text(errors="replace").splitlines():
+            m = _re.match(r"\s*scene_var\s+([A-Z0-9_]+)\s*,\s*([A-Za-z0-9_]+)",
+                          line)
+            if m:
+                out[m.group(1)] = m.group(2)
+        _scene_var_cache = out
+    return _scene_var_cache
 
 # Naming-keyboard grids (9 cols x 4 char rows), parsed from
 # data/text/name_input_chars.asm: each cell is 2 chars, space = empty key.
@@ -132,7 +333,7 @@ class Driver:
             self.emu.py.button_release(b)
         self.emu.tick(10)
         self.names = Names(paths.ROM, sym, cm, paths.MAP_CONSTANTS)
-        self.nav = MapData(paths.REPO_ROOT)
+        self.nav = TrekNav(paths.REPO_ROOT)
         self.menu = Menus(self.emu)
         self.bdata = BattleData(paths.REPO_ROOT, sym, paths.ROM)
         self._pending_nickname = None
@@ -608,6 +809,7 @@ class Driver:
         pass map_name (CONST_NAME or CamelCase) to route across maps via
         warp events and edge connections. Replans around NPC bumps; fights
         encounters on the way."""
+        self._refresh_nav_blocks()
         goal_map = self._resolve_map(map_name)
         goal = (x, y)
         replans = idle = passes = 0
@@ -677,6 +879,45 @@ class Driver:
 
     # -- cross-map routing (edge source: data/mapgraph.json) ----------------
 
+    def _refresh_nav_blocks(self):
+        """Mark every coord_event cell that would fire RIGHT NOW unwalkable
+        for planning: its scene token matches the map's live scene id (or
+        is SCENE_ALWAYS/-1), or the scene state can't be read (assume the
+        worst). Scenes only ever move forward via setscene, so this keeps
+        e.g. Route 32's eternally re-firing Cooltrainer cutscene out of
+        BFS. Cheap: parses are process-cached, one WRAM byte per map."""
+        events = coord_events(self.nav._repo)
+        consts = scene_consts(self.nav._repo)
+        syms = scene_vars(self.nav._repo)
+        blocks = {}
+        for const, evs in events.items():
+            sym = syms.get(const)
+            cur = None                     # None = no persistent scene id
+            if sym:
+                try:
+                    cur = self.emu.read(self.emu.sym[sym], 1)[0]
+                except Exception:
+                    cur = "unreadable"
+            order = {n: i for i, n in enumerate(consts.get(const, [])) if n}
+            cells = set()
+            for x, y, tok in evs:
+                v = -1 if tok.startswith("-") else order.get(tok)
+                if v == -1:
+                    fires = True           # SCENE_ALWAYS: fires every time
+                elif v is None:
+                    fires = True           # unknown scene: assume the worst
+                elif cur is None:
+                    fires = False          # no scene var -> engine sees -1
+                elif cur == "unreadable":
+                    fires = True           # can't tell -> assume the worst
+                else:
+                    fires = cur == v
+                if fires:
+                    cells.add((x, y))
+            if cells:
+                blocks[const] = cells
+        self.nav.blocked = blocks
+
     def _mg_edges(self):
         """{from_map_const: [routable edges]} over data/mapgraph.json."""
         adj = {}
@@ -735,6 +976,7 @@ class Driver:
         [{"kind": "walk", "map", "x", "y"}, {"kind": "warp"|"connection",
         "from", "to", "dir", ...}, ...]. Raises LookupError on unreachable;
         never moves the player."""
+        self._refresh_nav_blocks()
         dest = self._resolve_map(dest_map)
         src = self.map_name()
         if dest == src:
@@ -795,6 +1037,7 @@ class Driver:
         landing is expected (held key glides ~2 cells; AGENTS.md gotcha
         14); anything worse raises TravelError."""
         dest = self._resolve_map(dest_map)
+        self._refresh_nav_blocks()
         if self.map_name() == dest:
             return []
         steps = self.route(dest)
