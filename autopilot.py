@@ -4,6 +4,11 @@
 The deciding agent speaks this NDJSON protocol on stdin (one JSON object
 per line, replies on stdout, serve.py-style):
 
+  reply   : {"id": N, "ok": true|false,
+             "obs": <compact observe() after the action>, ...}
+            screen replies add "screen" (20x18 text rows) + "ui";
+            save replies add "saved" (path) -- both are pure peeks.
+
   request : {"id": N, "cmd": "decision",
              "args": {"action": {"name": str, "kwargs": object},
                       "goal":   str,
@@ -12,17 +17,12 @@ per line, replies on stdout, serve.py-style):
                                   "min_badges"?: int,
                                   "flag"?:       str}}}
             {"id": N, "cmd": "observe"}          # debug peek, no journal
+            {"id": N, "cmd": "screen"}           # decoded screen text + UI
+            {"id": N, "cmd": "save",             # force-save WRAM now
+                 "args": {"path": "saves/x.state"}}
             {"id": N, "cmd": "quit"}
 
-  reply   : {"id": N, "ok": true|false,
-             "obs": <compact observe() after the action>,
-             ...}
-
-One decision = one Driver primitive call = one journal line. Rails run in
-deterministic code and NEVER trust the decider:
-
-- Frame budget: every cycle is capped at --budget frames; primitives with
-  a max_frames parameter are clamped to it. Over-budget counts as failure.
+Rails run in deterministic code and NEVER trust the decider:
 - Stuck detector: if a non-idle action leaves the observe digest unchanged
   (map/x/y/battle/textbox/flags/party HP) for --stuck-limit consecutive
   cycles, the action failed: reply {"ok": false, "error": "stuck"} and
@@ -457,12 +457,33 @@ def main():
             if cmd == "observe":
                 resp = {"id": rid, "ok": True,
                         "obs": compact_obs(d.observe())}
+            elif cmd == "screen":
+                # Pure peek: decoded 20x18 screen text + UI flags, no
+                # journal/stuck rails. For wedged-UI diagnosis.
+                resp = {"id": rid, "ok": True,
+                        "screen": d.emu.screen_text(),
+                        "ui": {"textbox": d.textbox(),
+                               "battle": bool(d.battle())},
+                        "frame": d.emu.frame}
+            elif cmd == "save":
+                # Force-save CURRENT WRAM (mid-battle included) to
+                # args.path as .state + .meta sidecar. No rails.
+                p = (req.get("args") or {}).get("path")
+                if not p:
+                    resp = {"id": rid, "ok": False,
+                            "error": "save needs {'path': <file.state>}"}
+                else:
+                    target = Path(p)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    d.emu.save(target)
+                    resp = {"id": rid, "ok": True,
+                            "saved": str(target), "frame": d.emu.frame}
             elif cmd == "decision":
                 resp = ap_.cycle(req.get("args") or {}, rid=rid)
             else:
                 resp = {"id": rid, "ok": False,
-                        "error": f"unknown cmd {cmd!r}; "
-                                 f"expected decision|observe|quit"}
+                        "error": f"unknown cmd {cmd!r}; expected "
+                                 f"decision|observe|screen|save|quit"}
         json.dump(resp, sys.stdout)
         sys.stdout.write("\n")
         sys.stdout.flush()
