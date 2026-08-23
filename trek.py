@@ -15,7 +15,7 @@ from crystalagent.charmap import Charmap
 from crystalagent.emu import Crystal, parse_sequence
 from crystalagent.menus import Menus, battle_menu_up
 from crystalagent.names import Names
-from crystalagent.nav import MapData, STEP, WARPS
+from crystalagent.nav import MapData, STEP, WARPS, WALKABLE, HOPS
 from crystalagent.state import game_state, status_line
 from crystalagent.symfile import Symbols
 
@@ -43,6 +43,53 @@ def _parse_name_grid(repo):
 
 
 NAME_GRIDS = None
+
+
+def _parse_event_flags(path):
+    """constants/event_flags.asm -> {EVENT_NAME: bit index into wEventFlags}.
+    Handles const_def / const / const_skip / const_next like rgbds would."""
+    import re as _re
+    flags, idx = {}, None
+    for line in open(path, encoding="utf-8"):
+        s = line.strip()
+        if s.startswith("const_def"):
+            idx = 0
+            continue
+        m = _re.match(r"const_next\s+(\d+)$", s)
+        if m:
+            idx = int(m.group(1))
+            continue
+        m = _re.match(r"const_skip\b", s)
+        if m:
+            idx += 1
+            continue
+        m = _re.match(r"const\s+(\w+)$", s)
+        if m and idx is not None:
+            flags[m.group(1)] = idx
+            idx += 1
+    return flags
+
+
+_MOVE_LENGTH = 7    # battle_constants.asm move_struct
+_MOVE_PP_OFF = 5    # MOVE_PP
+# wStatusFlags bit 0 (ram_constants.asm STATUSFLAGS_POKEDEX_F)
+_STATUSFLAGS_POKEDEX_F = 1 << 0
+
+_event_flag_names = None   # lazily parsed {EVENT_NAME: bit}
+_move_base_pps = None      # lazily read [base PP per move id - 1]
+
+
+def _load_move_base_pps(rom_path, sym):
+    """Base PP for every move, read straight from the ROM's Moves table."""
+    bank, base = sym["Moves"]
+    off = base if base < 0x4000 else bank * 0x4000 + (base - 0x4000)
+    with open(rom_path, "rb") as f:
+        rom = f.read()
+    from crystalagent.names import NUM_MOVES
+    return [rom[off + i * _MOVE_LENGTH + _MOVE_PP_OFF]
+            for i in range(NUM_MOVES)]
+
+_NUM_TMS, _NUM_HMS = 50, 7   # item_constants.asm DEF NUM_TMS / NUM_HMS
 
 
 class Driver:
@@ -96,6 +143,97 @@ class Driver:
             if b[0]:
                 cells.add((b[16] - 4, b[17] - 4))
         return cells
+
+    def _event_flag(self, name):
+        """True if event flag EVENT_<name> (or bare <name>) is set, read
+        banked from wEventFlags. Symbol must exist in
+        constants/event_flags.asm -- unknown names raise."""
+        global _event_flag_names
+        if _event_flag_names is None:
+            _event_flag_names = _parse_event_flags(
+                paths.REPO_ROOT / "constants" / "event_flags.asm")
+        for key in (name, "EVENT_" + name):
+            if key in _event_flag_names:
+                bit = _event_flag_names[key]
+                break
+        else:
+            raise ValueError(f"unknown event flag {name!r}")
+        bank, addr = self.emu.sym["wEventFlags"]
+        return bool(self.emu.read((bank, addr + bit // 8))[0]
+                    >> (bit % 8) & 1)
+
+    def _bag(self):
+        """{ITEM: qty} across all pockets; names normalized like
+        _norm_item ('# BALL' -> 'POKE BALL')."""
+        e = self.emu
+        bag = {}
+        for count_sym, list_sym in (("wNumItems", "wItems"),
+                                    ("wNumBalls", "wBalls"),
+                                    ("wNumKeyItems", "wKeyItems")):
+            n = min(e.read_u8(count_sym), 20)
+            if not n:
+                continue
+            bank, addr = e.sym[list_sym]
+            raw = e.read((bank, addr), n * 2)
+            for i in range(n):
+                name = _norm_item(self.names.items.get(raw[i * 2],
+                                                       f"?{raw[i * 2]}"))
+                bag[name] = bag.get(name, 0) + raw[i * 2 + 1]
+        bank, addr = e.sym["wTMsHMs"]          # one count byte per TM/HM
+        counts = e.read((bank, addr), _NUM_TMS + _NUM_HMS)
+        for i, n in enumerate(counts):
+            if n:
+                key = (f"TM{i + 1:02d}" if i < _NUM_TMS
+                       else f"HM{i - _NUM_TMS + 1:02d}")
+                bag[key] = bag.get(key, 0) + n
+        return bag
+
+    def observe(self):
+        """JSON-serializable full game snapshot (the serve.py contract)."""
+        global _move_base_pps
+        s = game_state(self.emu, self.names)
+        loc = s["location"]
+        if _move_base_pps is None:
+            _move_base_pps = _load_move_base_pps(paths.ROM,
+                                                 self.emu.sym)
+        move_id_by_name = {n: i for i, n in self.names.moves.items()}
+        party = []
+        for m in s["party"]:
+            moves = []
+            for mv in m["moves"]:
+                mid = move_id_by_name[mv["name"]]
+                base = _move_base_pps[mid - 1]
+                ups = mv["pp"] >> 6               # stored PP byte: bits 7-6
+                cur = mv["pp"] & 0x3F             # are PP-Up count, 5-0 cur
+                moves.append({"name": mv["name"], "pp": cur,
+                              "max_pp": base + min(base // 5, 7) * ups})
+            party.append({
+                "species": m["name"], "nick": m["nickname"],
+                "level": m["level"], "hp": m["hp"],
+                "max_hp": m["max_hp"],
+                "status": "+".join(m["status"]) or None,
+                "moves": moves,
+            })
+        flags = {}
+        for const in ("GOT_MYSTERY_EGG_FROM_MR_POKEMON",
+                      "GAVE_MYSTERY_EGG_TO_ELM",
+                      "GOT_TOGEPI_EGG_FROM_ELMS_AIDE"):
+            flags[const] = self._event_flag(const)
+        flags["POKEDEX"] = bool(
+            self.emu.read_u8("wStatusFlags") & _STATUSFLAGS_POKEDEX_F)
+        return {
+            "map": loc["map"], "group": loc["map_group"],
+            "number": loc["map_number"], "x": loc["x"], "y": loc["y"],
+            "party": party,
+            "bag": self._bag(),
+            "money": s["player"]["money"],
+            "badges": s["player"]["johto_badges"] + s["player"]["kanto_badges"],
+            "flags": flags,
+            "npcs": sorted([list(c) for c in self.npc_cells()]),
+            "ui": {"textbox": self.textbox(),
+                   "battle": bool(s["battle"])},
+            "frame": s["frame"],
+        }
 
     def settle(self, quiet=3, spacing=20, max_frames=900):
         """Wait until map + position stop changing: door/cutscene warps
@@ -540,6 +678,15 @@ class Driver:
                         moved += 1
         return "max-battles"
 
+    def _standable(self, name, c):
+        """Path-existence is not enough: cross-map BFS treats any goal as
+        reachable (warp tiles, counters). Standing spots must be real."""
+        try:
+            grid = self.nav.grid(name)
+            return grid[c[1]][c[0]] in WALKABLE or grid[c[1]][c[0]] in HOPS
+        except KeyError:
+            return False
+
     def _approach_cell(self, x, y):
         """Cell to stand on to talk to the NPC at (x,y): an adjacent
         walkable cell if one exists, else (counters!) two cells out along
@@ -551,7 +698,8 @@ class Driver:
         wid, hgt = len(grid[0]), len(grid)
         for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
             c = (x + dx, y + dy)
-            if self.nav.find_path(name, here, c, npcs) is not None:
+            if self._standable(name, c) and \
+                    self.nav.find_path(name, here, c, npcs) is not None:
                 return c
         for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
             mid, far = (x + dx, y + dy), (x + 2 * dx, y + 2 * dy)
@@ -559,7 +707,8 @@ class Driver:
                 continue
             if mid in npcs or grid[mid[1]][mid[0]] in WARPS:
                 continue   # would need to pass an NPC or a warp
-            if self.nav.find_path(name, here, far, npcs) is not None:
+            if self._standable(name, far) and \
+                    self.nav.find_path(name, here, far, npcs) is not None:
                 return far
         return None
 
