@@ -335,14 +335,20 @@ class Battle:
         idx = self.bag_item_index(ball, pocket="balls")
         if idx is None or not self._battle_option(3):
             return False
+        # NB: _cancel_pack returns True when the back-out SUCCEEDS -- that is
+        # not action success, so never `return self._cancel_pack()` here (a
+        # cancelled action reported as done loops the turn forever).
         if not self._goto_pocket("balls"):
-            return self._cancel_pack()
+            self._cancel_pack()
+            return False
         if not self.menu.select_abs(idx) or \
                 not self._verify_pack_cursor(ball):
-            return self._cancel_pack()
+            self._cancel_pack()
+            return False
         if not self.menu.wait_for_label("USE") or \
                 not self.menu.select_label("USE", max_presses=4):
-            return self._cancel_pack()
+            self._cancel_pack()
+            return False
         return True
 
     def use_battle_item(self, item_name, target_slot=0):
@@ -351,13 +357,16 @@ class Battle:
         if idx is None or not self._battle_option(3):
             return False
         if not self._goto_pocket("items"):
-            return self._cancel_pack()
+            self._cancel_pack()
+            return False
         if not self.menu.select_abs(idx) or \
                 not self._verify_pack_cursor(item_name):
-            return self._cancel_pack()
+            self._cancel_pack()
+            return False
         if not self.menu.wait_for_label("USE") or \
                 not self.menu.select_label("USE", max_presses=4):
-            return self._cancel_pack()
+            self._cancel_pack()
+            return False
         # consumption lands once the battle text resolves; a quantity
         # that never drops means the USE misfired (wrong item, no effect)
         before = bag_quantity(self.emu, self.names, item_name)
@@ -365,8 +374,10 @@ class Battle:
                 lambda r: any("CANCEL" in x for x in r), timeout_frames=400):
             self.menu.select_abs(target_slot)
             self.menu.press("A:6 .:25")
+        # 500 frames missed real consumptions (FULL HEAL cured paralysis but
+        # the quantity decrement landed after the window -> reported False)
         f0 = self.emu.frame
-        while before is not None and self.emu.frame - f0 < 500:
+        while before is not None and self.emu.frame - f0 < 1500:
             after = bag_quantity(self.emu, self.names, item_name)
             if after is None or after < before:
                 return True
@@ -378,8 +389,16 @@ class Battle:
         the highlighted text really is the item BEFORE confirming USE
         (once burned ~9 potions in a wedge)."""
         self.menu.press(".:10")
-        got = self.menu.cursor_row()
         want = _norm_item(item_name)
+        # If select_abs's trailing A already opened the USE/QUIT popup, the
+        # popup covers the right half of the item name and steals the solid
+        # cursor; the item row keeps a hollow marker with only a name
+        # PREFIX visible ("▷FULL " for FULL HEAL) -- prefix-match that.
+        for row in self.menu.screen():
+            if "▷" in row:
+                vis = _norm_item(row.split("▷", 1)[1].split("│", 1)[0])
+                return bool(vis) and want.startswith(vis)
+        got = self.menu.cursor_row()
         return bool(got and want and want in _norm_item(got[1]))
 
     def switch_to(self, party_index):

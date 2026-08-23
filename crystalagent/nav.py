@@ -12,6 +12,7 @@ from pathlib import Path
 
 WALKABLE = {0x00, 0x14, 0x18}          # floor, long grass, tall grass
 WATER = {0x29}                          # COLL_WATER: routable when surfing
+                                        # (NOT 0x27 COLL_BUOY -- buoys block surf)
                                         # (whirlpools/waterfalls stay walls)
 WARPS = set(range(0x70, 0x80))         # doors, stairs, carpets, ladders, caves
 HOPS = {0xA0: "R", 0xA1: "L", 0xA2: "U", 0xA3: "D"}  # one-way ledges
