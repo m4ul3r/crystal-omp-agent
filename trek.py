@@ -893,9 +893,14 @@ class Driver:
     # expendable first: pure-status filler, then weak/situational attacks.
     # Declining a level-up move is PERMANENT in GSC (no relearner) -- the
     # old decline-everything default silently cost Quilava FLAME WHEEL.
+    # NB: never list an HM move here -- the game refuses ("HM moves can't be
+    # forgotten"), the menu reopens, and the flow loops forever (wedged a
+    # whole Will battle at 0-HP Xatu for 200k frames).
+    HM_MOVES = frozenset(["CUT", "FLY", "SURF", "STRENGTH", "FLASH",
+                          "WHIRLPOOL", "WATERFALL"])
     FORGET_PRIORITY = ["SMOKESCREEN", "LEER", "GROWL", "CHARM", "TAIL WHIP",
                        "DEFENSE CURL", "SAND-ATTACK", "TACKLE", "MUD-SLAP",
-                       "CUT", "QUICK ATTACK", "BUBBLE"]
+                       "QUICK ATTACK", "BUBBLE", "EMBER", "SWIFT"]
     learn_moves = True   # accept level-up moves by default
 
     def _learn_prompt_up(self, rows):
@@ -913,12 +918,20 @@ class Driver:
         if not self._learn_prompt_up(rows):
             return False
         joined = "".join(rows).upper()
+        if "CAN" in joined and "BE FORGOTTEN" in joined:
+            # "HM moves can't be forgotten": the refusal text. Acknowledge
+            # it; the move menu reopens and the cursor must MOVE off the HM.
+            self.press("A:4 .:16 D:4 .:16")
+            return True
         if "FORGOTTEN" in joined:
             # "Which move should be forgotten?" move menu is up
             cur = [r.strip().upper() for r in rows if "▶" in r or "▷" in r]
+            on_hm = any(hm in r for r in cur for hm in self.HM_MOVES)
             target = next((m for m in self.FORGET_PRIORITY if m in joined),
                           None)
-            if target is None or any(target in r for r in cur):
+            if on_hm:
+                self.press("D:4 .:16")     # never confirm an HM move
+            elif target is None or any(target in r for r in cur):
                 self.press("A:6 .:25")     # forget the move under the cursor
             else:
                 self.press("D:4 .:16")     # cursor toward the target (wraps)
