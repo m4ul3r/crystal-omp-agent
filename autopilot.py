@@ -167,6 +167,7 @@ class Autopilot:
         self.budget = budget
         self.stuck_limit = stuck_limit
         self.stuck_run = 0
+        self._last_sig = None          # (name, kwargs, goal) of last cycle
         self.cycles = self._count_forks()
 
     # -- bookkeeping ------------------------------------------------------
@@ -272,7 +273,9 @@ class Autopilot:
         stdin pipe -- it journals and replies ok:false instead."""
         try:
             return self._cycle(args, rid)
-        except Exception as e:
+        except (Exception, SystemExit) as e:
+            # SystemExit too -- trek._resolve_map raises it on an unknown
+            # map name, and a typo'd dest_map must not kill the pipe.
             err = f"{type(e).__name__}: {e}"
             try:
                 self._note({"frame": None,
@@ -290,6 +293,14 @@ class Autopilot:
         kwargs = dict(action.get("kwargs") or {})
         goal = args.get("goal")
         success = args.get("success") or {}
+
+        # A fresh decision deserves a fresh stuck budget: only the SAME
+        # decision (name + kwargs + goal) repeating with no world delta
+        # accumulates toward the limit.
+        sig = (name, json.dumps(kwargs, sort_keys=True), goal)
+        if sig != self._last_sig:
+            self.stuck_run = 0
+        self._last_sig = sig
 
         if name not in ACTIONS:
             reply = {"id": rid, "ok": False,
