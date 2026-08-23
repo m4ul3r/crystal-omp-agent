@@ -284,12 +284,14 @@ class Driver:
             return self.lead()
         f0 = self.emu.frame
         b = Battle(self.emu, self.names, self.bdata)
-        outcome = b.play(policy=policy, max_frames=max_frames)
+        name = self._resolve_nickname(self._pending_nickname,
+                                      b.enemy()["name"])
+        outcome = b.play(policy=policy, max_frames=max_frames,
+                         want_nickname=bool(name))
         for _ in range(3):                       # naming handoff loop
             if outcome != "naming" or not self.keyboard_open():
                 break
-            name, self._pending_nickname = self._pending_nickname, None
-            name = self._resolve_nickname(name)
+            self._pending_nickname = None
             self.dismiss_keyboard(name)
             outcome = b.play(policy=policy, max_frames=max_frames)
         self._pending_nickname = None
@@ -300,16 +302,16 @@ class Driver:
               flush=True)
         return lead
 
-    def _resolve_nickname(self, nickname):
-        """str passes through; dict is keyed by the newly caught mon's
-        species name; callable gets the species name."""
-        if nickname is None or isinstance(nickname, str):
-            return nickname
-        s = game_state(self.emu, self.names)
-        species = s["party"][-1]["name"] if s["party"] else None
+    def _resolve_nickname(self, nickname, species):
+        """str passes through; dict is keyed by the wild's species name;
+        callable gets the species name. None when nothing applies."""
+        if nickname is None:
+            return None
         if callable(nickname):
             return nickname(species)
-        return nickname.get(species)
+        if isinstance(nickname, dict):
+            return nickname.get(species)
+        return nickname
 
     def catch(self, ball="POKE BALL", max_balls=10, nickname=None):
         """Throw `ball` at the current wild until it connects or the budget

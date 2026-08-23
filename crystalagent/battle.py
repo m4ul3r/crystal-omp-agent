@@ -340,12 +340,15 @@ class Battle:
                 return True
         return False
 
-    def play(self, policy=None, max_frames=120000, potion_frac=0.3):
+    def play(self, policy=None, max_frames=120000, potion_frac=0.3,
+             want_nickname=False):
         """Fight the whole battle. `policy(rows, me, enemy)` may return one
         of 'attack', ('attack', move_idx), 'flee', ('ball', name),
         ('item', name), ('switch', party_idx); defaults to smart damage +
         auto-POTION + fleeing hopeless wild fights. Returns
-        'won' | 'fled' | 'caught' | 'wipe' | 'timeout'."""
+        'won' | 'fled' | 'caught' | 'wipe' | 'timeout' | 'naming'.
+        want_nickname: answer YES to the post-catch prompt and hand off to
+        the caller at the keyboard instead of declining it."""
         f0 = self.emu.frame
         last_action = None
         caught = False
@@ -363,8 +366,9 @@ class Battle:
                     # every press adds a junk character. Caller handles it.
                     return "naming"
                 joined = "".join(rows).upper()
-                if "GIVE A NICKNAME" in joined or \
-                        ("YES" in joined and "NO" in joined):
+                if not want_nickname and (
+                        "GIVE A NICKNAME" in joined
+                        or ("YES" in joined and "NO" in joined)):
                     # nickname prompt, no name requested: decline (B=NO)
                     self.menu.press("B:6 .:12")
                     continue
