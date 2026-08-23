@@ -551,3 +551,40 @@ Gotchas found this run:
   transitions.
 - Shell timeout clamped ~300s here (FABLE_FEEDBACK said 10 min): chunk
   long legs into <=250s primitive batches or use a persistent process.
+
+## Session 2026-08-23 (Fable, claude-lex2 timeline) -- RISING badge + Indigo Plateau
+
+**All 8 Johto badges obtained.** claude-lex2.state now sits healed inside
+INDIGO_PLATEAU_POKECENTER_1F (milestone: indigo-plateau.state). Party:
+TYPHLOSION L59, POLIWAG L4 (Surf/Waterfall/Whirlpool mule), TOGEPI L10.
+Bag: 6 Max Potion, 9 Full Heal, 6 Revive, 8 Hyper, 8 Super, 4 Max Repel.
+
+Route (Blackthorn onward):
+- Blackthorn Gym: 2F sokoban solved (3 boulders into holes -> 1F bridges);
+  wedge fix: Cody's sightline froze row 1 (all dirs blocked, wScriptMode=1)
+  -- always ws()-drain before pushing. Clair beaten; wipe-causing battle.py
+  pack bugs found & fixed (see commit 1c0410f).
+- Dragon's Den: needs WHIRLPOOL (HM06 owned; taught to Poliwag). changeblock
+  coords are CELL coords: gym 1F bridges appear exactly under 2F holes.
+  Shrine quiz answers (Crystal): 1,1,2,1,2 -- wrong answers LOOP the same
+  question, so cursor-blind mashing wedges. RISING badge -> rising-badge.state.
+- Trek: Blackthorn -> R45 (one-way) -> R46 -> R29 -> New Bark -> R27 east
+  (surf) -> Tohjo Falls (Waterfall up, ride down free) -> R26 north ->
+  Victory Road gate -> Victory Road (3 ladder legs + rival ambush at
+  (12,8)) -> Route 23 -> Indigo Plateau PC.
+
+Milestones: gym2f-done, pre-clair, rising-badge, e4-prep, tohjo, vr-gate,
+victory-road, route23, indigo-plateau (all .state under saves/).
+
+Traps discovered (added to FABLE_FEEDBACK.md):
+- travel() planner is unreliable near gates and reversed a whole
+  Route-26 position back to Route 46 (cost ~40k frames). Hand-route
+  long treks; never travel() toward VICTORY_ROAD/gate maps.
+- Route29/46 gate south doors are COLL_WARP_CARPET_DOWN ($70): stand ON
+  (4,7)/(5,7) and press D. Tohjo east door likewise: walk D onto (25,15).
+- COLL_BUOY $27 is NOT surfable; whirlpool ($24) needs face+A+YES and
+  respawns if a wild battle interrupts the crossing -- re-use it.
+- step_dir false-'blocked'/'moved' in tall grass & after surf mounts:
+  use raw d.press('<dir>:16 .:40') + coordinate verification.
+- Victory Road one-way system: $b2 UP_WALL bands + $a3 hop-downs; the
+  three-leg ladder chain is (1,49)->(1,35), (13,31)->(13,17), exit (13,5).
