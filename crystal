@@ -1,0 +1,4 @@
+#!/bin/sh
+# Launcher for the crystal agent CLI. Uses the tool's own venv.
+DIR="$(cd "$(dirname "$0")" && pwd)"
+PYTHONPATH="$DIR" PYTHONWARNINGS=ignore exec "$DIR/.venv/bin/python" -m crystalagent.cli "$@"
