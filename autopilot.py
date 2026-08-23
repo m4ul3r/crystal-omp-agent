@@ -256,7 +256,35 @@ class Autopilot:
 
     # -- one decision cycle --------------------------------------------------
 
+    def _resolve_action(self, name):
+        """Action name -> callable. 'heal' has no Driver method -- it maps
+        to trek.heal_pokecenter (same as serve.py's RUN_METHODS)."""
+        if name == "heal":
+            return lambda **kw: heal_pokecenter(self.d)
+        fn = getattr(self.d, name, None)
+        if fn is None:
+            raise AttributeError(
+                f"{type(self.d).__name__} has no action {name!r}")
+        return fn
+
     def cycle(self, args, rid=None):
+        """Exception-proof shell: a bad decision must NEVER kill the
+        stdin pipe -- it journals and replies ok:false instead."""
+        try:
+            return self._cycle(args, rid)
+        except Exception as e:
+            err = f"{type(e).__name__}: {e}"
+            try:
+                self._note({"frame": None,
+                            "action": (args.get("action") or {}),
+                            "ok": False,
+                            "error": err})
+            except Exception:
+                pass
+            return {"id": rid, "ok": False,
+                    "error": f"decision failed: {err}"}
+
+    def _cycle(self, args, rid=None):
         action = args.get("action") or {}
         name = action.get("name")
         kwargs = dict(action.get("kwargs") or {})
@@ -278,11 +306,10 @@ class Autopilot:
         if args.get("risky"):
             self.fork(f"cycle{len(list(iter_journal(self.journal))) + 1}")
 
-        fn = getattr(self.d, name)
-        if name == "heal":                  # serve.py's mapping
-            fn = lambda **kw: heal_pokecenter(self.d)
-        elif "max_frames" in fn.__code__.co_varnames[
-                :fn.__code__.co_argcount]:
+        fn = self._resolve_action(name)
+        code = getattr(fn, "__code__", None)
+        if code is not None and \
+                "max_frames" in code.co_varnames[:code.co_argcount]:
             kwargs.setdefault("max_frames", self.budget)
 
         error = None
@@ -347,6 +374,14 @@ class Autopilot:
             after = self.d.observe()
             ok = False
             why.append("whiteout: recovered from checkpoint")
+
+        # Persist progress after a good cycle: a crash must lose at most
+        # one decision. Best-effort -- never fail the cycle over it.
+        if ok:
+            try:
+                self.d.emu.save(self.d.state_path)
+            except Exception as e:
+                why.append(f"state save failed: {type(e).__name__}: {e}")
 
         reply = {"id": rid, "ok": ok, "obs": compact_obs(after)}
         if fired_stuck:
