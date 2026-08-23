@@ -1709,8 +1709,11 @@ class Driver:
         return steps
 
     def grind(self, pace="D U", target_level=13, min_hp=7, max_battles=80):
-        """Pace in grass fighting encounters until target level / low HP."""
+        """Pace in grass fighting encounters until target level / low HP.
+        Aborts with 'no-encounters' after 300 fruitless steps (pacing
+        somewhere without tall grass used to spin until the shell cap)."""
         battles = 0
+        idle_steps = 0
 
         def done():
             lead = self.lead()
@@ -1724,6 +1727,8 @@ class Driver:
             stop = done()
             if stop:
                 return stop
+            if idle_steps >= 300:
+                return "no-encounters"
             for token in pace.split():
                 d, _, n = token.partition("*")
                 moved = 0
@@ -1732,12 +1737,16 @@ class Driver:
                     if r == "battle":
                         self.fight()
                         battles += 1
+                        idle_steps = 0
                         stop = done()   # stop mid-pace, don't wander on
                         if stop:
                             return stop
                         break
                     elif r == "moved":
                         moved += 1
+                    idle_steps += 1
+                    if idle_steps >= 300:
+                        return "no-encounters"
         return "max-battles"
 
     def _standable(self, name, c):
