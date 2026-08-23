@@ -720,6 +720,7 @@ class Driver:
         self._pending_nickname = None
         self._resolve_learn_flow(4000)   # sweep post-battle leftovers
         self.flush_dialog(3000)
+        self.emu.save(self.state_path)   # keep watch.py near-live mid-leg
         lead = self.lead()
         print(f"  battle [{outcome}, {self.emu.frame - f0} frames] -> "
               f"{lead['name']} L{lead['level']} {lead['hp']}/{lead['max_hp']}",
@@ -799,6 +800,166 @@ class Driver:
             return self.fight(policy=pol)
         finally:
             self._pending_nickname = None
+
+    # -- field HM: CUT -----------------------------------------------------
+
+    _CUT_TREE_BYTE = 0x12
+
+    def _party_knows_cut(self):
+        """(knows, party_index): does any party member know CUT?"""
+        for idx, mon in enumerate(self.observe()["party"]):
+            if any(m.get("name") == "CUT" for m in mon.get("moves", [])):
+                return True, idx
+        return False, None
+
+    def _teach_hm01(self):
+        """Teach HM01 CUT to the first able party member via PACK ->
+        TM/HM pocket. Raises RuntimeError if the flow doesn't complete."""
+        self.press("START:4 .:40")
+        self.press("D:4 .:12"); self.press("D:4 .:12")
+        self.press("A:4 .:60")                       # PACK
+        for _ in range(8):
+            if self.emu.read_u8("wJumptableIndex") == 8:
+                break                                 # TM/HM pocket
+            self.press("L:4 .:18")
+        else:
+            raise RuntimeError("use_cut: TM/HM pocket never opened")
+        self.press(".:35")
+        self.press("D:4 .:15"); self.press("D:4 .:25")
+        self.press("A:4 .:80")                        # submenu
+        self.press(".:40")
+        if "USE" not in "".join(self.emu.screen_text()).upper():
+            raise RuntimeError("use_cut: HM01 USE submenu not found")
+        self.press("A:6 .:30")                        # USE
+        for _ in range(20):                           # boot texts -> YES/NO
+            s = "".join(self.emu.screen_text()).upper()
+            if "YES" in s and "NO" in s:
+                break
+            self.press("A:4 .:45")
+        else:
+            raise RuntimeError("use_cut: learn prompt never appeared")
+        self.press("A:5 .:60")                        # YES: teach
+        self.press("A:5 .:80")                        # first able mon
+        self.press("A:5 .:90")                        # forget first move
+        for _ in range(14):
+            if not self.textbox():
+                break
+            self.press("A:4 .:50")
+        self.press("B:4 .:25"); self.press("B:4 .:30")
+        knows, _idx = self._party_knows_cut()
+        if not knows:
+            raise RuntimeError("use_cut: teaching HM01 failed verification")
+
+    def use_cut(self, tree_x, tree_y, label=""):
+        """Cut down the small tree at (tree_x, tree_y) on the current map:
+        teaches HM01 CUT via the pack flow if nobody knows it yet, walks to
+        a standable cell beside the tree, faces it, and uses START ->
+        POKéMON -> mon -> field-move CUT. Verifies the tree's collision
+        actually cleared and steps onto its cell."""
+        def scr():
+            return "".join(self.emu.screen_text()).upper()
+        if self.battle():
+            self.fight()
+        name = self.map_name()
+        grid = self.nav.grid(name)
+        hgt, wid = len(grid), len(grid[0])
+        if not (0 <= tree_x < wid and 0 <= tree_y < hgt) or \
+                grid[tree_y][tree_x] != self._CUT_TREE_BYTE:
+            raise RuntimeError(f"use_cut: ({tree_x}, {tree_y}) is not a "
+                               f"cuttable tree on {name}")
+        knows, knower = self._party_knows_cut()
+        if not knows:
+            print("  no one knows CUT; teaching HM01", flush=True)
+            self._teach_hm01()
+            knows, knower = self._party_knows_cut()
+        # approach cell: any standable neighbour we can actually reach,
+        # facing back toward the tree
+        inv = {"U": "D", "D": "U", "L": "R", "R": "L"}
+        cands = []
+        for d, (dx, dy) in STEP.items():
+            ax, ay = tree_x + dx, tree_y + dy
+            if 0 <= ax < wid and 0 <= ay < hgt and \
+                    self._standable(name, (ax, ay)):
+                cands.append(((ax, ay), inv[d]))
+        placed = False
+        for (ax, ay), face in cands:
+            if self.goto(ax, ay, label or "use_cut approach"):
+                self.press(f"{face}:4 .:10")
+                placed = True
+                break
+        if not placed:
+            raise RuntimeError(
+                f"use_cut: no reachable approach beside the tree "
+                f"({tree_x}, {tree_y})")
+
+        # START -> POKEMON -> (knower or first mon) -> field-move CUT row
+        self.press("START:4 .:40")
+        if not self._wait_screen(lambda s: "EXIT" in s):
+            raise RuntimeError("use_cut: START menu never opened")
+        self.press("D:4 .:15")                        # POKEMON entry
+        self.press("A:5 .:40")
+        if not self._wait_screen(lambda s: "CANCEL" in s and
+                                 ("ABLE" in s or "EGG" in s)):
+            raise RuntimeError("use_cut: party list never opened")
+        if knower:
+            for _ in range(knower):
+                self.press("D:4 .:15")                # cursor onto the mon
+        self.press("A:6 .:40")
+        if not self._wait_screen(lambda s: "STATS" in s and "SWITCH" in s):
+            raise RuntimeError("use_cut: POKéMON submenu never opened")
+        hit = False
+        # the party list stays visible behind the submenu box, so scan
+        # every cursor row -- not just the first one
+        def cut_on_cursor():
+            rows = [r.strip().upper() for r in self.emu.screen_text()
+                    if ("▶" in r or "▷" in r)]
+            return any("CUT" in r for r in rows)
+        for _ in range(8):
+            if cut_on_cursor():
+                hit = True
+                break
+            self.press("D:4 .:16")
+        if not hit:
+            for _ in range(8):
+                self.press("U:4 .:16")
+                if cut_on_cursor():
+                    hit = True
+                    break
+        if not hit:
+            raise RuntimeError("use_cut: CUT row missing from the "
+                               "POKéMON submenu")
+        self.press("A:6 .:50")                        # use CUT
+        for _ in range(12):
+            s = scr()
+            if "YES" in s and "NO" in s:
+                self.press("A:5 .:45")                # confirm cut
+            elif not self.textbox():
+                break
+            else:
+                self.press("A:4 .:45")
+        self.settle()
+        # verify by walking onto the former tree cell (the static grid
+        # still shows $12 -- cut trees are swapped only in the engine's
+        # block memory)
+        r = self._step(face)
+        if self.pos()[2:] != (tree_x, tree_y):
+            raise RuntimeError(
+                f"use_cut: tree at {(tree_x, tree_y)} still standing after "
+                f"CUT (step {r} -> {self.pos()[2:]})")
+        print(f"  [cut] tree at {(tree_x, tree_y)} removed; stepped {r} "
+              f"-> {self.map_name()} {self.pos()[2:]}", flush=True)
+        return True
+
+
+    def _wait_screen(self, pred, frames=500):
+        """Tick (no input) until pred(uppercase screen text) is true."""
+        n = 0
+        while n < frames:
+            if pred("".join(self.emu.screen_text()).upper()):
+                return True
+            self.emu.tick(10)
+            n += 10
+        return False
 
     def use_item(self, item_name, target_slot=0, field=True):
         """Use an item from the pack outside battle (heals/status on party

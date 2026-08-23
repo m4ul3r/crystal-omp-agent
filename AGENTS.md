@@ -45,7 +45,8 @@ driver (loads the ROM once, seconds instead of per-call overhead):
 ```
 
 Signature: `trek.py <leg> [<state>] [args...]`. The state file mutates in
-place and is re-saved at the end. Omitting `<state>` REFUSES to run unless
+place and is re-saved after every battle and at the end. Omitting `<state>`
+REFUSES to run unless
 `CRYSTAL_ALLOW_DEFAULT=1` is exported -- `saves/default.state` is a shared
 fork point and silent mutation cost a session real progress once. Fork
 first if the leg is risky:

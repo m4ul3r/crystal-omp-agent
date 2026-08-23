@@ -43,6 +43,16 @@ _Last updated: session of Aug 23 2026 (mart_buy primitive + 2nd party member)._
     — setevent EVENT_AZALEA_TOWN_SLOWPOKETAIL_ROCKET), 4 Rockets beaten,
     Bugsy defeated by QUILAVA L21 (learned QUICK ATTACK mid-fight).
     Party: QUILAVA L21, POLIWAG L4, TOGEPI egg. ₽4988.
+12. ILEX PUSH STALLED AT RIVAL (`director.state` frame 891198): Azalea
+    west crossing at (5,10)/(5,11) is planner-blocked (scene-var
+    conservatism; physically safe at scene NOOP=0 — crossed manually via
+    press). Stepping further west triggers the AZALEA RIVAL BATTLE
+    cutscene mid-goto -> travel flushed dialog mid-cutscene, entered
+    battle mangled, QUILAVA dropped 0/64 in a loss-loop (fight()
+    re-entered 11x instead of letting whiteout resolve). Rolled back
+    cleanly via per-cycle persistence. NEXT: trigger rival deliberately,
+    advance cutscene fully, then fight fresh; OR add cutscene-aware
+    pre-battle dialog handling.
 
 ## Route notes
 
@@ -74,6 +84,7 @@ UNION CAVE. Grind POLIWAG up alongside Cyndaquil. Next badge is HIVE
 | ox-alpha (visibility) | L14 CYNDAQUIL, staging for Falkner rematch #3 | `visibility.state` |
 | ox-alpha (p9) | done: mart_buy + step_hold + 2nd party member (`two-mon.state`) | `saves/ox-alpha.state` |
 | director | Union Cave traverse -> Azalea/Hive badge | saves/director.state |
+| claude-lex | DONE: Ilex Forest cleared -> ROUTE_34_ILEX_FOREST_GATE | `saves/claude-lex.state` (frame 973763, gate (4,5)) |
 
 Rule: never write another session's working state or a milestone checkpoint;
 promote progress under NEW filenames. See AGENTS.md "Multiple agents".
@@ -147,6 +158,22 @@ promote progress under NEW filenames. See AGENTS.md "Multiple agents".
     idle frames drifted, frame 106033 -> 106506).
   - Note: `trek flush` already existed (flushes dialog to quiet); it now
     prints its outcome ("done"/"battle"/"timeout").
+- **Round 6 additions (this session): battle-watch latency**
+  - Diagnosis: battles were never slow in the driver — wild entry measured
+    at 504 frames trigger→menu (0.04 s wall), full battle 2972 frames in
+    3.8 s, raw emulation 16k fps. The "frozen battle" was the dashboard:
+    watch.py advanced its preview ONE frame per /shot.png request (~1 fps
+    playback), and trek only wrote the state file at leg end, so panels
+    went minutes stale mid-leg.
+  - Fixes: watch.py now reloads-then-ticks toward real time on each poll
+    (240x, capped 1800 frames/request; also actually calls _reload() which
+    its comment always claimed). trek now autosaves the working state after
+    every battle, so watch tracks a live session within ~0.2 s of each
+    battle ending. emu.save writes tmp-then-rename: viewers can no longer
+    read a half-written savestate during saves.
+  - Verified live: paced/fought on a watched fork — state.json age stayed
+    0.1–0.3 s across battles, screenshots animate between 1 s polls,
+    request latency ~40 ms.
 - **Round 4 additions (naming, this session):**
   - `Driver.type_name()` + `catch(nickname=...)` / `trek catch NICKNAME`:
     types real names on the post-catch naming keyboard. Grid parsed from
@@ -226,3 +253,41 @@ promote progress under NEW filenames. See AGENTS.md "Multiple agents".
   observe()-digest rails: fight() wedged 150k frames on "forget a move to
   make room". Screen-decode diffing (autopilot `screen` cmd) + raw A
   presses drove through it.
+- coord-event blocking is conservative: cells whose scene token != live
+  scene var are safe to walk but planner still seals them when it can't
+  prove otherwise (AzaleaTown neck). Manual micro-step (press seq)
+  bypasses planning safely once safety is confirmed from maps/*.asm.
+
+## Ilex Forest cleared (claude-lex fork, Aug 23)
+
+`saves/claude-lex.state` (frame 973763): player in ROUTE_34_ILEX_FOREST_GATE
+at (4,5), QUILAVA L22 67/67 knows CUT (replaced LEER; kept QUICK ATTACK/
+SMOKESCREEN/EMBER). Forked from director.state at ILEX_FOREST (7,29).
+
+Working sequence:
+1. **Farfetch'd chase** is facing-sensitive: each of positions 1..9
+   (wFarfetchdPosition, readable via emu.read_u8) has facings that send
+   the bird BACKWARD (IlexForest.asm .PositionN branches read VAR_FACING).
+   Driven table-style — per position an allowed (stand-cell, facing) list:
+   p1 any; p2 not-DOWN; p3 not-LEFT; p4 not-UP; p5 ONLY DOWN (stand 28,30);
+   p6 not-RIGHT; p7 UP/RIGHT only; p8 ONLY DOWN (stand 15,28);
+   p9 UP/LEFT only. goto(stand) -> step_dir(face) -> A -> flush_dialog ->
+   settle. Do NOT use talk_to (it picks its own approach cell).
+2. Talk to charcoal master (5,28) -> HM01 CUT (shows as "H1 CUT" in the
+   TM/HM pocket screen text, NOT "HM01").
+3. Teach CUT via PACK; pick the forgotten move deliberately (deleted LEER).
+4. use_cut-style flow at tree (8,25): stand (8,26) face UP, START ->
+   POKéMON (Menus.select_label('POKéM') — 'POK' matches POKéDEX) ->
+   Quilava -> CUT row -> A. Tree clears; walk through.
+5. goto(1,5) warps into ROUTE_34_ILEX_FOREST_GATE.
+
+Bugs in the uncommitted trek.py use_cut (still unfixed there):
+- `_teach_hm01` aborts if ANY party row shows "NOT ABLE" — false positive
+  when non-lead mons can't learn CUT (trek.py:842-847). Should check only
+  the cursor row.
+- `_teach_hm01` force-forgets the FIRST move on a 4-move mon (trek.py:848).
+- `_teach_hm01`'s B-B exit leaves the START menu OPEN — movement then
+  silently blocks (gotcha 7) and the stray menu gets baked into saves.
+- `use_cut`'s START->POKéMON nav assumes the cursor starts on POKéDEX
+  (trek.py:904 single D press); the START menu REMEMBERS the last cursor
+  slot, so after any PACK visit it opens ᴾᴷGEAR instead.

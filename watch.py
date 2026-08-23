@@ -460,6 +460,7 @@ class Viewer:
         self.events = {}           # save name -> [{"i",frame,t,msg}, ...]
         self._last = {}            # save name -> previous snapshot for diffing
         self._known_saves = None   # checkpoint-watch: *.state names seen so far
+        self._last_png = None      # wall clock of last /shot.png render
 
     def select(self, path):
         with self.lock:
@@ -526,9 +527,7 @@ class Viewer:
 
     def png(self):
         with self.lock:
-            # Rendering advances the emulator by one frame; force a reload
-            # first whenever we have ticked, so the picture never drifts
-            # away from the savestate actually on disk.
+            self._reload()   # the old comment promised this; never called
             # A savestate can land mid-transition with the LCD off (map
             # fade/warp: rLCDC bit 7 clear); PyBoy then renders a solid
             # fill. Advance until the PPU is live before capturing.
@@ -538,12 +537,22 @@ class Viewer:
                     settle = 8          # PPU needs frames to repaint
                 elif settle:
                     settle -= 1
-                self.emu.py.tick(1, True)
                 if not settle:
                     break
+                self.emu.py.tick(1, False)
+            # Tick toward real time instead of one frame per request
+            # (~1 fps playback made every battle look frozen). 240x real
+            # speed, capped so a freshly opened tab can't stall a request.
+            now = time.monotonic()
+            elapsed = 0.0 if self._last_png is None else now - self._last_png
+            self._last_png = now
+            budget = min(1800, max(1, int(elapsed * 240)))
+            if budget > 1:
+                self.emu.py.tick(budget - 1, False)
+            self.emu.py.tick(1, True)       # render exactly one frame
+            self._ticks += budget
             buf = io.BytesIO()
             self.emu.py.screen.image.save(buf, format="PNG")
-            self._ticks += 1
             return buf.getvalue()
 
     def snapshot(self, save_name):

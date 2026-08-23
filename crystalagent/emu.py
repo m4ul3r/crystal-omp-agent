@@ -171,10 +171,17 @@ class Crystal:
     # -- persistence -------------------------------------------------------
 
     def save(self, state_path):
+        state_path = Path(state_path)
         state_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(state_path, "wb") as f:
+        # write-then-rename: concurrent readers (watch.py reloads on mtime
+        # change) must never see a half-written savestate
+        tmp = state_path.with_suffix(state_path.suffix + ".tmp")
+        with open(tmp, "wb") as f:
             self.py.save_state(f)
-        Path(f"{state_path}.meta").write_text(json.dumps({"frames": self.frame}))
+        tmp.replace(state_path)
+        meta_tmp = Path(f"{state_path}.meta.tmp")
+        meta_tmp.write_text(json.dumps({"frames": self.frame}))
+        meta_tmp.replace(Path(f"{state_path}.meta"))
 
     def stop(self):
         self.py.stop(save=False)
