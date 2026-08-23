@@ -62,7 +62,7 @@ from trek import Driver, heal_pokecenter
 ACTIONS = {
     "goto", "walk", "fight", "catch", "heal", "talk_to",
     "mart_buy", "use_item", "grind", "settle", "press", "step_dir",
-    "route", "travel",
+    "route", "travel", "use_cut",
 }
 # Intentionally world-neutral actions the stuck detector must ignore.
 IDLE_ACTIONS = {"settle"}
