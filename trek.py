@@ -702,25 +702,72 @@ class Driver:
         self._pending_nickname if one is set."""
         if not self.battle():
             return self.lead()
+        self._resolve_learn_flow()   # repair a wedged mid-learn state
         f0 = self.emu.frame
         b = Battle(self.emu, self.names, self.bdata)
         name = self._resolve_nickname(self._pending_nickname,
                                       b.enemy()["name"])
         outcome = b.play(policy=policy, max_frames=max_frames,
-                         want_nickname=bool(name))
+                         want_nickname=bool(name),
+                         text_handler=self._battle_text_handler)
         for _ in range(3):                       # naming handoff loop
             if outcome != "naming" or not self.keyboard_open():
                 break
             self._pending_nickname = None
             self.dismiss_keyboard(name)
-            outcome = b.play(policy=policy, max_frames=max_frames)
+            outcome = b.play(policy=policy, max_frames=max_frames,
+                             text_handler=self._battle_text_handler)
         self._pending_nickname = None
+        self._resolve_learn_flow(4000)   # sweep post-battle leftovers
         self.flush_dialog(3000)
         lead = self.lead()
         print(f"  battle [{outcome}, {self.emu.frame - f0} frames] -> "
               f"{lead['name']} L{lead['level']} {lead['hp']}/{lead['max_hp']}",
               flush=True)
         return lead
+
+
+    _LEARN_MARKERS = ("TRYING TO LEARN", "WANTS TO LEARN",
+                      "DELETE A MOVE", "FORGET A MOVE", "MAKE ROOM",
+                      "STOP LEARNING")
+
+    def _learn_prompt_up(self, rows):
+        joined = "".join(rows).upper()
+        return any(m in joined for m in self._LEARN_MARKERS)
+
+    def _battle_text_handler(self, rows):
+        """Modal-text hook for Battle.play: drive the level-up move-learning
+        flow to a deterministic DECLINE (keep the current moveset). The
+        flow is a two-stage prompt: "Delete a move and make room?"
+        (answer NO) -> "Stop learning <MOVE>?" (answer YES -- the trap:
+        B here means "don't stop" and loops the flow forever). Blind
+        A-mashing derails into party menus and wedges the battle
+        (Bugsy gym, Scyther 0 HP, wBattleMode stuck at 2).
+        Returns True when this frame's input was consumed."""
+        if not self._learn_prompt_up(rows):
+            return False
+        joined = "".join(rows).upper()
+        if "YES" in joined and "NO" in joined:
+            if "STOP LEARNING" in joined:
+                self.press("A:6 .:20")   # YES: confirm stopping
+            else:
+                self.press("B:6 .:20")   # NO: keep the current moveset
+        else:
+            self.press("A:4 .:16")       # advance the flow's text pages
+        return True
+
+    def _resolve_learn_flow(self, max_frames=8000):
+        """Drive any on-screen move-learning flow to completion (declining
+        the swap). Used to repair wedged states and sweep post-battle
+        leftovers; safe to call when no flow is present."""
+        f0 = self.emu.frame
+        while self.emu.frame - f0 < max_frames:
+            rows = self.emu.screen_text()
+            if not self._learn_prompt_up(rows):
+                return True
+            self._battle_text_handler(rows)
+        return False
+
 
     def _resolve_nickname(self, nickname, species):
         """str passes through; dict is keyed by the wild's species name;

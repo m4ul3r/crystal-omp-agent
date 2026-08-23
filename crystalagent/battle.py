@@ -341,14 +341,17 @@ class Battle:
         return False
 
     def play(self, policy=None, max_frames=120000, potion_frac=0.3,
-             want_nickname=False):
+             want_nickname=False, text_handler=None):
         """Fight the whole battle. `policy(rows, me, enemy)` may return one
         of 'attack', ('attack', move_idx), 'flee', ('ball', name),
         ('item', name), ('switch', party_idx); defaults to smart damage +
         auto-POTION + fleeing hopeless wild fights. Returns
         'won' | 'fled' | 'caught' | 'wipe' | 'timeout' | 'naming'.
         want_nickname: answer YES to the post-catch prompt and hand off to
-        the caller at the keyboard instead of declining it."""
+        the caller at the keyboard instead of declining it.
+        text_handler(rows): optional modal-text hook (e.g. the level-up
+        move-learning flow). Called before generic text handling; return
+        True when it consumed the frame's input."""
         f0 = self.emu.frame
         last_action = None
         caught = False
@@ -365,6 +368,9 @@ class Battle:
                     # "Give a nickname?" answered YES: stop mashing A --
                     # every press adds a junk character. Caller handles it.
                     return "naming"
+                if text_handler and text_handler(rows):
+                    # modal flow (level-up move learning) handled by caller
+                    continue
                 joined = "".join(rows).upper()
                 if not want_nickname and (
                         "GIVE A NICKNAME" in joined
