@@ -10,6 +10,25 @@ JOHTO_BADGES = ["ZEPHYR", "HIVE", "PLAIN", "FOG", "STORM", "MINERAL", "GLACIER",
 KANTO_BADGES = ["BOULDER", "CASCADE", "THUNDER", "RAINBOW", "SOUL", "MARSH", "VOLCANO", "EARTH"]
 
 _STATUS_BITS = [(0x08, "PSN"), (0x10, "BRN"), (0x20, "FRZ"), (0x40, "PAR")]
+EGG = 0xFD  # wPartySpecies entry for an egg (the mon struct holds the real species)
+
+
+def _dvs(b):
+    """Two packed DV bytes -> [atk, def, spd, spc]."""
+    return [b[0] >> 4, b[0] & 0xF, b[1] >> 4, b[1] & 0xF]
+
+
+def _shiny(dv):
+    """engine/gfx/color.asm CheckShininess: atk DV has bit 1 set, and
+    def/spd/spc DVs are all 10."""
+    return bool(dv[0] & 0b0010) and dv[1] == 10 and dv[2] == 10 and dv[3] == 10
+
+
+def _unown_letter(b):
+    """engine/gfx/load_pics.asm GetUnownLetter: middle two bits of each DV,
+    concatenated atk|def|spd|spc, divided by 10 -> 'a'..'z'."""
+    v = ((b[0] & 0x60) << 1) | ((b[0] & 0x06) << 3) | ((b[1] & 0x60) >> 3) | ((b[1] & 0x06) >> 1)
+    return chr(ord("a") + v // 10)
 
 
 def _status(byte):
@@ -54,14 +73,20 @@ def game_state(emu, names, include_screen=False):
     party_bank, party_base = sym["wPartyMon1"]
     nick_bank, nick_base = sym["wPartyMonNicknames"]
     count = min(emu.read_u8("wPartyCount"), 6)
+    slots = emu.read("wPartySpecies", count) if count else b""
     party = []
     for i in range(count):
         base = party_base + i * stride
         rd = lambda f, n=1: emu.read((party_bank, base + off(f)), n)
         species = rd("Species")[0]
+        dvb = rd("DVs", 2)
         party.append({
             "species": species,
             "name": names.species.get(species, "?"),
+            "egg": slots[i] == EGG,
+            "dvs": _dvs(dvb),
+            "shiny": _shiny(_dvs(dvb)),
+            "form": _unown_letter(dvb) if species == 201 else None,
             "nickname": emu.charmap.decode(
                 emu.read((nick_bank, nick_base + i * MON_NAME_LENGTH), MON_NAME_LENGTH)),
             "level": rd("Level")[0],
@@ -79,11 +104,14 @@ def game_state(emu, names, include_screen=False):
     mode = emu.read_u8("wBattleMode")
     if mode:
         species = emu.read_u8("wEnemyMonSpecies")
+        dvb = emu.read("wEnemyMonDVs", 2)
         s["battle"] = {
             "mode": {1: "wild", 2: "trainer"}.get(mode, mode),
             "enemy": {
                 "species": species,
                 "name": names.species.get(species, "?"),
+                "shiny": _shiny(_dvs(dvb)),
+                "form": _unown_letter(dvb) if species == 201 else None,
                 "level": emu.read_u8("wEnemyMonLevel"),
                 "hp": emu.read_be("wEnemyMonHP", 2),
                 "max_hp": emu.read_be("wEnemyMonMaxHP", 2),

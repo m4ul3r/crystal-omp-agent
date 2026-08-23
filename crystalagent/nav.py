@@ -13,6 +13,7 @@ from pathlib import Path
 WALKABLE = {0x00, 0x14, 0x18}          # floor, long grass, tall grass
 WARPS = set(range(0x70, 0x80))         # doors, stairs, carpets, ladders, caves
 HOPS = {0xA0: "R", 0xA1: "L", 0xA2: "U", 0xA3: "D"}  # one-way ledges
+CONN_NAME = {"R": "east", "L": "west", "U": "north", "D": "south"}
 STEP = {"R": (1, 0), "L": (-1, 0), "U": (0, -1), "D": (0, 1)}
 
 
@@ -61,6 +62,55 @@ class MapData:
                     self.blk[name] = m.group(1)
                 pending = []
 
+        # CONST_NAME -> {"north": (dest_const, offset), ...}; offsets are the
+        # `connection` macro's 4th arg: target map origin relative to current
+        # map. Landing math verified against engine/overworld/warp_connection.asm
+        # EnterMapConnection + data/maps/attributes.asm connection macro.
+        self.conns = {}
+        cur = None
+        for line in (repo / "data/maps/attributes.asm").read_text().splitlines():
+            if m := re.match(r"\tmap_attributes\s+\w+,\s*(\w+),", line):
+                cur = m.group(1)
+                self.conns.setdefault(cur, {})
+                continue
+            m = re.match(r"\tconnection\s+(north|south|west|east),\s*"
+                         r"(\w+),\s*(\w+),\s*(.+?)\s*$", line)
+            if m and cur:
+                d, _camel, dest, off = m.groups()
+                self.conns[cur][d] = (dest, self._offset(off))
+
+        # CONST_NAME -> {(x,y): (dest_const, warp_id)} and
+        # CONST_NAME -> [(x,y) | None] indexed by warp_id-1 (None = back-warp
+        # with id -1: returns you where you came from; not routable).
+        # Parsed from maps/<CamelCase>.asm def_warp_events sections.
+        self.warps = {}
+        self.warp_cells = {}
+        inv = {camel: const for const, camel in self.camel.items()}
+        for camel, const in inv.items():
+            path = repo / "maps" / f"{camel}.asm"
+            if not path.exists():
+                continue
+            warps, cells, section = {}, [], False
+            for line in path.read_text().splitlines():
+                if re.match(r"\tdef_warp_events", line):
+                    section = True
+                    continue
+                if section and re.match(r"\tdef_\w+", line):
+                    break
+                m = re.match(r"\twarp_event\s+(-?\d+),\s*(-?\d+),\s*"
+                             r"([A-Z0-9_]+),\s*(-?\d+)", line)
+                if m and section:
+                    x, y, dest, wid = (m.group(i) for i in range(1, 5))
+                    x, y, wid = int(x), int(y), int(wid)
+                    if wid >= 1:
+                        cells.append((x, y))
+                        warps[(x, y)] = (dest, wid)
+                    else:
+                        cells.append(None)
+            if cells:
+                self.warps[const] = warps
+                self.warp_cells[const] = cells
+
         self._coll_cache = {}
         self._grid_cache = {}
 
@@ -92,48 +142,135 @@ class MapData:
         self._grid_cache[const_name] = grid
         return grid
 
-    def find_path(self, const_name, start, goal, avoid=()):
-        """BFS from start to goal (both (x,y)); returns 'R','L','U','D' moves.
-        Handles one-way ledge hops (landing cell is 2 steps away). `avoid` is
-        extra temporarily-blocked cells (e.g. an NPC standing in the way)."""
+    @staticmethod
+    def _offset(expr):
+        """`connection` 4th arg: plain int, negative int, or legacy
+        `(<a>) - (<b>)` form."""
+        expr = expr.replace(" ", "")
+        if m := re.fullmatch(r"\((-?\w+)\)-\((-?\w+)\)", expr):
+            return int(m.group(1), 0) - int(m.group(2), 0)
+        return int(expr, 0)
+
+    def _enterable(self, const_name, x, y):
         grid = self.grid(const_name)
-        hgt, wid = len(grid), len(grid[0])
+        if not (0 <= y < len(grid) and 0 <= x < len(grid[0])):
+            return False
+        c = grid[y][x]
+        return c in WALKABLE or c in WARPS or c in HOPS
+
+    def _warp_landing(self, const_name, edge):
+        """Where stepping onto warp cell `edge` on `const_name` puts you:
+        (dest_const, (x, y)) -- the destination's own warp event of that id.
+        Back-warps (id -1) and dangling ids are not routable."""
+        dest, wid = self.warps[const_name][edge]
+        cells = self.warp_cells.get(dest)
+        if not cells or wid > len(cells) or cells[wid - 1] is None:
+            return None
+        return dest, cells[wid - 1]
+
+    def _conn_landing(self, const_name, d, x, y):
+        """Walking off map `const_name` in direction `d` from edge cell
+        (x,y): (dest_const, (x, y)) on the connected map, per
+        EnterMapConnection (new coord = strip offset + old coord)."""
+        dest, off = self.conns[const_name][d]
+        _, _, w, h = self.consts[dest]
+        W, H = 2 * w, 2 * h
+        if d == "north":
+            nx, ny = x - 2 * off, H - 1
+        elif d == "south":
+            nx, ny = x - 2 * off, 0
+        elif d == "west":
+            nx, ny = W - 1, y - 2 * off
+        else:  # east
+            nx, ny = 0, y - 2 * off
+        if self._enterable(dest, nx, ny):
+            return dest, (nx, ny)
+        return None
+
+    def find_path(self, const_name, start, goal, avoid=(), cross=False):
+        """BFS from start to goal (both (x,y) on `const_name`); returns
+        'R','L','U','D' moves. Handles one-way ledge hops (landing cell is
+        2 steps away). `avoid` is extra temporarily-blocked cells on the
+        START map (e.g. an NPC standing in the way).
+
+        Warp-event tiles can never be stood on, so they are only ever a
+        path's FINAL cell unless cross=True, which additionally routes
+        across warps (to their landing cell) and map-edge connections --
+        i.e. whole-journey routing between maps; see find_route."""
+        return self._bfs((const_name, tuple(start)), (const_name, tuple(goal)),
+                         const_name, avoid, cross)
+
+    def find_route(self, start_map, start, goal_map, goal, avoid=()):
+        """Cross-map find_path: routes between any two maps via warp events
+        and edge connections (`avoid`: blocked cells on the START map).
+        Plain moves expand before warp/connection exits, so equal-length
+        routes prefer staying on one map."""
+        return self._bfs((start_map, tuple(start)), (goal_map, tuple(goal)),
+                         start_map, avoid, True)
+
+    def _bfs(self, start_state, goal_state, avoid_map, avoid, cross):
         avoid = set(avoid)
 
-        def ok(x, y):
-            return 0 <= x < wid and 0 <= y < hgt and (x, y) not in avoid
-
-        def enterable(x, y):
-            c = grid[y][x]
-            return c in WALKABLE or c in WARPS or c in HOPS
-
-        prev = {start: None}
-        q = deque([start])
-        while q:
-            cur = q.popleft()
-            if cur == goal:
-                moves = []
-                while prev[cur]:
-                    pcur, mv = prev[cur]
-                    moves.append(mv)
-                    cur = pcur
-                return moves[::-1]
-            x, y = cur
+        def expand(state):
+            M, (x, y) = state
+            grid = self.grid(M)
+            hgt, wid = len(grid), len(grid[0])
             here = grid[y][x]
+            plain, exits = [], []
             for d, (dx, dy) in STEP.items():
                 # standing on a ledge lip and moving in its hop direction
                 # jumps over the cliff tile, landing 2 cells away (the game
                 # checks the tile you stand ON: engine .TryJump)
                 if here in HOPS and HOPS[here] == d:
                     lx, ly = x + 2 * dx, y + 2 * dy
-                    if ok(lx, ly) and enterable(lx, ly) and (lx, ly) not in prev:
-                        prev[(lx, ly)] = (cur, d)
-                        q.append((lx, ly))
+                    if M == avoid_map and (lx, ly) in avoid:
+                        continue
+                    if self._enterable(M, lx, ly):
+                        plain.append(((M, (lx, ly)), d))
                     continue
                 nx, ny = x + dx, y + dy
-                if ok(nx, ny) and enterable(nx, ny) and (nx, ny) not in prev:
-                    prev[(nx, ny)] = (cur, d)
-                    q.append((nx, ny))
+                nxt = (M, (nx, ny))
+                if 0 <= nx < wid and 0 <= ny < hgt:
+                    if M == avoid_map and (nx, ny) in avoid:
+                        continue
+                    if nxt == goal_state:
+                        plain.append((nxt, d))
+                        continue
+                    w = self.warps.get(M, {}).get((nx, ny))
+                    if w is not None:
+                        # stepping ONTO a warp tile fires it (arrival never
+                        # re-triggers, so landing on a warp tile is fine --
+                        # gate doors land on exactly such tiles); you can
+                        # never stand on one mid-path otherwise
+                        if cross:
+                            land = self._warp_landing(M, (nx, ny))
+                            if land:
+                                exits.append(((land[0], land[1]), d))
+                        continue
+                    c = grid[ny][nx]
+                    if c in WALKABLE or c in WARPS or c in HOPS:
+                        plain.append((nxt, d))
+                elif cross and CONN_NAME[d] in self.conns.get(M, {}):
+                    land = self._conn_landing(M, CONN_NAME[d], x, y)
+                    if land:
+                        exits.append(((land[0], land[1]), d))
+            return plain + exits
+
+        prev = {start_state: None}
+        q = deque([start_state])
+        while q:
+            cur = q.popleft()
+            if cur == goal_state:
+                moves = []
+                while prev[cur]:
+                    pcur, mv = prev[cur]
+                    moves.append(mv)
+                    cur = pcur
+                return moves[::-1]
+            for nxt, mv in expand(cur):
+                if nxt not in prev:
+                    prev[nxt] = (cur, mv)
+                    q.append(nxt)
         return None
 
     def render(self, const_name, mark=None):

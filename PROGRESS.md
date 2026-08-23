@@ -61,7 +61,7 @@ UNION CAVE. Grind POLIWAG up alongside Cyndaquil. Next badge is HIVE
 | session | owns | working state |
 |---------|------|---------------|
 | tower agent | Sprout Tower -> Elder Li | `joey.state` (frame 238979, SPROUT_TOWER_2F) |
-| ox-alpha (visibility) | fresh boot -> starter -> early New Bark progress | `visibility.state` |
+| ox-alpha (visibility) | fresh boot -> starter, egg, rival beaten; next: deliver egg to Elm | `visibility.state` |
 | ox-alpha (p9) | done: mart_buy + step_hold + 2nd party member (`two-mon.state`) | `saves/ox-alpha.state` |
 
 Rule: never write another session's working state or a milestone checkpoint;
@@ -145,6 +145,24 @@ promote progress under NEW filenames. See AGENTS.md "Multiple agents".
 | gym-attempt.state | 279328 | p5's stalled badge attempt (superseded) |
 | zephyr-badge.state | 296052 | ZEPHYR BADGE won, L14 |
 | two-mon.state | **389033** | **current** — POLIWAG caught, party of 2, Route 31 |
+| starter.state | ~62800 | CYNDAQUIL received, New Bark |
+| egg-mrpokemon.state | 296910 | MYSTERY EGG obtained, Oak dex, healed 26/26 |
+| visibility.state | live | working state — next: Route 29 east -> Elm, cop scene |
+
+## visibility run notes (fresh boot, Aug 23)
+
+- Player "AAAAAA" (default-name mash artifact), CYNDAQUIL L9 28/28,
+  ₽3300 (+300 = beat rival in Cherrygrove — fight fired mid-goto leg).
+- MISSED: aide's free POTION (lab exit cutscene skipped); harmless.
+- DISCLOSURE: an errant trek walk without positional state arg ran on
+  and moved default.state ~4 tiles east on ROUTE_29 (frame 106063 ->
+  106320). Fork point shifted; no battles fired.
+- Harness gaps found: (1) nav.MapData ignores map-edge CONNECTIONS
+  (attributes.asm) so BFS cannot cross town/route edges — exits need
+  manual steps (New Bark exits WEST at x=0 y=8, not north!). (2) crystal
+  input runs its sequence ONCE unless --until is given — use DSL repeat
+  (A:8 .:45*50) for dialog mashing. (3) trek goto crashed once with
+  ValueError 'ELMS_LAB' (leg/state parsing) — unreproduced.
 
 ## Gotchas discovered this run
 

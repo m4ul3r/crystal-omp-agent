@@ -119,7 +119,7 @@ class Driver:
         try:
             grid = self.nav.grid(self.map_name())
             return grid[y][x] in WARPS
-        except KeyError:
+        except (KeyError, IndexError):   # unknown map or off the map edge
             return False
 
     def step_hold(self, mv, hold=80):
@@ -419,25 +419,50 @@ class Driver:
                         return False
         return True
 
-    def goto(self, x, y, label=""):
-        """BFS-pathfind to (x,y) on the current map and walk it. Replans
-        around NPC bumps; fights encounters on the way."""
+    def _resolve_map(self, name):
+        """CONST_NAME or CamelCase (case/space-insensitive) -> CONST_NAME;
+        None = current map."""
+        if name is None:
+            return self.map_name()
+        if name in self.nav.consts:
+            return name
+        want = name.upper().replace(" ", "_")
+        if want in self.nav.consts:
+            return want
+        for const, camel in self.nav.camel.items():
+            if camel.lower() == name.lower().replace(" ", ""):
+                return const
+        raise SystemExit(f"unknown map {name!r}")
+
+    def goto(self, x, y, label="", map_name=None):
+        """BFS-pathfind to (x,y) and walk it. Defaults to the current map;
+        pass map_name (CONST_NAME or CamelCase) to route across maps via
+        warp events and edge connections. Replans around NPC bumps; fights
+        encounters on the way."""
+        goal_map = self._resolve_map(map_name)
         goal = (x, y)
-        replans = 0
-        if label:
-            print(f"[goto {goal}] {label} on {self.map_name()}", flush=True)
-        while replans < 20:
-            cur = self.pos()[2:]
-            if cur == goal:
+        replans = idle = passes = 0
+        if label or goal_map != self.map_name():
+            print(f"[goto {goal}"
+                  f"{'' if goal_map == self.map_name() else ' -> ' + goal_map}]"
+                  f"{' ' + label if label else ''}".rstrip(), flush=True)
+        while replans < 20 and idle < 40 and passes < 60:
+            passes += 1
+            cur_map, cur = self.map_name(), self.pos()[2:]
+            if cur_map == goal_map and cur == goal:
                 return True
-            path = self.nav.find_path(self.map_name(), cur, goal, self.npc_cells())
+            # NPCs scope to the replan's start map inside _bfs, so always
+            # thread around them -- cross-map legs hit NPCs just the same
+            avoid = self.npc_cells()
+            path = self.nav.find_route(cur_map, cur, goal_map, goal, avoid)
             if not path:
                 # distinguish "NPC in the way" from "statically unreachable":
                 # if a relaxed (ignore-NPC) route exists, take it and let
                 # step_dir handle the bumps -- waiting never moves trainers.
-                relaxed = self.nav.find_path(self.map_name(), cur, goal)
+                relaxed = self.nav.find_route(cur_map, cur, goal_map, goal)
                 if not relaxed:
-                    print(f"  no static path {cur} -> {goal}", flush=True)
+                    print(f"  no static path {cur_map} {cur} -> "
+                          f"{goal_map} {goal}", flush=True)
                     return False
                 self.press(".:40")   # brief beat for genuinely moving NPCs
                 replans += 1
@@ -445,17 +470,22 @@ class Driver:
                     print(f"  threading {cur} -> {goal} past NPCs",
                           flush=True)
                 path = relaxed
+            moved = False
             for mv in path:
                 r = self._step(mv)
                 if r == "battle":
                     self.fight()
+                    moved = True
                 elif r == "warp":
                     self.settle()
-                    print(f"  warped -> {self.map_name()} {self.pos()[2:]}", flush=True)
-                    return self.pos()[2:] == goal
+                    print(f"  -> {self.map_name()} {self.pos()[2:]}", flush=True)
+                    moved = True
+                elif r == "moved":
+                    moved = True
                 elif r == "blocked":
-                    print(f"  blocked {mv} at {self.pos()[2:]}"
-                          f"{' [textbox]' if self.textbox() else ''}", flush=True)
+                    print(f"  blocked {mv} at {cur_map} {self.pos()[2:]}"
+                          f"{' [textbox]' if self.textbox() else ''}",
+                          flush=True)
                     if self.textbox():
                         self.flush_dialog()
                     else:
@@ -463,8 +493,11 @@ class Driver:
                     replans += 1
                     break
             else:
-                continue
-        print(f"  GAVE UP at {self.pos()[2:]} -> {goal}", flush=True)
+                continue   # path exhausted; loop re-checks arrival/replans
+            if not moved:
+                idle += 1
+        print(f"  GAVE UP at {self.map_name()} {self.pos()[2:]} -> "
+              f"{goal_map} {goal}", flush=True)
         return False
 
     def grind(self, pace="D U", target_level=13, min_hp=7, max_battles=80):
@@ -740,19 +773,26 @@ def leg_route29(d):
     d.walk("L*18", "route 29 west")         # long straight, trees at gaps
     print(d.status())
 
+def env_flag(name):
+    import os
+    return os.environ.get(name, "").strip().lower() not in ("", "0", "no",
+                                                             "false")
+
 
 def main():
     argv = sys.argv[1:]
     if not argv or argv[0] in ("-h", "--help"):
         sys.exit("usage: trek.py <leg> [<state>] [args...]\n"
-             "legs: walk PATH | goto X Y | talk X Y | grind [PACE] [LEVEL] | "
-             "catch | fight |\n"
+             "legs: walk PATH | goto X Y [MAP] | talk X Y | "
+             "grind [PACE] [LEVEL] | catch [NAME] | fight |\n"
              "      flush | heal | route29 | to_violet |\n"
              "      errand1 errand2 errand3 errand4 violet\n"
+             "goto MAP: CONST_NAME or CamelCase (e.g. VIOLET_CITY) -- routes\n"
+             "across maps via warps + edge connections\n"
              "<state>: savestate path ('' or omitted = saves/default.state)")
     leg, rest = argv[0], list(argv[1:])
     spec = {
-        "walk": (1, 1), "goto": (2, 2), "talk": (2, 2),
+        "walk": (1, 1), "goto": (2, 3), "talk": (2, 2),
         "grind": (0, 2), "catch": (0, 1),
         "mart": (4, 4),
         "fight": (0, 0), "flush": (0, 0), "route29": (0, 0), "heal": (0, 0),
@@ -769,9 +809,14 @@ def main():
     if rest and (rest[0] == "" or rest[0].endswith(".state")):
         state_arg = rest.pop(0) or None
     if not lo <= len(rest) <= hi:
-        usage = {"walk": "PATH", "goto": "X Y", "talk": "X Y",
+        usage = {"walk": "PATH", "goto": "X Y [MAP]", "talk": "X Y",
                  "grind": "[PACE] [LEVEL]", "mart": "X Y ITEM QTY"}.get(leg, "")
         sys.exit(f"usage: trek.py {leg} [<state>] {usage}".rstrip())
+    if state_arg is None and not env_flag("CRYSTAL_ALLOW_DEFAULT"):
+        sys.exit(f"refusing to run on shared {paths.DEFAULT_STATE} "
+              "implicitly. Pass your own fork: trek <leg> "
+              "saves/<agent>.state ... (or '' + CRYSTAL_ALLOW_DEFAULT=1 "
+              "to use default.state deliberately)")
     try:
         d = Driver(state_arg)
     except FileNotFoundError as e:
@@ -780,7 +825,8 @@ def main():
     if leg == "walk":
         d.walk(rest[0])
     elif leg == "goto":
-        d.goto(int(rest[0]), int(rest[1]))
+        d.goto(int(rest[0]), int(rest[1]),
+               map_name=rest[2] if len(rest) > 2 else None)
     elif leg == "talk":
         print(d.talk_to(int(rest[0]), int(rest[1])), flush=True)
     elif leg == "mart":
@@ -793,7 +839,7 @@ def main():
     elif leg == "fight":
         d.fight()
     elif leg == "flush":
-        d.flush_dialog()
+        print(f"flush_dialog -> {d.flush_dialog()}", flush=True)
     elif leg == "route29":
         leg_route29(d)
     elif leg == "heal":
