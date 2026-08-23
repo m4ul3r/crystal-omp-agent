@@ -1,14 +1,19 @@
 # PROGRESS — Pokémon Crystal run
 
-_Last updated: session of Aug 23 2026 (goal run: PLAIN BADGE won; staircase + forced-switch harness fixes)._
+_Last updated: session of Aug 23 2026 (claude-lex: 7 badges, Ice Path in progress). Field notes in FABLE_FEEDBACK.md -- read it for working techniques before resuming._
 
 ## Where we are
 
-- Checkpoint to resume from: **`saves/two-mon.state`** (frame 389033)
-- Position: ROUTE_31 grass (10,13)
-- Party: CYNDAQUIL "AA" L14 40/40, **POLIWAG L4** (fresh catch)
-- Money: ₽857 · Badges: ZEPHYR
-- Bag: ~9 Poké Balls, 3 POTIONS
+- Checkpoint to resume from: **`saves/claude-lex2.state`**
+- Badges (7/8): ZEPHYR HIVE PLAIN FOG MINERAL STORM GLACIER -- only RISING
+  (Clair, Blackthorn) left.
+- Position: ICE_PATH_B1F, mid boulder->hole puzzle (Strength armed).
+  Full verified push plan + warp graph for the Blackthorn crossing is in
+  FABLE_FEEDBACK.md "Where the run stands".
+- Party: TYPHLOSION L47, POLIWAG L4 (Surf), TOGEPI L10. Money ~₽26k.
+- GOTCHA: boulder pushes land ~60-100 frames AFTER step_dir returns --
+  wait .:100 and re-read npc_cells before pressing again. Boulders reset
+  on map re-entry; re-arm Strength per map entry.
 
 ## Story progress
 
@@ -448,3 +453,70 @@ Kimono Girls in Dance Theater (23,21) Ecruteak — POLIWAG can learn
 Surf) then Route 38/39 west to Olivine; or Jasmine later (needs
 SecretPotion). Suggest: Kimono Girls -> HM03 -> teach POLIWAG ->
 Olivine via 38/39 -> Chuck.
+
+## BADGES 5+6: MINERAL + STORM (claude-lex, Aug 23)
+
+Milestones: `mineral-badge-healed.state` (Olivine PC), `storm-badge.state`
+(Cianwood gym, frame 3385501, TYPHLOSION L41). Party: TYPHLOSION L41
+(Strength/Cut/Smokescreen/Ember), POLIWAG L4 (Bubble/Surf!), TOGEPI L10
+(hatched mid-sea!). Badge bits note: MINERAL is bit 4, STORM bit 5
+(state.py label order fixed — old logs said "STORM" for Jasmine's badge).
+
+Big harness additions this session (all live-validated):
+- SURF: nav routes water (nav.WATER, TrekNav override incl.), Driver
+  .enable_surf(), _step auto-mounts (face water + A + YES — walking into
+  water does NOT prompt in GSC). Sea legs Olivine<->Cianwood done 3x.
+- teach_hm(tag, move): generalized HM teach ('H3' SURF -> Poliwag,
+  'H4' STRENGTH -> first ABLE = TYPHLOSION, replaced Quick Attack).
+- Learn-mode: fight() now LEARNS level-up moves (forgets first
+  FORGET_PRIORITY match) instead of declining. attack() falls back off
+  0-PP moves. _bag() key-items stride fixed (1 byte, not 2).
+- heal_pokecenter verifies location+result (egg-aware).
+
+Route/gotchas:
+- Olivine rival coord event (13,12)/(13,13) seals the city corridor —
+  trigger deliberately (step on it, flush; talk-only, sets NOOP).
+- Lighthouse UP: 1F(3,11) 2F(5,3) 3F(13,3), 4F: fall hole (9,2)->D
+  (0x60 tiles!), 3F(9,5) ladder glides through 4F to 5F(9,7), 5F(9,15)
+  -> 6F. DOWN: east wing express — goto(16,4), step D repeatedly
+  (holes at (16/17, 5/7/9/11/13) chain to 1F).
+- Jasmine: SecretPotion handoff is JASMINE (8,8) on 6F, not Amphy;
+  cutscene needs ~20k frames of patient flushing before
+  EVENT_JASMINE_RETURNED_TO_GYM sets. Gym fight trivial for Ember.
+- Sea crossing: proven column R40 (10,35) <-> R41 (40,3); Cianwood at
+  R41 west edge row 10. Swimmer chains are DANGEROUS: two wipes (money
+  7118 -> 1339) before learning to cross healthy + segment-save.
+- Cianwood gym boulder puzzle: savestate-BFS proved the top is
+  UNREACHABLE once Black Belt Lung (5,5) survives at the choke — the
+  middle-boulder push wedges (4,4) and (5,4) is behind Lung. Applied the
+  documented stuck-NPC remedy (zero Lung's wObjectStructs slot, restores
+  on reload) and walked the right lane. If someone finds the legit
+  solution, document it here.
+- Chuck: talk from (4,2) -> he throws his boulder -> Primeape/Poliwrath,
+  swept by best-move policy + Awakening/SP overlay (never needed).
+
+NEXT: badge 7 GLACIER (Pryce, Mahogany): sail back, Ecruteak, Route 42
+east (surf ponds), Mahogany, LAKE OF RAGE arc (Red Gyarados -> Lance ->
+Rocket Hideout) unlocks the gym. Then badge 8 RISING (Clair): Route 44,
+Ice Path (sliding puzzles — use savestate BFS), Blackthorn, Dragon's Den.
+
+## BADGE 7: GLACIER + Ice Path (claude-lex, Aug 23)
+
+Milestone: `storm-badge.state` -> `glacier-badge` chain; working state
+`saves/claude-lex2.state`. Route 42 east (surf ponds), Mahogany, Lake of
+Rage arc (Red Gyarados -> Lance -> Rocket Hideout), Pryce beaten. Then
+Cianwood->Olivine->Blackthorn approach via Route 44 into ICE_PATH.
+
+Current position: B1F boulder puzzle (plan verified against collision
+bytes, partially executed -- full push list in FABLE_FEEDBACK.md).
+Engine facts learned there: boulder pushes register ~60-100 frames after
+step_dir returns (retry loops double-push); boulders RESET on map
+re-entry and Strength must be re-armed per entry.
+
+Harness additions this session: fade-aware close_menus, cursor_rows,
+_party_cursor_to, talk_to(facing=), goto blocked-step self-diagnosis,
+verified heal_pokecenter, key-item bag stride fix, battle wedge guard +
+0-PP-aware attack() + learn-mode. Details: FABLE_FEEDBACK.md.
+
+NEXT: finish the two boulder sinks, cross to Blackthorn (warp graph in
+FABLE_FEEDBACK.md), Clair L37-40 Dragonair/Kingdra, Dragon's Den shrine.
