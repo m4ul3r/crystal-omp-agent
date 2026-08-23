@@ -34,8 +34,9 @@ Rails run in deterministic code and NEVER trust the decider:
   saves saves/<session>-<kind>-<n>.state under a NEW filename (never an
   overwrite) plus a journal event line. The checkpoint registry IS the
   journal: latest_checkpoint() scans it, no hardcoded defaults.
-- Whiteout recovery: all party HP at 0 -> load newest journaled
-  checkpoint -> heal -> grind the lead toward its best recorded level - 1.
+- Whiteout recovery (rail): all party HP at 0 -> load newest journaled
+  checkpoint -> heal. Re-training is NOT automated: the level deficit is
+  visible in the next observe(); the deciding loop owns the fix.
 
 Journal: append-only journal/<session>.jsonl, one line per cycle
 {"frame", "obs_digest", "action", "ok", ...}; event lines carry
@@ -61,7 +62,7 @@ from trek import Driver, heal_pokecenter
 # Primitives a decision may invoke (same surface as serve.py's `run`,
 ACTIONS = {
     "goto", "walk", "fight", "catch", "heal", "talk_to",
-    "mart_buy", "use_item", "grind", "settle", "press", "step_dir",
+    "mart_buy", "use_item", "settle", "press", "step_dir",
     "route", "travel", "use_cut",
 }
 # Intentionally world-neutral actions the stuck detector must ignore.
@@ -248,12 +249,9 @@ class Autopilot:
             with redirect_stdout(sys.stderr):
                 self.d.use_item(next(k for k, v in obs["bag"].items()
                                      if "POTION" in k.upper()))
-        expected = max(best_lead_level(self.journal),
-                       obs["party"][0]["level"] if obs["party"] else 0)
-        lead = self.d.lead()
-        if lead and expected > 1 and lead["level"] < expected - 1:
-            with redirect_stdout(sys.stderr):
-                self.d.grind(target_level=expected - 1)
+        # retraining after a whiteout is a STRATEGY decision (where to
+        # pace, what to fight, when to stop): the deciding loop owns it
+        # via observe() + step_dir/fight -- no bundled stop-condition leg
 
     # -- one decision cycle --------------------------------------------------
 

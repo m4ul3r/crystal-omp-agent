@@ -15,7 +15,7 @@ Commands:
                                       over the working state file
   load {"path": P}                 -> load savestate in-place (no reload)
   run {"name": ..., "kwargs": {}}  -> whitelisted Driver primitives:
-      goto walk fight catch heal talk_to mart_buy use_item grind settle
+      goto walk fight catch heal talk_to mart_buy use_item settle
   quit {}
 
 Anything else replies ok:false and keeps serving. Exceptions reply
@@ -46,10 +46,13 @@ RUN_METHODS = {
     "talk_to": None,
     "mart_buy": None,
     "use_item": None,
-    "grind": None,
     "settle": None,
     "route": None,
     "travel": None,
+    # decision-free mechanics: the deciding loop paces/trains itself by
+    # composing these with observe() -- no bundled stop-condition legs
+    "step_dir": None,
+    "press": None,
 }
 
 

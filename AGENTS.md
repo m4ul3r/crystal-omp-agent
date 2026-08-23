@@ -37,11 +37,22 @@ driver (loads the ROM once, seconds instead of per-call overhead):
                                           # across maps via warps+connections
 .venv/bin/python trek.py walk 'L*5 U*2'
 .venv/bin/python trek.py talk X Y          # approach NPC/trainer at (x,y) and talk
-.venv/bin/python trek.py grind 'D U' 13    # pace in grass until level 13
 .venv/bin/python trek.py catch             # throw balls at the current wild
 .venv/bin/python trek.py fight             # play out current battle smartly
 .venv/bin/python trek.py heal              # nurse cycle inside a Pokecenter
 .venv/bin/python trek.py to_violet         # scripted journey legs (see main())
+```
+
+There is NO bundled "grind" leg: pacing in grass, choosing targets, and
+stopping are MODEL decisions. Compose them yourself over a warm process
+(`serve.py` / `autopilot.py`): `observe()` gives terrain (`tiles`: which
+neighbors are grass/water/warp), party levels/HP; `run step_dir {mv}`
+takes one step; wilds trigger `run fight`. Decide when you've trained
+enough by reading `observe()` -- never loop blindly in code.
+
+```sh
+.venv/bin/python serve.py --state saves/<agent>.state   # NDJSON on stdin/stdout
+# {"cmd":"observe"} -> full snapshot incl. tiles; {"cmd":"run","name":"step_dir","args":{"mv":"D"}}
 ```
 
 Signature: `trek.py <leg> [<state>] [args...]`. The state file mutates in

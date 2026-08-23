@@ -18,6 +18,7 @@ from crystalagent.menus import Menus, battle_menu_up
 from crystalagent.names import Names
 from crystalagent.nav import MapData, STEP, WARPS, WALKABLE, HOPS, CONN_NAME, ICE, COLL_PIT
 from crystalagent.nav import WATER as _NAV_WATER
+from crystalagent.nav import ICE as _NAV_ICE
 from crystalagent.state import game_state, status_line
 from crystalagent.symfile import Symbols
 
@@ -152,6 +153,14 @@ class TrekNav(MapData):
                         # one-way wall: enterable from every facing except
                         # its blocked side(s)
                         plain.append((nxt, d))
+                    elif c in _NAV_ICE:
+                        # ice: the step becomes a deterministic slide; the
+                        # edge lands on the slide's terminal cell
+                        tx, ty = self.slide(M, x, y, d)
+                        if (tx, ty) != (x, y) and \
+                                not (M == avoid_map and (tx, ty) in avoid) \
+                                and not blocked(M, tx, ty):
+                            plain.append(((M, (tx, ty)), d))
                 elif cross and CONN_NAME[d] in self.conns.get(M, {}):
                     land = self._conn_landing(M, CONN_NAME[d], x, y)
                     if land:
@@ -558,9 +567,43 @@ class Driver:
             flags[const] = self._event_flag(const)
         flags["POKEDEX"] = bool(
             self.emu.read_u8("wStatusFlags") & _STATUSFLAGS_POKEDEX_F)
+        # tile context: the deciding loop needs terrain (tall grass?
+        # water? warp?) to own training/routing decisions -- without it
+        # pacing decisions required a bundled leg like grind()
+        tiles = {}
+        try:
+            g = self.nav.grid(self.map_name())
+            cx, cy = self.pos()[2:]
+
+            def kind(b):
+                if b in (0x14, 0x18):
+                    return "grass"
+                if b == 0x00:
+                    return "floor"
+                if b in _NAV_WATER:
+                    return "water"
+                if b in WARPS:
+                    return "warp"
+                if b in HOPS:
+                    return "ledge-" + HOPS[b].lower()
+                if b in ICE:
+                    return "ice"
+                if b == COLL_PIT:
+                    return "pit"
+                return "blocked"
+
+            tiles["here"] = kind(g[cy][cx])
+            for dd, (dx, dy) in STEP.items():
+                nx, ny = cx + dx, cy + dy
+                tiles[dd.lower()] = (kind(g[ny][nx])
+                                     if 0 <= ny < len(g)
+                                     and 0 <= nx < len(g[0]) else "off-map")
+        except Exception:
+            pass
         return {
             "map": loc["map"], "group": loc["map_group"],
             "number": loc["map_number"], "x": loc["x"], "y": loc["y"],
+            "tiles": tiles,
             "party": party,
             "bag": self._bag(),
             "money": s["player"]["money"],
@@ -1708,46 +1751,6 @@ class Driver:
                 return steps      # landed on the destination: done
         return steps
 
-    def grind(self, pace="D U", target_level=13, min_hp=7, max_battles=80):
-        """Pace in grass fighting encounters until target level / low HP.
-        Aborts with 'no-encounters' after 300 fruitless steps (pacing
-        somewhere without tall grass used to spin until the shell cap)."""
-        battles = 0
-        idle_steps = 0
-
-        def done():
-            lead = self.lead()
-            if lead["level"] >= target_level:
-                return "leveled"
-            if lead["hp"] <= min_hp:
-                return "low-hp"
-            return None
-
-        while battles < max_battles:
-            stop = done()
-            if stop:
-                return stop
-            if idle_steps >= 300:
-                return "no-encounters"
-            for token in pace.split():
-                d, _, n = token.partition("*")
-                moved = 0
-                while moved < int(n or 1):
-                    r = self.step_dir(d[0].upper())
-                    if r == "battle":
-                        self.fight()
-                        battles += 1
-                        idle_steps = 0
-                        stop = done()   # stop mid-pace, don't wander on
-                        if stop:
-                            return stop
-                        break
-                    elif r == "moved":
-                        moved += 1
-                    idle_steps += 1
-                    if idle_steps >= 300:
-                        return "no-encounters"
-        return "max-battles"
 
     def _standable(self, name, c):
         """Path-existence is not enough: cross-map BFS treats any goal as
@@ -2053,7 +2056,7 @@ def main():
     if not argv or argv[0] in ("-h", "--help"):
         sys.exit("usage: trek.py <leg> [<state>] [args...]\n"
              "legs: walk PATH | goto X Y [MAP] | talk X Y | "
-             "grind [PACE] [LEVEL] | catch [NAME] | fight |\n"
+             "catch [NAME] | fight |\n"
              "      flush | heal | route MAP | travel MAP |\n"
              "      route29 | to_violet |\n"
              "      errand1 errand2 errand3 errand4 violet\n"
@@ -2080,7 +2083,7 @@ def main():
         state_arg = rest.pop(0) or None
     if not lo <= len(rest) <= hi:
         usage = {"walk": "PATH", "goto": "X Y [MAP]", "talk": "X Y",
-                 "grind": "[PACE] [LEVEL]", "mart": "X Y ITEM QTY",
+                 "mart": "X Y ITEM QTY",
                  "route": "MAP", "travel": "MAP"}.get(leg, "")
         sys.exit(f"usage: trek.py {leg} [<state>] {usage}".rstrip())
     if state_arg is None and not env_flag("CRYSTAL_ALLOW_DEFAULT"):
@@ -2104,9 +2107,6 @@ def main():
         print(json.dumps(d.route(rest[0]), indent=1), flush=True)
     elif leg == "travel":
         d.travel(rest[0])
-    elif leg == "grind":
-        gargs = [rest[0], int(rest[1])] if len(rest) > 1 else rest
-        print(d.grind(*gargs), flush=True)
     elif leg == "catch":
         d.catch(nickname=rest[0] if rest else None)
     elif leg == "fight":
