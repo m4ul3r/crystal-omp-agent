@@ -325,6 +325,45 @@ class Battle:
         self.menu.press("B:4 .:10")
         return False
 
+    def _forced_switch_up(self, rows):
+        """The post-faint party list (CANCEL row + 'HP / max' rows). Not
+        the battle menu, so generic A-mashing parks on the fainted lead
+        and re-errors forever ("There's no will to battle!")."""
+        if not any("CANCEL" in r for r in rows):
+            return False
+        return any(re.search(r"\d\s*/\s*\d+", r) for r in rows)
+
+    def _drive_forced_switch(self):
+        """Send out the first alive mon: select its slot, then keep
+        confirming until the list closes (the first A lands during menu
+        setup)."""
+        for idx in self._alive_slots():
+            if self.menu.select_abs(idx):
+                break
+        else:
+            self.menu.press("B:4 .:12")
+            return
+        start = self.emu.frame
+        while self.emu.frame - start < 600:
+            rows = self.emu.screen_text()
+            if not any("CANCEL" in r for r in rows):
+                return
+            self.menu.press("A:6 .:25")
+
+    def _alive_slots(self):
+        count = min(self.emu.read_u8("wPartyCount"), 6)
+        sym = self.emu.sym
+        bank, base = sym["wPartyMon1"]
+        off = sym.offset("wPartyMon1HP", "wPartyMon1")
+        stride = sym.offset("wPartyMon2", "wPartyMon1")
+        out = []
+        for i in range(count):
+            hp = int.from_bytes(
+                self.emu.read((bank, base + i * stride + off), 2), "big")
+            if hp > 0:
+                out.append(i)
+        return out
+
     # -- main loop -----------------------------------------------------------
 
     def party_alive(self):
@@ -370,6 +409,9 @@ class Battle:
                     return "naming"
                 if text_handler and text_handler(rows):
                     # modal flow (level-up move learning) handled by caller
+                    continue
+                if self._forced_switch_up(rows):
+                    self._drive_forced_switch()
                     continue
                 joined = "".join(rows).upper()
                 if not want_nickname and (

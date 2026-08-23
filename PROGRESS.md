@@ -1,6 +1,6 @@
 # PROGRESS — Pokémon Crystal run
 
-_Last updated: session of Aug 23 2026 (mart_buy primitive + 2nd party member)._
+_Last updated: session of Aug 23 2026 (goal run: PLAIN BADGE won; staircase + forced-switch harness fixes)._
 
 ## Where we are
 
@@ -53,6 +53,18 @@ _Last updated: session of Aug 23 2026 (mart_buy primitive + 2nd party member)._
     cleanly via per-cycle persistence. NEXT: trigger rival deliberately,
     advance cutscene fully, then fight fresh; OR add cutscene-aware
     pre-battle dialog handling.
+13. **PLAIN BADGE WON** (`plain-badge.state`, frame 3736527): Whitney beaten
+    by QUILAVA L25->L26 from `saves/ox-alpha.state` (forked claude-lex2 @
+    1132973, Dept Store 2F). Gotchas hit: (a) dept store 2F down-stairs
+    is COLL_STAIRCASE — long holds get pushed OFF the tile, needs
+    tap-and-release (fixed in trek `_step_warp_tap`); (b) post-faint
+    forced-switch party list wedged `fight()` 90k frames x3 — cursor
+    parks on fainted lead ("no will to battle" loop). Fixed:
+    `Battle._forced_switch_up`/`_drive_forced_switch`. Badge handout
+    needed the Bridget cries coord-event at (8,5) completed BEFORE
+    re-talking Whitney (.StoppedCrying path); flush_dialog mid-scene
+    loses the handout — drive it with A-mash until wJohtoBadges bit sets.
+
 
 ## Route notes
 
@@ -82,9 +94,10 @@ UNION CAVE. Grind POLIWAG up alongside Cyndaquil. Next badge is HIVE
 |---------|------|---------------|
 | tower agent | Sprout Tower -> Elder Li | `joey.state` (frame 238979, SPROUT_TOWER_2F) |
 | ox-alpha (visibility) | L14 CYNDAQUIL, staging for Falkner rematch #3 | `visibility.state` |
-| ox-alpha (p9) | done: mart_buy + step_hold + 2nd party member (`two-mon.state`) | `saves/ox-alpha.state` |
+| ox-alpha (p9) | done: mart_buy + step_hold + 2nd party member (`two-mon.state`) | `saves/ox-alpha.state` (SUPERSEDED by goal run below — file re-forked) |
 | director | Union Cave traverse -> Azalea/Hive badge | saves/director.state |
-| claude-lex | DONE: Ilex Forest cleared -> ROUTE_34_ILEX_FOREST_GATE | `saves/claude-lex.state` (frame 973763, gate (4,5)) |
+| ox-alpha (goal run) | owns Goldenrod -> WHITNEY (Plain Badge) | `saves/ox-alpha.state` (forked from claude-lex2 @ frame 1132973, Dept Store 2F) |
+| claude-lex | **DONE: PLAIN BADGE WON** (see milestone `plain-badge-healed.state`) — ox-alpha goal run above is now redundant, stand down | `saves/claude-lex2.state` (frame 2287621) |
 
 Rule: never write another session's working state or a milestone checkpoint;
 promote progress under NEW filenames. See AGENTS.md "Multiple agents".
@@ -281,13 +294,75 @@ Working sequence:
    Quilava -> CUT row -> A. Tree clears; walk through.
 5. goto(1,5) warps into ROUTE_34_ILEX_FOREST_GATE.
 
-Bugs in the uncommitted trek.py use_cut (still unfixed there):
-- `_teach_hm01` aborts if ANY party row shows "NOT ABLE" — false positive
-  when non-lead mons can't learn CUT (trek.py:842-847). Should check only
-  the cursor row.
-- `_teach_hm01` force-forgets the FIRST move on a 4-move mon (trek.py:848).
-- `_teach_hm01`'s B-B exit leaves the START menu OPEN — movement then
-  silently blocks (gotcha 7) and the stray menu gets baked into saves.
-- `use_cut`'s START->POKéMON nav assumes the cursor starts on POKéDEX
-  (trek.py:904 single D press); the START menu REMEMBERS the last cursor
-  slot, so after any PACK visit it opens ᴾᴷGEAR instead.
+Bugs found in the uncommitted trek.py use_cut — ALL FIXED + validated
+end-to-end (fresh director fork -> chase -> teach -> cut -> gate, one
+shot, `saves/claude-lex2.state`):
+- `_teach_hm01` aborted if ANY party row showed "NOT ABLE" — false
+  positive when non-lead mons can't learn CUT. Now scans to the first
+  ABLE mon; the ABLE tag renders on the row BELOW the cursor row.
+- `_teach_hm01` force-forgot the FIRST move on a 4-move mon. Now takes
+  `forget_move=` (also plumbed through `use_cut`).
+- `_teach_hm01`'s B-B exit left the START menu OPEN (gotcha 7) and the
+  stray menu got baked into saves. New `close_menus()` postcondition —
+  which must NOT judge blank fade frames: the pack repaints ~50 frames
+  after its close fade, so "no menu on screen" during the fade is a lie.
+- `use_cut`'s START->POKéMON nav assumed the cursor starts on POKéDEX;
+  the START menu REMEMBERS its last slot (after PACK it opened ᴾᴷGEAR).
+  Now label-driven (`select_label('POKéM')` — 'POK' alone matches
+  POKéDEX first).
+- Party-menu cursor now WRAM-driven (`_party_cursor_to`, wMenuCursorY,
+  1-based): the party menu WRAPS top<->bottom, so "press UP N times to
+  reach the top" does not work.
+
+New Driver primitives (this session):
+- `menu_open()` / `close_menus()` / `cursor_rows()` / `_screen_blank()`:
+  every menu primitive should end with the close_menus postcondition.
+- `talk_to(x, y, facing='U|D|L|R')`: forces approach side for scripts
+  that branch on VAR_FACING (Ilex Farfetch'd chase drives entirely off
+  this — allowed facings per position: p1 any, p2 !D, p3 !L, p4 !U,
+  p5 only D, p6 !R, p7 U/R, p8 only D, p9 U/L).
+- goto's blocked-step branch now self-diagnoses: prints [textbox] /
+  [stray menu -- closing] / [npc on target cell] and auto-recovers from
+  stray menus instead of pacing forever.
+
+## PLAIN BADGE WON (claude-lex, Aug 23)
+
+**Milestones: `plain-badge.state` (in gym, frame 2282985) and
+`plain-badge-healed.state` (Goldenrod PC, frame 2287621, RESUME HERE).**
+Party: QUILAVA L25 75/75 (Quick Attack/CUT/Smokescreen/Ember), POLIWAG L4,
+TOGEPI egg. Badges ZEPHYR+HIVE+PLAIN. ₽6390. Bag: 5 SUPER POTION,
+5 POTION, 8 POKEBALL.
+
+Route taken (from route-34 gate, `claude-lex2.state` fork):
+1. Route 34 north: all 5 trainers beaten via talk_to (Samuel 15,32 /
+   Brandon 18,28 / Gina 10,26 / Ian 11,20 / Todd 13,7). Quilava L22->L24.
+2. Goldenrod PC heal (door 15,27), then Dept Store (24,27) for supplies.
+   **Dept Store STAIRS at (15,0) are unenterable** — U from (15,1) is
+   engine-blocked (COLL_STAIRCASE won't take vertical entry; unresolved).
+   USE THE ELEVATOR: door (2,0) via step_hold U from (2,1); inside, panel
+   is bg_event (3,0) — face U, A, select_label('2F' etc.), exit via
+   (2,3) step_hold D. mart_buy clerk 2F (13,5): SUPER POTIONx5 700 ea.
+3. Gym (city door 24,7). Trainer gauntlet on the way to (8,4): 3 fights
+   via goto sight-lines + Bridget (9,6) via talk_to. **Bridget's r1
+   sight-line freezes movement at (8,6)** — if steps stop there, it's her
+   pending approach cutscene, fight her first.
+4. WHITNEY (8,3): won by QUILAVA L25 in one go, no Super Potion needed
+   (policy was: SUPER POTION at <45%, else default best-move). Ended
+   38/75. **Badge is NOT given at battle end**: step DOWN onto (8,5)
+   (coord event, post-win crying scene), flush the lass speech, then
+   talk_to Whitney AGAIN -> PLAIN badge.
+
+Gotchas hit:
+- fight() wedged ~10x90k frames vs Bridget's L15 JIGGLYPUFF (HP frozen
+  64/75 vs 6/61, battle eventually self-resolved and was won). Suspect
+  the move-select loop fighting DISABLE or repeated failed menu confirms.
+  UNDIAGNOSED — if fight() times out repeatedly with static HP, screen-
+  dump the battle before burning retries.
+- Session scripts MUST d.save() after every won fight; two Whitney-leg
+  wins were lost to scripts that crashed/exited pre-save and had to be
+  replayed (determinism saved us: same state + same input sequence
+  reproduced the win exactly).
+
+Next objective suggestion: Route 35/36 north (Sudowoodo needs SquirtBottle
+from Goldenrod flower shop after Plain badge) or Route 34 south beach
+cooltrainers for XP; 4th badge = Morty (Ecruteak, FOG) via Route 36/37.

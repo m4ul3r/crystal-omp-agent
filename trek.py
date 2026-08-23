@@ -407,6 +407,42 @@ class Driver:
     def textbox(self):
         return self.emu.tilemap()[12 * 20] == 0x79
 
+    def cursor_rows(self):
+        """Stripped upper-case screen rows that carry a menu cursor glyph."""
+        return [r.strip().upper() for r in self.emu.screen_text()
+                if ("▶" in r or "▷" in r)]
+
+    def menu_open(self):
+        """Is anything modal on screen (menu cursor or textbox)? The
+        overworld draws neither, so this is the 'am I interactive' check
+        every menu primitive must pass before returning (gotcha 7: a stray
+        START menu silently eats all movement input)."""
+        return bool(self.textbox()) or \
+            any("▶" in r or "▷" in r for r in self.emu.screen_text())
+
+    def _screen_blank(self):
+        """Menu open/close transitions render a frame or two of nothing;
+        judging menu state on one is a lie (the menu redraws right after)."""
+        return sum(1 for r in self.emu.screen_text() if r.strip()) < 2
+
+    def close_menus(self, max_presses=14):
+        """Postcondition helper: B out of any open menu/textbox stack until
+        the overworld is interactive again. Blank fade frames are waited
+        out, never judged, and 'closed' must hold on a settled re-check
+        (the pack repaints ~50 frames after its close fade). Returns True
+        when clean."""
+        for _ in range(max_presses):
+            if self._screen_blank():
+                self.press(".:30")
+                continue
+            if not self.menu_open():
+                self.press(".:40")            # outlast a pending repaint
+                if not self.menu_open() and not self._screen_blank():
+                    return True
+                continue
+            self.press("B:4 .:20")
+        return not self.menu_open() and not self._screen_blank()
+
     def lead(self):
         s = game_state(self.emu, self.names)
         return s["party"][0] if s["party"] else None
@@ -565,8 +601,34 @@ class Driver:
         x, y = self.pos()[2:]
         dx, dy = STEP[mv]
         if self._is_warp_cell(x + dx, y + dy):
-            return self.step_hold(mv)
+            r = self.step_hold(mv)
+            if r != "moved" and r != "warp":
+                r = self._step_warp_tap(mv)
+            return r
         return self.step_dir(mv)
+
+    def _step_warp_tap(self, mv):
+        """COLL_STAIRCASE tiles (CheckWarpFacingDown, tile_events.asm:35)
+        push the player back OFF the tile if the key is still held ~60+
+        frames after arrival -- long holds never warp. Tap-and-release at
+        varying durations shifts the frame phase until the stop-on-tile
+        lands inside the warp check."""
+        button = DIRS[mv].lower()
+        for hold in (56, 44, 64, 36, 72, 52):
+            before = self.pos()
+            self.emu.py.button_press(button)
+            self.emu.tick(hold)
+            self.emu.py.button_release(button)
+            self.emu.tick(2)
+            self.settle(max_frames=400)
+            if self.battle():
+                return "battle"
+            now = self.pos()
+            if now[:2] != before[:2]:
+                return "warp"
+            if now != before:
+                return "moved"
+        return "blocked"
 
     # -- actions -----------------------------------------------------------
 
@@ -812,50 +874,131 @@ class Driver:
                 return True, idx
         return False, None
 
-    def _teach_hm01(self):
-        """Teach HM01 CUT to the first able party member via PACK ->
-        TM/HM pocket. Raises RuntimeError if the flow doesn't complete."""
+    def _teach_hm01(self, forget_move=None):
+        """Teach HM01 CUT to the first ABLE party member via PACK ->
+        TM/HM pocket. `forget_move` names the move to delete if the
+        learner already knows four (default: whatever the cursor starts
+        on, slot 1). Label/WRAM-driven throughout: menus remember their
+        last cursor slot, so blind press counts are never safe.
+        Raises RuntimeError (with menus closed) if the flow fails."""
+        def scr():
+            return "".join(self.emu.screen_text()).upper()
+        def bail(msg):
+            self.close_menus()
+            raise RuntimeError(f"use_cut: {msg}")
         self.press("START:4 .:40")
-        self.press("D:4 .:12"); self.press("D:4 .:12")
-        self.press("A:4 .:60")                       # PACK
+        if not self._wait_screen(lambda s: "EXIT" in s):
+            bail("START menu never opened")
+        if not self.menu.select_label("PACK"):
+            bail("PACK entry not found in START menu")
         for _ in range(8):
             if self.emu.read_u8("wJumptableIndex") == 8:
                 break                                 # TM/HM pocket
             self.press("L:4 .:18")
         else:
-            raise RuntimeError("use_cut: TM/HM pocket never opened")
+            bail("TM/HM pocket never opened")
         self.press(".:35")
-        self.press("D:4 .:15"); self.press("D:4 .:25")
+        # cursor onto the HM01 row: rendered as "H1 CUT", NOT "HM01"
+        # (and "FURY CUTTER" contains "CUT" -- match the H prefix too)
+        def on_hm01():
+            return any("H1" in r and "CUT" in r for r in self.cursor_rows())
+        for _ in range(10):                           # go to list top
+            if on_hm01():
+                break
+            self.press("U:4 .:14")
+        for _ in range(12):
+            if on_hm01():
+                break
+            self.press("D:4 .:16")
+        else:
+            bail("HM01 row never under cursor")
         self.press("A:4 .:80")                        # submenu
-        self.press(".:40")
-        if "USE" not in "".join(self.emu.screen_text()).upper():
-            raise RuntimeError("use_cut: HM01 USE submenu not found")
+        use_up = False
+        for _ in range(6):                            # spin-up can be slow
+            if "USE" in scr():
+                use_up = True
+                break
+            self.emu.tick(30)
+        if not use_up:
+            bail("HM01 USE submenu not found")
+        self.press(".:35")                            # gotcha 2: settle
         self.press("A:6 .:30")                        # USE
         for _ in range(20):                           # boot texts -> YES/NO
-            s = "".join(self.emu.screen_text()).upper()
+            s = scr()
             if "YES" in s and "NO" in s:
                 break
             self.press("A:4 .:45")
         else:
-            raise RuntimeError("use_cut: learn prompt never appeared")
+            bail("teach prompt never appeared")
         self.press("A:5 .:60")                        # YES: teach
-        self.press("A:5 .:80")                        # first able mon
-        self.press("A:5 .:90")                        # forget first move
-        for _ in range(14):
+        if not self._wait_screen(lambda s: "CANCEL" in s and "ABLE" in s):
+            bail("party list never opened")
+        # pick the first ABLE mon -- only the CURSOR mon matters; other
+        # party members legitimately show NOT ABLE. The ABLE tag renders
+        # on the row BELOW the cursor row ("▶ AA" / "L22 ABLE"). The
+        # D-scan wraps, so every row gets visited wherever it starts.
+        def able_under_cursor():
+            rows = self.emu.screen_text()
+            for i, r in enumerate(rows):
+                if "▶" in r or "▷" in r:
+                    tag = rows[i + 1].upper() if i + 1 < len(rows) else ""
+                    return "ABLE" in tag and "NOT ABLE" not in tag
+            return False
+        picked = False
+        for _ in range(8):
+            if able_under_cursor():
+                picked = True
+                break
+            self.press("D:4 .:15")
+        if not picked:
+            bail("no party member is ABLE to learn CUT")
+        self.press("A:5 .:80")                        # choose the mon
+        # either it learns outright (<4 moves) or asks to delete a move
+        for _ in range(20):
+            if self._party_knows_cut()[0]:
+                break
+            s = scr()
+            if "YES" in s and "NO" in s:
+                self.press("A:5 .:70")                # YES: delete one
+                if forget_move:                       # move list is up
+                    want = forget_move.upper()
+                    self.press(".:30")
+                    for _ in range(6):
+                        if any(want in r for r in self.cursor_rows()):
+                            break
+                        self.press("D:4 .:16")
+                self.press("A:5 .:90")                # forget cursor move
+            else:
+                self.press("A:4 .:45")
+        for _ in range(14):                           # drain learn texts
             if not self.textbox():
                 break
             self.press("A:4 .:50")
-        self.press("B:4 .:25"); self.press("B:4 .:30")
+        # postcondition: overworld interactive again, CUT actually known
+        if not self.close_menus():
+            raise RuntimeError("use_cut: a menu is still open after "
+                               "teaching HM01")
         knows, _idx = self._party_knows_cut()
         if not knows:
             raise RuntimeError("use_cut: teaching HM01 failed verification")
+    def _party_cursor_to(self, row, max_steps=12):
+        """Move the party-menu cursor to 1-based `row` using the live
+        wMenuCursorY (the menu wraps, so press counts from an unknown
+        start are meaningless). Returns True on arrival."""
+        for _ in range(max_steps):
+            cur = self.emu.read_u8("wMenuCursorY")
+            if cur == row:
+                return True
+            self.press("D:4 .:15" if cur < row else "U:4 .:15")
+        return self.emu.read_u8("wMenuCursorY") == row
 
-    def use_cut(self, tree_x, tree_y, label=""):
+    def use_cut(self, tree_x, tree_y, label="", forget_move=None):
         """Cut down the small tree at (tree_x, tree_y) on the current map:
-        teaches HM01 CUT via the pack flow if nobody knows it yet, walks to
-        a standable cell beside the tree, faces it, and uses START ->
-        POKéMON -> mon -> field-move CUT. Verifies the tree's collision
-        actually cleared and steps onto its cell."""
+        teaches HM01 CUT via the pack flow if nobody knows it yet (deleting
+        `forget_move` if the learner is at four moves), walks to a standable
+        cell beside the tree, faces it, and uses START -> POKéMON -> mon ->
+        field-move CUT. Verifies the tree's collision actually cleared and
+        steps onto its cell."""
         def scr():
             return "".join(self.emu.screen_text()).upper()
         if self.battle():
@@ -870,7 +1013,7 @@ class Driver:
         knows, knower = self._party_knows_cut()
         if not knows:
             print("  no one knows CUT; teaching HM01", flush=True)
-            self._teach_hm01()
+            self._teach_hm01(forget_move=forget_move)
             knows, knower = self._party_knows_cut()
         # approach cell: any standable neighbour we can actually reach,
         # facing back toward the tree
@@ -882,11 +1025,16 @@ class Driver:
                     self._standable(name, (ax, ay)):
                 cands.append(((ax, ay), inv[d]))
         placed = False
-        for (ax, ay), face in cands:
-            if self.goto(ax, ay, label or "use_cut approach"):
-                self.press(f"{face}:4 .:10")
-                placed = True
+        for round_ in range(3):          # wandering NPCs can blockade the
+            for (ax, ay), face in cands: # only path; pause and retry
+                if self.goto(ax, ay, label or "use_cut approach"):
+                    self.press(f"{face}:4 .:10")
+                    placed = True
+                    break
+            if placed:
                 break
+            print("  approach blocked (wandering NPC?); pausing", flush=True)
+            self.press(".:60 .:60 .:60 A:4 .:30")
         if not placed:
             raise RuntimeError(
                 f"use_cut: no reachable approach beside the tree "
@@ -896,16 +1044,31 @@ class Driver:
         self.press("START:4 .:40")
         if not self._wait_screen(lambda s: "EXIT" in s):
             raise RuntimeError("use_cut: START menu never opened")
-        self.press("D:4 .:15")                        # POKEMON entry
-        self.press("A:5 .:40")
-        if not self._wait_screen(lambda s: "CANCEL" in s and
-                                 ("ABLE" in s or "EGG" in s)):
+        # label-driven: the START menu REMEMBERS its last cursor slot, so
+        # a fixed press count opens the wrong entry after any PACK visit.
+        # 'POKé' alone also matches POKéDEX -- include the M.
+        if not self.menu.select_label("POKéM"):
+            self.close_menus()
+            raise RuntimeError("use_cut: POKéMON entry not found in "
+                               "START menu")
+        if not self._wait_screen(lambda s: "CANCEL" in s):
+            self.close_menus()
             raise RuntimeError("use_cut: party list never opened")
-        if knower:
-            for _ in range(knower):
-                self.press("D:4 .:15")                # cursor onto the mon
-        self.press("A:6 .:40")
-        if not self._wait_screen(lambda s: "STATS" in s and "SWITCH" in s):
+        if not self._party_cursor_to((knower or 0) + 1):
+            self.close_menus()
+            raise RuntimeError("use_cut: party cursor never reached the "
+                               "CUT knower")
+        # confirm-until-open: the first A can land during menu setup and
+        # get swallowed (gotcha 2)
+        sub = False
+        for _ in range(6):
+            self.press("A:6 .:40")
+            if self._wait_screen(lambda s: "STATS" in s and "SWITCH" in s,
+                                 frames=80):
+                sub = True
+                break
+        if not sub:
+            self.close_menus()
             raise RuntimeError("use_cut: POKéMON submenu never opened")
         hit = False
         # the party list stays visible behind the submenu box, so scan
@@ -938,6 +1101,10 @@ class Driver:
             else:
                 self.press("A:4 .:45")
         self.settle()
+        # postcondition: nothing modal left on screen (a stray menu here
+        # gets baked into the next save and eats all movement input)
+        if not self.close_menus():
+            raise RuntimeError("use_cut: a menu is still open after CUT")
         # verify by walking onto the former tree cell (the static grid
         # still shows $12 -- cut trees are swapped only in the engine's
         # block memory)
@@ -1158,12 +1325,25 @@ class Driver:
                 elif r == "moved":
                     moved = True
                 elif r == "blocked":
+                    # diagnose, don't just report: a blocked step on a
+                    # grid-walkable cell is almost always a stray menu
+                    # (gotcha 7), a textbox, or an NPC on the target cell
+                    bx, by = self.pos()[2:]
+                    dx, dy = STEP[mv]
+                    if self.textbox():
+                        cause = " [textbox]"
+                    elif self.menu_open():
+                        cause = " [stray menu -- closing]"
+                    elif (bx + dx, by + dy) in self.npc_cells():
+                        cause = " [npc on target cell]"
+                    else:
+                        cause = ""
                     print(f"  blocked {mv} at {self.map_name()} "
-                          f"{self.pos()[2:]}"
-                          f"{' [textbox]' if self.textbox() else ''}",
-                          flush=True)
+                          f"{(bx, by)}{cause}", flush=True)
                     if self.textbox():
                         self.flush_dialog()
+                    elif self.menu_open():
+                        self.close_menus()
                     else:
                         self.press(".:40")  # let a wandering NPC step aside
                     replans += 1
@@ -1496,15 +1676,26 @@ class Driver:
                 return far
         return None
 
-    def talk_to(self, x, y, label=""):
+    def talk_to(self, x, y, label="", facing=None):
         """Walk next to the NPC at (x,y) (or across a counter from them),
         face them, and talk. Fights any trainer battle that triggers
         (sight-lines are slow: polls for wBattleMode after the dialog).
-        Returns 'battle' | 'talked' | False."""
+        `facing` ('U'/'D'/'L'/'R') forces which way the player faces when
+        talking (i.e. which side to approach from) -- some scripts branch
+        on VAR_FACING (e.g. the Ilex Farfetch'd chase sends the bird
+        BACKWARD on the wrong facing). Returns 'battle' | 'talked' | False."""
         if self.battle():
             self.fight()
         self.settle()
-        spot = self._approach_cell(x, y)
+        if facing:
+            fdx, fdy = STEP[facing]
+            spot = (x - fdx, y - fdy)     # stand opposite the facing dir
+            if not self._standable(self.map_name(), spot):
+                print(f"  facing={facing} spot {spot} not standable",
+                      flush=True)
+                return False
+        else:
+            spot = self._approach_cell(x, y)
         if spot is None:
             print(f"  no approach to ({x},{y})", flush=True)
             return False
@@ -1625,15 +1816,28 @@ class Driver:
 # -- legs -------------------------------------------------------------------
 
 def heal_pokecenter(d):
-    """From inside any Pokécenter: talk to the nurse, wait out the jingle."""
+    """From inside any Pokécenter: talk to the nurse, wait out the jingle.
+    Verifies the location on entry and the actual heal on exit -- an
+    unverified 'healed' claim once masked a failed goto entirely."""
+    if "POKECENTER" not in d.map_name():
+        raise RuntimeError(
+            f"heal_pokecenter: not inside a Pokécenter (on {d.map_name()})")
     d.goto(3, 3, "nurse counter")
     d.step_dir("U")            # face her (blocked step = turn)
     d.press("A:2 .:20")
     d.flush_dialog()           # "shall we heal?" -> A = yes
     d.press(".:300")           # heal jingle
     d.flush_dialog()           # "we hope to see you again"
+    party = game_state(d.emu, d.names)["party"]   # has the egg flag
+    hurt = [m for m in party if not m.get("egg")
+            and m.get("hp", 0) < m.get("max_hp", 0)]
     lead = d.lead()
-    print(f"  healed: {lead['name']} {lead['hp']}/{lead['max_hp']}", flush=True)
+    print(f"  healed: {lead['name']} {lead['hp']}/{lead['max_hp']}",
+          flush=True)
+    if hurt:
+        raise RuntimeError(
+            f"heal_pokecenter: party not fully healed "
+            f"({[(m['species'], m['hp'], m['max_hp']) for m in hurt]})")
 
 
 def leg_to_violet(d):
