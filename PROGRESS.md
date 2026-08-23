@@ -33,6 +33,16 @@ _Last updated: session of Aug 23 2026 (mart_buy primitive + 2nd party member)._
 9. **SUPPLIES + 2ND PARTY MEMBER** (`two-mon.state`, frame 389033): bought
    balls/potions with the new `mart_buy` primitive (Violet Mart clerk at
    (1,3)), walked to Route 31 grass, caught POLIWAG L4.
+10. ROUTE 32 OPENED + QUILAVA (`director-cave-entry.state`, frame 459287):
+    accepted Togepi egg from Elms aide in Violet Pokecenter (4,3) —
+    REQUIRED to unseal Route 32 descent (scene var; see gotcha below).
+    Party: QUILAVA L16 (evolved from Cyndaquil en route), POLIWAG L4,
+    TOGEPI egg. ₽1208.
+11. **HIVE BADGE WON** (`director-badge-1.state`, frame 888158): Slowpoke
+    Well cleared via Kurt sequence (Kurt's house talk despawns well guard
+    — setevent EVENT_AZALEA_TOWN_SLOWPOKETAIL_ROCKET), 4 Rockets beaten,
+    Bugsy defeated by QUILAVA L21 (learned QUICK ATTACK mid-fight).
+    Party: QUILAVA L21, POLIWAG L4, TOGEPI egg. ₽4988.
 
 ## Route notes
 
@@ -63,7 +73,7 @@ UNION CAVE. Grind POLIWAG up alongside Cyndaquil. Next badge is HIVE
 | tower agent | Sprout Tower -> Elder Li | `joey.state` (frame 238979, SPROUT_TOWER_2F) |
 | ox-alpha (visibility) | L14 CYNDAQUIL, staging for Falkner rematch #3 | `visibility.state` |
 | ox-alpha (p9) | done: mart_buy + step_hold + 2nd party member (`two-mon.state`) | `saves/ox-alpha.state` |
-| director | autonomy build (observe/serve/mapgraph) -> then badge push | saves/director.state |
+| director | Union Cave traverse -> Azalea/Hive badge | saves/director.state |
 
 Rule: never write another session's working state or a milestone checkpoint;
 promote progress under NEW filenames. See AGENTS.md "Multiple agents".
@@ -205,3 +215,14 @@ promote progress under NEW filenames. See AGENTS.md "Multiple agents".
   empty SRAM; no battery/reset API in this PyBoy build). Savestates only.
 - Dialog boxes render at varying screen rows — never grep a single row
   for '┌'; scan whole screen_text().
+- Route 32 north descent is sealed by a re-firing coord-event cutscene
+  at (18,8) until Elms-aide egg scene sets the map scene
+  (VioletPokecenter1F.asm:33 setmapscene). Sequence-broken saves hit an
+  infinite push-back loop; talk to the aide first.
+- trek goto on a far warp cell can ping-pong across map exits
+  (cross-map re-route); use direct goto onto adjacent warp cells or
+  wait for fix.
+- Level-up move-learning menus inside battle are invisible to
+  observe()-digest rails: fight() wedged 150k frames on "forget a move to
+  make room". Screen-decode diffing (autopilot `screen` cmd) + raw A
+  presses drove through it.
