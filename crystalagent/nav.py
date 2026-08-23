@@ -15,6 +15,8 @@ WATER = {0x29}                          # COLL_WATER: routable when surfing
                                         # (whirlpools/waterfalls stay walls)
 WARPS = set(range(0x70, 0x80))         # doors, stairs, carpets, ladders, caves
 HOPS = {0xA0: "R", 0xA1: "L", 0xA2: "U", 0xA3: "D"}  # one-way ledges
+ICE = {0x23}                            # COLL_ICE: sliding floor
+COLL_PIT = 0x60                         # COLL_PIT: fall-through hole
 CONN_NAME = {"R": "east", "L": "west", "U": "north", "D": "south"}
 STEP = {"R": (1, 0), "L": (-1, 0), "U": (0, -1), "D": (0, 1)}
 
@@ -115,6 +117,7 @@ class MapData:
 
         self._coll_cache = {}
         self._grid_cache = {}
+        self._cell_overrides = {}    # {(const, x, y): original collision}
 
     def _tileset_coll(self, tileset):
         """block id -> [UL, UR, LL, LR] collision bytes for a tileset."""
@@ -162,6 +165,52 @@ class MapData:
         c = grid[y][x]
         return c in WALKABLE or c in WARPS or c in HOPS or \
             (self.surf and c in WATER)
+
+    def slide(self, const_name, x, y, d):
+        """Deterministic ice-slide resolution: step in direction `d` from
+        (x,y); while the entered cell is COLL_ICE the slide continues in
+        that direction until a non-ice walkable/warp/pit cell (stops ON
+        it) or a wall/ledge/map edge (stays on the last ice cell). Pure
+        function of (grid, entry cell, direction) -- precompute-friendly,
+        replaces savestate-BFS for routine ice crossings. Boulder objects
+        are NOT modeled; block their cells via avoid/set_cell."""
+        grid = self.grid(const_name)
+        hgt, wid = len(grid), len(grid[0])
+        dx, dy = STEP[d]
+        cx, cy = x, y
+        while True:
+            nx, ny = cx + dx, cy + dy
+            if not (0 <= nx < wid and 0 <= ny < hgt):
+                return cx, cy
+            nc = grid[ny][nx]
+            if nc in ICE:
+                cx, cy = nx, ny
+                continue
+            if nc in WALKABLE or nc in WARPS or nc == COLL_PIT:
+                return nx, ny          # step on and stop
+            return cx, cy              # wall/ledge: blocked, stay put
+
+    def set_cell(self, const_name, x, y, coll):
+        """Live-state patch: force a cell's collision byte over the
+        decoded DEFAULT blockdata -- changeblock doors once opened,
+        boulder positions, cut trees. The original byte is remembered so
+        clear_cell/clear_overrides can restore it."""
+        grid = self.grid(const_name)
+        key = (const_name, x, y)
+        if key not in self._cell_overrides:
+            self._cell_overrides[key] = grid[y][x]
+        grid[y][x] = coll
+
+    def clear_cell(self, const_name, x, y):
+        orig = self._cell_overrides.pop((const_name, x, y), None)
+        if orig is not None:
+            self.grid(const_name)[y][x] = orig
+
+    def clear_overrides(self, const_name=None):
+        """Restore every patched cell (optionally only one map's)."""
+        for cn, x, y in [k for k in self._cell_overrides
+                         if const_name in (None, k[0])]:
+            self.clear_cell(cn, x, y)
 
     def _warp_landing(self, const_name, edge):
         """Where stepping onto warp cell `edge` on `const_name` puts you:

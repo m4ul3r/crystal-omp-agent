@@ -16,7 +16,7 @@ from crystalagent.charmap import Charmap
 from crystalagent.emu import Crystal, parse_sequence
 from crystalagent.menus import Menus, battle_menu_up
 from crystalagent.names import Names
-from crystalagent.nav import MapData, STEP, WARPS, WALKABLE, HOPS, CONN_NAME
+from crystalagent.nav import MapData, STEP, WARPS, WALKABLE, HOPS, CONN_NAME, ICE, COLL_PIT
 from crystalagent.nav import WATER as _NAV_WATER
 from crystalagent.state import game_state, status_line
 from crystalagent.symfile import Symbols
@@ -110,7 +110,16 @@ class TrekNav(MapData):
                     if self._enterable(M, lx, ly):
                         plain.append(((M, (lx, ly)), d))
                     continue
-                nx, ny = x + dx, y + dy
+                if here in ICE:
+                    # sliding floor: direction choice is only free on the
+                    # entry cell; the slide carries you to its terminal
+                    # cell (deterministic, see MapData.slide)
+                    sx, sy = self.slide(M, x, y, d)
+                    if (sx, sy) == (x, y):
+                        continue
+                    nx, ny = sx, sy
+                else:
+                    nx, ny = x + dx, y + dy
                 nxt = (M, (nx, ny))
                 if 0 <= nx < wid and 0 <= ny < hgt:
                     if M == avoid_map and (nx, ny) in avoid:
@@ -120,10 +129,11 @@ class TrekNav(MapData):
                     if nxt == goal_state:
                         plain.append((nxt, d))
                         continue
+                    c = grid[ny][nx]
                     w = self.warps.get(M, {}).get((nx, ny))
-                    if w is not None:
-                        # stepping ONTO a warp tile fires it (arrival never
-                        # re-triggers, so landing on a warp tile is fine --
+                    if w is not None and (c in WARPS or c == COLL_PIT):
+                        # stepping ONTO a live warp tile fires it (arrival
+                        # never re-triggers, so landing on one is fine --
                         # gate doors land on exactly such tiles); you can
                         # never stand on one mid-path otherwise
                         if cross:
@@ -131,7 +141,9 @@ class TrekNav(MapData):
                             if land:
                                 exits.append(((land[0], land[1]), d))
                         continue
-                    c = grid[ny][nx]
+                    # w is not None but collision says plain floor: DORMANT
+                    # leftover warp_event that can never fire (sealed
+                    # Burned Tower B1F corridors) -- walk across it
                     if c in WALKABLE or c in WARPS or c in HOPS or \
                             (self.surf and c in _NAV_WATER):
                         plain.append((nxt, d))
