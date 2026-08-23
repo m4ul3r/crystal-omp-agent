@@ -61,7 +61,7 @@ UNION CAVE. Grind POLIWAG up alongside Cyndaquil. Next badge is HIVE
 | session | owns | working state |
 |---------|------|---------------|
 | tower agent | Sprout Tower -> Elder Li | `joey.state` (frame 238979, SPROUT_TOWER_2F) |
-| ox-alpha (visibility) | fresh boot -> starter, egg, rival beaten; next: deliver egg to Elm | `visibility.state` |
+| ox-alpha (visibility) | L14 CYNDAQUIL, staging for Falkner rematch #3 | `visibility.state` |
 | ox-alpha (p9) | done: mart_buy + step_hold + 2nd party member (`two-mon.state`) | `saves/ox-alpha.state` |
 | director | autonomy build (observe/serve/mapgraph) -> then badge push | saves/director.state |
 
@@ -194,3 +194,14 @@ promote progress under NEW filenames. See AGENTS.md "Multiple agents".
   always `settle()` before trusting map/pos (new gotcha #12 in AGENTS.md).
 - RAM-injected party mons need nickname+OT bytes or text freezes on
   "Go!" — test-setup-only hazard.
+- Route 32 gate: Cooltrainer scene at the top of ROUTE_32 blocks southward
+  travel until ZEPHYR BADGE (`.DontHaveZephyrBadge` branch) — re-fires
+  every crossing, pushes you back. Falkner FIRST, then Route 32.
+- Follower-NPC corruption: interrupting his `follow PLAYER` cutscene with
+  savestate saves left obj1 glued to us blocking every exit. Workaround:
+  zero wObjectStructs slot via emu.write (18 bytes). If movement "eats"
+  all inputs near an NPC, check for a follower first.
+- In-game SAVE + fresh boot does NOT offer CONTINUE (PyBoy boots with
+  empty SRAM; no battery/reset API in this PyBoy build). Savestates only.
+- Dialog boxes render at varying screen rows — never grep a single row
+  for '┌'; scan whole screen_text().
