@@ -1,8 +1,17 @@
 # PROGRESS — Pokémon Crystal run
 
+
+_Second timeline started Aug 23 (ox-alpha): fresh boot, player "GOLD",_
+_CYNDAQUIL L5 chosen at Elm's Lab. Milestone `saves/cyndaquil-start.state`_
+_(frame 32131), working state `saves/ox-alpha-new.state`. New Bark Town (6,5)._
 _Last updated: session of Aug 23 2026 (claude-lex: 7 badges, Ice Path in progress). Field notes in FABLE_FEEDBACK.md -- read it for working techniques before resuming._
 
 ## Where we are
+
+- **codex-luna fresh run:** New game completed, Cyndaquil chosen, and Violet
+  City reached/healed. Working state `saves/codex-luna.state`; checkpoint
+  `saves/codex-luna-azalea.state` (frame 408097). Player UNA, rival AA,
+  QUILAVA L16 and Togepi egg, Zephyr Badge, full HP.
 
 - Checkpoint to resume from: **`saves/claude-lex2.state`**
 - Badges (7/8): ZEPHYR HIVE PLAIN FOG MINERAL STORM GLACIER -- only RISING
@@ -100,6 +109,10 @@ _Last updated: session of Aug 23 2026 (claude-lex: 7 badges, Ice Path in progres
 
 ## Next objective
 
+For codex-luna: attempt Azalea/Slowpoke Well and Bugsy, then continue until
+the run becomes impractical. Keep the codex-luna state separate from the older
+multi-agent run below.
+
 Head south through Route 32 (Violet City south exit around (19,42) area —
 check maps/VioletCity.asm warps) toward the Route 32 Pokecenter, then
 UNION CAVE. Grind POLIWAG up alongside Cyndaquil. Next badge is HIVE
@@ -107,6 +120,10 @@ UNION CAVE. Grind POLIWAG up alongside Cyndaquil. Next badge is HIVE
 (`to_azalea`). Checkpoints: `route32.state`, `union-cave.state`.
 
 ## Active sessions
+
+| codex-luna | fresh game, choose Cyndaquil, advance until progress is no longer practical | `saves/codex-luna.state` |
+| ox-alpha (new game) | fresh boot -> Cyndaquil chosen | `saves/ox-alpha-new.state` (milestone: `cyndaquil-start.state`) |
+| omp_speed_run | owns Elite Four -> Lance (Champion) | `saves/omp_speed_run.state` (forked from claude-lex2 @ frame 9125030, Indigo Plateau PC) |
 
 | session | owns | working state |
 |---------|------|---------------|
@@ -225,6 +242,7 @@ promote progress under NEW filenames. See AGENTS.md "Multiple agents".
 | file | frame | meaning |
 |------|-------|---------|
 | healed-1.state | 39549 | after first Pokecenter heal |
+| cyndaquil-start.state | 32131 | NEW TIMELINE: GOLD, CYNDAQUIL L5, New Bark Town |
 | pre-rival.state | 68317 | before rival ambush on Route 29 |
 | egg-delivered.state | 81004 | egg handed to Elm |
 | default.state | 106506 | pre-Journey fork point (Route 29) |
