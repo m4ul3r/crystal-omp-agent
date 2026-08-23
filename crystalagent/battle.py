@@ -73,8 +73,10 @@ class BattleData:
 
 def _norm_item(name):
     """Normalize an item name for lookup: the repo writes the POKé glyph
-    as '#' ("# BALL"), while callers say "POKE BALL"."""
-    return re.sub(r"[^A-Z0-9]", "", name.upper().replace("#", "POKE"))
+    as '#' ("# BALL"), screens show "POKé BALL"; callers say "POKE BALL"."""
+    return re.sub(r"[^A-Z0-9]", "",
+                  name.replace("#", "POKE").replace("é", "e")
+                  .replace("\x80", "e").upper())
 
 
 def bag_item_index(emu, names, item_name, pocket="items"):

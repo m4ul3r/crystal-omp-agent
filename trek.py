@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from crystalagent import paths
-from crystalagent.battle import Battle, BattleData, bag_item_index, cancel_pack, goto_pocket
+from crystalagent.battle import Battle, BattleData, bag_item_index, cancel_pack, goto_pocket, _norm_item
 from crystalagent.charmap import Charmap
 from crystalagent.emu import Crystal, parse_sequence
 from crystalagent.menus import Menus, battle_menu_up
@@ -90,6 +90,39 @@ class Driver:
             else:
                 last, still = cur, 0
             self.press(f".:{spacing}")
+
+    def _is_warp_cell(self, x, y):
+        try:
+            grid = self.nav.grid(self.map_name())
+            return grid[y][x] in WARPS
+        except KeyError:
+            return False
+
+    def step_hold(self, mv, hold=80):
+        """Hold the direction through the whole step AND the map
+        transition. Door warps only fire if the key is still down when
+        the step completes -- step_dir's early release skips them."""
+        before = self.pos()
+        self.emu.py.button_press(DIRS[mv].lower())
+        self.emu.tick(hold)
+        self.emu.py.button_release(DIRS[mv].lower())
+        self.emu.tick(2)
+        self.settle(max_frames=400)
+        if self.battle():
+            return "battle"
+        now = self.pos()
+        if now[:2] != before[:2]:
+            return "warp"
+        return "moved" if now != before else "blocked"
+
+    def _step(self, mv):
+        """step_dir, but switch to a held step when the target cell is a
+        warp tile so doors actually trigger."""
+        x, y = self.pos()[2:]
+        dx, dy = STEP[mv]
+        if self._is_warp_cell(x + dx, y + dy):
+            return self.step_hold(mv)
+        return self.step_dir(mv)
 
     # -- actions -----------------------------------------------------------
 
@@ -254,7 +287,7 @@ class Driver:
             d, n = d[0].upper(), int(n or 1)
             done = stuck = 0
             while done < n:
-                r = self.step_dir(d)
+                r = self._step(d)
                 if r == "battle":
                     self.fight()
                 elif r == "warp":
@@ -305,7 +338,7 @@ class Driver:
                           flush=True)
                 path = relaxed
             for mv in path:
-                r = self.step_dir(mv)
+                r = self._step(mv)
                 if r == "battle":
                     self.fight()
                 elif r == "warp":
@@ -418,6 +451,94 @@ class Driver:
             self.emu.save(self.state_path)
         print(f"[saved {target.name}] {self.status()}", flush=True)
 
+    # -- shopping -----------------------------------------------------------
+
+    def _shop_cursor_row(self, rows):
+        from crystalagent.menus import _cursor_x
+        for i, r in enumerate(rows):
+            if _cursor_x(r) >= 0:
+                return i
+        return -1
+
+    def mart_buy(self, x, y, item_name, qty=1, label=""):
+        """Talk to the clerk at (x,y) and buy `qty` of `item_name`.
+        Returns True if the bag ended up holding the item."""
+        def bag_count():
+            total = 0
+            for count_sym, list_sym in (("wNumItems", "wItems"),
+                                        ("wNumBalls", "wBalls")):
+                n = min(self.emu.read_u8(count_sym), 20)
+                if not n:
+                    continue
+                idx = bag_item_index(self.emu, self.names, item_name,
+                                     "balls" if list_sym == "wBalls"
+                                     else "items")
+                if idx is not None:
+                    bank, addr = self.emu.sym[list_sym]
+                    raw = self.emu.read((bank, addr), n * 2)
+                    total += raw[idx * 2 + 1]
+            return total
+
+        before = bag_count()
+        want = _norm_item(item_name)
+        shop_open = any("¥" in r for r in self.emu.screen_text())
+        if not shop_open:
+            if self.talk_to(x, y, label or "clerk") != "talked":
+                return False
+            if not any("¥" in r for r in self.emu.screen_text()):
+                print("  shop menu did not open", flush=True)
+                self.press("B:4 .:10")
+                return False
+        bought = False
+        for _ in range(40):                       # bounded item search
+            rows = self.emu.screen_text()
+            cur = self._shop_cursor_row(rows)
+            target = next((i for i, r in enumerate(rows)
+                           if want in _norm_item(r)), None)
+            if cur >= 0 and target is not None and target == cur:
+                self.press("A:4 .:40")           # open quantity picker
+                if not self.menu.wait_for(
+                        lambda r: any("How many?" in s for s in r),
+                        timeout_frames=400):
+                    print("  no quantity picker", flush=True)
+                    break
+                def picker_qty():
+                    for s in self.emu.screen_text():
+                        if "×" in s:
+                            try:
+                                return int(s.split("×")[1].split()[0])
+                            except (IndexError, ValueError):
+                                return None
+                    return None
+
+                tries = 0
+                while tries < 20:                # UP adds one; presses can
+                    if picker_qty() in (qty, None):  # be swallowed early
+                        break
+                    self.press("U:4 .:14")
+                    tries += 1
+                self.press(".:10")
+                self.press("A:6 .:30")
+                self.flush_dialog(3000)
+                bought = True
+                break                             # one purchase per call
+            if cur < 0:
+                break
+            self.press("D:6 .:12" if (target is None or target > cur)
+                       else "U:6 .:12")
+        for _ in range(10):                       # leave the shop cleanly:
+            rows = self.emu.screen_text()         # B only -- flush_dialog's
+            if not (any("¥" in r or "▶" in r or "▷" in r for r in rows)
+                    or self.textbox()):
+                break                             # A-mashing buys things!
+            self.press("B:6 .:16")
+        self.press(".:40")
+        after = bag_count()
+        ok = bought and after >= before + qty
+        print(f"  mart_buy {item_name} x{qty}: "
+              f"{'ok' if ok else 'FAILED'} ({before} -> {after})", flush=True)
+        return ok
+
 
 # -- legs -------------------------------------------------------------------
 
@@ -525,6 +646,7 @@ def main():
     spec = {
         "walk": (1, 1), "goto": (2, 2), "talk": (2, 2),
         "grind": (0, 2), "catch": (0, 0),
+        "mart": (4, 4),
         "fight": (0, 0), "flush": (0, 0), "route29": (0, 0), "heal": (0, 0),
         "to_violet": (0, 0), "errand1": (0, 0), "errand2": (0, 0),
         "errand3": (0, 0), "errand4": (0, 0), "violet": (0, 0),
@@ -540,7 +662,7 @@ def main():
         state_arg = rest.pop(0) or None
     if not lo <= len(rest) <= hi:
         usage = {"walk": "PATH", "goto": "X Y", "talk": "X Y",
-                 "grind": "[PACE] [LEVEL]"}.get(leg, "")
+                 "grind": "[PACE] [LEVEL]", "mart": "X Y ITEM QTY"}.get(leg, "")
         sys.exit(f"usage: trek.py {leg} [<state>] {usage}".rstrip())
     try:
         d = Driver(state_arg)
@@ -553,6 +675,8 @@ def main():
         d.goto(int(rest[0]), int(rest[1]))
     elif leg == "talk":
         print(d.talk_to(int(rest[0]), int(rest[1])), flush=True)
+    elif leg == "mart":
+        d.mart_buy(int(rest[0]), int(rest[1]), rest[2], int(rest[3]))
     elif leg == "grind":
         gargs = [rest[0], int(rest[1])] if len(rest) > 1 else rest
         print(d.grind(*gargs), flush=True)

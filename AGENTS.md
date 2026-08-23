@@ -63,6 +63,7 @@ from the leg's own arguments.
 | Walkable map, BFS with ledges + NPC avoidance | `trek.Driver.goto(x,y)`; debug render: `MapData.render(map_const)` |
 | Fight battles | `Driver.fight()` — best-move selection from ROM move data, auto-POTION at <30% HP, flees hopeless wilds |
 | Talk to an NPC / trigger a trainer | `Driver.talk_to(x, y)` or `trek talk X Y` — walks adjacent (handles counters), faces them, flushes dialog, fights trainer battles that trigger |
+| Buy from a Poké Mart | `Driver.mart_buy(x, y, item, qty)` or `trek mart X Y ITEM QTY` — clerk at (x,y); B-only exit (see gotcha 13) |
 | Catch / flee / switch mid-battle | custom policy: `d.fight(policy=lambda rows, me, enemy: ('ball',))`; options: `'flee'`, `('attack', slot)`, `('switch', party_idx)`, `('item','POTION')`, `('ball','POKE BALL')` — all verified live |
 | Use items out of battle | `Driver.use_item('POTION', target_slot=0)` |
 | Menus anywhere | `Menus.select_label('SAVE')` (cursor-glyph driven), `select_abs(i)` (scrolling lists), `wait_for_label('USE')` |
@@ -105,11 +106,14 @@ ROM's `Moves` table via `pokecrystal.sym`. Don't hardcode game data.
 11. **Overworld screens decode as structure glyphs, not semantics.** Use
     coordinates for ground truth, `screen --png` + image read only when you
     need terrain visuals.
-12. **Door/cutscene warps finish asynchronously.** `step_dir` reports the
-    step onto a door tile as "moved" while the map transition is still
-    animating — map/pos/NPC reads right after are for the OLD map (cost a
-    gym attempt). Call `Driver.settle()` (or let walk/goto/talk_to do it)
-    before acting on a fresh warp.
+12. **Door/cutscene warps finish asynchronously AND need the key held.**
+    `step_dir` releases the direction as soon as the step starts — doors
+    silently don't trigger (the warp only fires if the key is still down
+    when the step completes). Use `Driver._step`/`step_hold` (walk/goto do
+    this automatically on warp tiles), and `settle()` before acting on a
+    fresh warp.
+13. **Never flush_dialog near an open shop list.** Blind A presses buy
+    single items at ¥200 a pop. `mart_buy` exits with B-only presses.
 
 ## Session protocol
 

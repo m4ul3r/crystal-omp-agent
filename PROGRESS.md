@@ -1,14 +1,14 @@
 # PROGRESS — Pokémon Crystal run
 
-_Last updated: session of Aug 23 2026 (tooling round 2 + ZEPHYR BADGE)._
+_Last updated: session of Aug 23 2026 (mart_buy primitive + 2nd party member)._
 
 ## Where we are
 
-- Checkpoint to resume from: **`saves/zephyr-badge.state`** (frame 296052)
-- Position: inside VIOLET_GYM at (5,2), Falkner beaten
-- Party: CYNDAQUIL "AA" L14, 19/40 HP (heal before next fights)
-- Money: ₽3764 · Badges: **ZEPHYR**
-- Bag: no POTIONs, no balls
+- Checkpoint to resume from: **`saves/two-mon.state`** (frame 389033)
+- Position: ROUTE_31 grass (10,13)
+- Party: CYNDAQUIL "AA" L14 40/40, **POLIWAG L4** (fresh catch)
+- Money: ~₽357 · Badges: ZEPHYR
+- Bag: ~9 Poké Balls, 3 POTIONS
 
 ## Story progress
 
@@ -30,6 +30,9 @@ _Last updated: session of Aug 23 2026 (tooling round 2 + ZEPHYR BADGE)._
    Keepers (Abe, Rod) beaten by the stalled p5 session, then Falkner
    finished off by this session's new `talk_to` primitive. Lost the first
    attempt at L13/17HP (whiteout), re-entered and won cleanly at L14.
+9. **SUPPLIES + 2ND PARTY MEMBER** (`two-mon.state`, frame 389033): bought
+   balls/potions with the new `mart_buy` primitive (Violet Mart clerk at
+   (1,3)), walked to Route 31 grass, caught POLIWAG L4.
 
 ## Route notes
 
@@ -47,17 +50,18 @@ _Last updated: session of Aug 23 2026 (tooling round 2 + ZEPHYR BADGE)._
 
 ## Next objective
 
-Heal at the Violet Pokecenter, buy/catch supplies (no balls or potions
-left), then Route 32 south toward UNION CAVE / AZALEA. Or grind Route 31/
-Violet outskirts for a 2nd party member (ball throws now verified working).
-Suggested checkpoints: `route32.state`, then `hive-badge.state` later.
+Head south through Route 32 (Violet City south exit around (19,42) area —
+check maps/VioletCity.asm warps) toward the Route 32 Pokecenter, then
+UNION CAVE. Grind POLIWAG up alongside Cyndaquil. Next badge is HIVE
+(AZALEA, far south through Ilex Forest) — the journey legs need extending
+(`to_azalea`). Checkpoints: `route32.state`, `union-cave.state`.
 
 ## Active sessions
 
 | session | owns | working state |
 |---------|------|---------------|
 | tower agent | Sprout Tower -> Elder Li | `joey.state` (frame 238979, SPROUT_TOWER_2F) |
-| ox-alpha (p9) | done this round: tooling round 2 + ZEPHYR BADGE (`zephyr-badge.state`) | — |
+| ox-alpha (p9) | done: mart_buy + step_hold + 2nd party member (`two-mon.state`) | `saves/ox-alpha.state` |
 
 Rule: never write another session's working state or a milestone checkpoint;
 promote progress under NEW filenames. See AGENTS.md "Multiple agents".
@@ -88,6 +92,30 @@ promote progress under NEW filenames. See AGENTS.md "Multiple agents".
   - Gotcha learned: RAM-injected party members MUST also get nickname+OT
     bytes written (`wPartyMonNicknames`/`wPartyMonOTs`, 11B slots) or the
     text engine hard-freezes on "Go! ?????".
+- **Round 3 additions (this session, all live-tested):**
+  - `Driver.mart_buy(x,y,item,qty)` + `trek mart X Y ITEM QTY`: talks to the
+    clerk, scrolls the shop list (é-safe name matching), sets quantity by
+    polling the `×NN` picker (UP=+1 RIGHT=+10), confirms, exits with
+    B-only presses. Verified: 4× POKE BALL and 3× POTION, exact money math.
+    NOTE: never flush_dialog near an open shop list — blind A presses buy
+    single items.
+  - `Driver.step_hold` / `_step`: door warps ONLY fire if the direction is
+    held through the whole step+transition; step_dir's early release skips
+    them silently. walk/goto now hold automatically on warp tiles. This is
+    why gym/pokecenter doors "didn't work" earlier.
+  - `_norm_item` fixed: é was uppercased to É before the replace, so screen
+    text "POKé BALL" still didn't match; also é→E mapping added.
+  - `watch.py` live visualizer (round 3, this session): stdlib-HTTP
+    dashboard on :8123 — screenshot, party/battle state, text screen,
+    colored canvas collision-map (@/N/warps/ledges/grass/water), live vs
+    idle dot (state-file mtime age), and an activity feed that diffs
+    consecutive snapshots into events (map entry, battle start/end,
+    level-ups, new party members, money delta, badges, new checkpoints in
+    saves/). Read-only: safe to point at any session's working save.
+    Run: `.venv/bin/python watch.py --state saves/<agent>.state`.
+    Fixed en route: /shot.png used to tick the emulator without reloading
+    (screen drifted from disk while idle) and called a nonexistent
+    PIL `.update()` — screenshots never worked before; both fixed.
 
 
 ## Checkpoints
@@ -101,7 +129,8 @@ promote progress under NEW filenames. See AGENTS.md "Multiple agents".
 | joey.state | 198202 | Joey beaten, ended inside Violet gate |
 | violet-arrived.state | 176067 | Violet City, healed, L11 |
 | gym-attempt.state | 279328 | p5's stalled badge attempt (superseded) |
-| zephyr-badge.state | **296052** | **current** — ZEPHYR BADGE won, L14 |
+| zephyr-badge.state | 296052 | ZEPHYR BADGE won, L14 |
+| two-mon.state | **389033** | **current** — POLIWAG caught, party of 2, Route 31 |
 
 ## Gotchas discovered this run
 
