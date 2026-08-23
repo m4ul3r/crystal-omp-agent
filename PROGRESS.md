@@ -520,3 +520,34 @@ verified heal_pokecenter, key-item bag stride fix, battle wedge guard +
 
 NEXT: finish the two boulder sinks, cross to Blackthorn (warp graph in
 FABLE_FEEDBACK.md), Clair L37-40 Dragonair/Kingdra, Dragon's Den shrine.
+
+## FRESH-RUN SMOKE TEST (ox-alpha2, Aug 23): power-on -> VIOLET CITY
+
+Checkpoint: `saves/oxa9-run.state` (CYNDAQUIL L11, 5 Poké Balls, egg
+delivered, aide balls received). Driven end-to-end by trek primitives:
+new game -> starter -> Elm errand -> Mr Pokemon egg+dex -> return ->
+VIOLET CITY. ~15 wilds fought en route incl. one WIPE mid-travel that
+travel() recovered from autonomously (whiteout -> replan -> continue).
+
+New-game boot recipe (not yet a primitive): raw Crystal(ROM), pulse
+START every ~260 frames until the main menu decodes (title/GS logo are
+tile art, no text), A on NEW GAME, A-mash intro, pick preset name,
+poll until wScriptMode==0 overworld. Saved as ox-fresh-intro.state.
+
+Gotchas found this run:
+- grind() had NO idle cap -- pacing on a non-grass cell or a map seam
+  spun forever until the shell timeout. Fixed: aborts 'no-encounters'
+  after 300 fruitless steps.
+- Route 30 rattata roadblock is story-gated: EVENT_ROUTE_30_BATTLE only
+  sets when MYSTERY_EGG is handed to Elm (ElmsLab.asm:345). Talk-to-NPC
+  does nothing before that.
+- Saving mid-script poisons states (re-learned live): a d.save() during
+  wScriptMode!=0 froze the lab scene; recovery = replay leg from clean
+  checkpoint. fight()'s watch sidecar (.watch.state) prevents the worst
+  variant of this.
+- saves/ is shared: another live session deleted an ox-fresh-* scratch
+  state mid-run. Unique per-agent prefixes are not enough -- treat any
+  scratch state as volatile, save milestones immediately after verified
+  transitions.
+- Shell timeout clamped ~300s here (FABLE_FEEDBACK said 10 min): chunk
+  long legs into <=250s primitive batches or use a persistent process.
