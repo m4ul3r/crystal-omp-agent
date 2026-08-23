@@ -7,7 +7,7 @@ _Last updated: session of Aug 23 2026 (mart_buy primitive + 2nd party member)._
 - Checkpoint to resume from: **`saves/two-mon.state`** (frame 389033)
 - Position: ROUTE_31 grass (10,13)
 - Party: CYNDAQUIL "AA" L14 40/40, **POLIWAG L4** (fresh catch)
-- Money: ~₽357 · Badges: ZEPHYR
+- Money: ₽857 · Badges: ZEPHYR
 - Bag: ~9 Poké Balls, 3 POTIONS
 
 ## Story progress
@@ -63,6 +63,7 @@ UNION CAVE. Grind POLIWAG up alongside Cyndaquil. Next badge is HIVE
 | tower agent | Sprout Tower -> Elder Li | `joey.state` (frame 238979, SPROUT_TOWER_2F) |
 | ox-alpha (visibility) | fresh boot -> starter, egg, rival beaten; next: deliver egg to Elm | `visibility.state` |
 | ox-alpha (p9) | done: mart_buy + step_hold + 2nd party member (`two-mon.state`) | `saves/ox-alpha.state` |
+| director | autonomy build (observe/serve/mapgraph) -> then badge push | saves/director.state |
 
 Rule: never write another session's working state or a milestone checkpoint;
 promote progress under NEW filenames. See AGENTS.md "Multiple agents".

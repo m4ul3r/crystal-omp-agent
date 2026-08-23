@@ -5,9 +5,10 @@ in a single persistent process (no per-command emulator reload).
 Usage: .venv/bin/python trek.py <leg> [args]   (see main() dispatch)
 """
 
+import json
 import sys
+from collections import deque
 from pathlib import Path
-
 sys.path.insert(0, str(Path(__file__).parent))
 from crystalagent import paths
 from crystalagent.battle import Battle, BattleData, bag_item_index, cancel_pack, goto_pocket, _norm_item
@@ -20,6 +21,34 @@ from crystalagent.state import game_state, status_line
 from crystalagent.symfile import Symbols
 
 DIRS = {"U": "UP", "D": "DOWN", "L": "LEFT", "R": "RIGHT"}
+
+class TravelError(RuntimeError):
+    """travel(): a transition landed somewhere the plan didn't expect."""
+
+
+# EnterMapConnection: stepping off `letter`'s edge from (x, y) with the
+# connection's `off` lands on the destination at -- (dw = dest width in
+# cells, dh = dest height). Same math as nav._conn_landing.
+_CONN_LAND = {
+    "U": lambda dw, dh, off, x, y: (x - 2 * off, dh - 1),
+    "D": lambda dw, dh, off, x, y: (x - 2 * off, 0),
+    "L": lambda dw, dh, off, x, y: (dw - 1, y - 2 * off),
+    "R": lambda dw, dh, off, x, y: (0, y - 2 * off),
+}
+_CONN_LETTER = {"north": "U", "south": "D", "west": "L", "east": "R"}
+
+_mapgraph_json = None
+
+
+def mapgraph():
+    """data/mapgraph.json (validated warp/connection edges between maps),
+    parsed once per process. Side-effect free."""
+    global _mapgraph_json
+    if _mapgraph_json is None:
+        p = Path(__file__).parent / "data" / "mapgraph.json"
+        _mapgraph_json = json.loads(p.read_text())
+    return _mapgraph_json
+
 
 # Naming-keyboard grids (9 cols x 4 char rows), parsed from
 # data/text/name_input_chars.asm: each cell is 2 chars, space = empty key.
@@ -646,6 +675,177 @@ class Driver:
               f"{goal_map} {goal}", flush=True)
         return False
 
+    # -- cross-map routing (edge source: data/mapgraph.json) ----------------
+
+    def _mg_edges(self):
+        """{from_map_const: [routable edges]} over data/mapgraph.json."""
+        adj = {}
+        for e in mapgraph()["edges"]:
+            if e.get("routable"):
+                adj.setdefault(e["from_map"], []).append(e)
+        return adj
+
+    def _edge_step(self, e):
+        """How to walk edge `e`: ((ax, ay), dir_letter) where standing on
+        (ax, ay) and stepping `dir` fires the warp/connection. Validated
+        against this repo's collision grids -- an edge the terrain doesn't
+        actually allow (e.g. a connection band walled off by trees) yields
+        None and BFS routes around it. None too for maps with no grid."""
+        try:
+            grid = self.nav.grid(e["from_map"])
+        except KeyError:
+            return None
+        hgt, wid = len(grid), len(grid[0])
+
+        def standable(x, y):
+            return (0 <= x < wid and 0 <= y < hgt
+                    and (grid[y][x] in WALKABLE or grid[y][x] in HOPS)
+                    and grid[y][x] not in WARPS)
+
+        if e["kind"] == "warp":
+            tx, ty = e["cells"]
+            cands = [((tx - dx, ty - dy), d)
+                     for d, (dx, dy) in STEP.items()
+                     if standable(tx - dx, ty - dy)]
+        elif e["kind"] == "connection":
+            d = _CONN_LETTER[e["entry"]["heading"]]
+            dx, dy = STEP[d]
+            (x1, y1), (x2, y2) = e["cells"]
+            cands = []
+            for x in range(min(x1, x2), max(x1, x2) + 1):
+                for y in range(min(y1, y2), max(y1, y2) + 1):
+                    # stand ON the border band; the step in `d` leaves the
+                    # map and fires the connection
+                    nx, ny = x + dx, y + dy
+                    if standable(x, y) and not (0 <= nx < wid
+                                                and 0 <= ny < hgt):
+                        cands.append(((x, y), d))
+        else:
+            return None
+        if not cands:
+            return None
+        px, py = self.pos()[2:]
+        return min(cands,
+                   key=lambda c: (abs(c[0][0] - px) + abs(c[0][1] - py),
+                                  c[0]))
+
+    def route(self, dest_map):
+        """Plan-only cross-map route to `dest_map`: BFS over mapgraph.json's
+        validated warp/connection edges, expanded into per-leg steps --
+        [{"kind": "walk", "map", "x", "y"}, {"kind": "warp"|"connection",
+        "from", "to", "dir", ...}, ...]. Raises LookupError on unreachable;
+        never moves the player."""
+        dest = self._resolve_map(dest_map)
+        src = self.map_name()
+        if dest == src:
+            return []
+        adj = self._mg_edges()
+        prev = {src: None}
+        q = deque([src])
+        while q:
+            m = q.popleft()
+            if m == dest:
+                break
+            for e in sorted(adj.get(m, ()),
+                            key=lambda e: (e["to_map"], e["kind"],
+                                           json.dumps(e["cells"]))):
+                nxt = e["to_map"]
+                if nxt in prev:
+                    continue
+                step = self._edge_step(e)
+                if step:
+                    prev[nxt] = (m, e, step)
+                    q.append(nxt)
+        if dest not in prev:
+            raise LookupError(f"no routable mapgraph path {src} -> {dest}")
+        hops, m = [], dest
+        while prev[m]:
+            hops.append(prev[m])
+            m = prev[m][0]
+        steps = []
+        for frm, e, ((ax, ay), d) in reversed(hops):
+            steps.append({"kind": "walk", "map": frm, "x": ax, "y": ay,
+                          "why": f"approach {e['kind']} to {e['to_map']}"})
+            trans = {"kind": e["kind"], "from": frm, "to": e["to_map"],
+                     "dir": d, "notes": e.get("notes")}
+            if e["kind"] == "warp":
+                trans["cell"] = list(e["cells"])
+                trans["warp_id"] = e.get("warp_id")
+                trans["dest"] = list(e["dest_cell"])
+            else:
+                trans["band"] = [list(c) for c in e["cells"]]
+                trans["offset"] = e.get("offset")
+            steps.append(trans)
+        return steps
+
+    def _landing(self, st, x, y):
+        """Modeled landing cell for transition step `st` taken at (x, y)."""
+        if st["kind"] == "warp":
+            return tuple(st["dest"])
+        grid = self.nav.grid(st["to"])
+        return _CONN_LAND[st["dir"]](len(grid[0]), len(grid),
+                                     st["offset"] or 0, x, y)
+
+    def travel(self, dest_map, label=""):
+        """Execute route(<dest_map>) leg by leg with the existing walk/
+        _step/settle mechanics: goto each approach cell, hold through warps
+        (_step picks step_hold on warp tiles -- the Route 31 gate only
+        fires with the key held sideways), settle() after every transition,
+        then verify landing map + cell. Small drift past the modeled
+        landing is expected (held key glides ~2 cells; AGENTS.md gotcha
+        14); anything worse raises TravelError."""
+        dest = self._resolve_map(dest_map)
+        if self.map_name() == dest:
+            return []
+        steps = self.route(dest)
+        print(f"[travel -> {dest}] {len(steps)} steps from "
+              f"{self.map_name()} {self.pos()[2:]}"
+              f"{' ' + label if label else ''}".rstrip(), flush=True)
+        for i, st in enumerate(steps):
+            cur = self.map_name()
+            if st["kind"] == "walk":
+                if cur != st["map"]:
+                    raise TravelError(f"leg {i}: plan expects "
+                                      f"{st['map']}, we're on {cur}")
+                if not self.goto(st["x"], st["y"], f"travel -> {dest}"):
+                    raise TravelError(f"leg {i}: no path to approach cell "
+                                      f"{(st['x'], st['y'])} on {cur}")
+                continue
+            if cur != st["from"]:
+                raise TravelError(f"leg {i}: plan transitions from "
+                                  f"{st['from']}, we're on {cur}")
+            px, py = self.pos()[2:]
+            expected = self._landing(st, px, py)
+            r = None
+            for _attempt in range(4):
+                r = self._step(st["dir"])
+                if r == "battle":
+                    self.fight()      # encounter mid-transition; then retry
+                elif r == "blocked":
+                    if self.textbox():
+                        self.flush_dialog()
+                    else:
+                        break
+                elif r != "warp" and self.map_name() == st["from"]:
+                    continue          # stepped but the warp didn't fire
+                else:
+                    break
+            self.settle()
+            mx, my = self.pos()[2:]
+            here = self.map_name()
+            if here != st["to"]:
+                raise TravelError(
+                    f"leg {i}: {st['kind']} {st['dir']} at {(px, py)} -- "
+                    f"expected {st['to']}, on {here} {(mx, my)} "
+                    f"(step result: {r})")
+            drift = abs(mx - expected[0]) + abs(my - expected[1])
+            if drift > 3:
+                raise TravelError(
+                    f"leg {i}: landed {here} {(mx, my)}, modeled landing "
+                    f"{expected} (drift {drift} > 3)")
+            print(f"  -> {here} {(mx, my)} (drift {drift})", flush=True)
+        return steps
+
     def grind(self, pace="D U", target_level=13, min_hp=7, max_battles=80):
         """Pace in grass fighting encounters until target level / low HP."""
         battles = 0
@@ -942,7 +1142,8 @@ def main():
         sys.exit("usage: trek.py <leg> [<state>] [args...]\n"
              "legs: walk PATH | goto X Y [MAP] | talk X Y | "
              "grind [PACE] [LEVEL] | catch [NAME] | fight |\n"
-             "      flush | heal | route29 | to_violet |\n"
+             "      flush | heal | route MAP | travel MAP |\n"
+             "      route29 | to_violet |\n"
              "      errand1 errand2 errand3 errand4 violet\n"
              "goto MAP: CONST_NAME or CamelCase (e.g. VIOLET_CITY) -- routes\n"
              "across maps via warps + edge connections\n"
@@ -950,7 +1151,7 @@ def main():
     leg, rest = argv[0], list(argv[1:])
     spec = {
         "walk": (1, 1), "goto": (2, 3), "talk": (2, 2),
-        "grind": (0, 2), "catch": (0, 1),
+        "route": (1, 1), "travel": (1, 1),
         "mart": (4, 4),
         "fight": (0, 0), "flush": (0, 0), "route29": (0, 0), "heal": (0, 0),
         "to_violet": (0, 0), "errand1": (0, 0), "errand2": (0, 0),
@@ -967,7 +1168,8 @@ def main():
         state_arg = rest.pop(0) or None
     if not lo <= len(rest) <= hi:
         usage = {"walk": "PATH", "goto": "X Y [MAP]", "talk": "X Y",
-                 "grind": "[PACE] [LEVEL]", "mart": "X Y ITEM QTY"}.get(leg, "")
+                 "grind": "[PACE] [LEVEL]", "mart": "X Y ITEM QTY",
+                 "route": "MAP", "travel": "MAP"}.get(leg, "")
         sys.exit(f"usage: trek.py {leg} [<state>] {usage}".rstrip())
     if state_arg is None and not env_flag("CRYSTAL_ALLOW_DEFAULT"):
         sys.exit(f"refusing to run on shared {paths.DEFAULT_STATE} "
@@ -986,8 +1188,10 @@ def main():
                map_name=rest[2] if len(rest) > 2 else None)
     elif leg == "talk":
         print(d.talk_to(int(rest[0]), int(rest[1])), flush=True)
-    elif leg == "mart":
-        d.mart_buy(int(rest[0]), int(rest[1]), rest[2], int(rest[3]))
+    elif leg == "route":
+        print(json.dumps(d.route(rest[0]), indent=1), flush=True)
+    elif leg == "travel":
+        d.travel(rest[0])
     elif leg == "grind":
         gargs = [rest[0], int(rest[1])] if len(rest) > 1 else rest
         print(d.grind(*gargs), flush=True)
@@ -1013,7 +1217,8 @@ def main():
         leg_errand4(d)
     elif leg == "violet":
         leg_violet(d)
-    d.save()
+    if leg != "route":   # route is a pure plan: don't rewrite the state
+        d.save()
     print(f"[end] {d.status()}", flush=True)
 
 
