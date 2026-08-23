@@ -50,16 +50,22 @@ def mapgraph():
     return _mapgraph_json
 
 
-# One-way side-wall collision bytes ($b0-$b7 hi nybble $b0): each is
-# enterable from exactly ONE facing (engine home/map.asm .Up/.Down/
-# .Left/.Right). nav's grids mark them solid, which hid legal passages --
-# e.g. Route 32's fence gap at (11..14, 6), the intended bypass of the
-# Cooltrainer chokepoint near the north entrance.
-_ONE_WAY_ENTRY = {
-    "D": {0xB2, 0xB6, 0xB7},   # COLL_UP_WALL / UP_RIGHT / UP_LEFT
-    "U": {0xB3, 0xB4, 0xB5},   # COLL_DOWN_WALL / DOWN_RIGHT / DOWN_LEFT
-    "R": {0xB1, 0xB5, 0xB7},   # COLL_LEFT_WALL / DOWN_LEFT / UP_LEFT
-    "L": {0xB0, 0xB4, 0xB6},   # COLL_RIGHT_WALL / DOWN_RIGHT / UP_RIGHT
+# Side-wall collision bytes ($b0-$b7, hi nybble $b0; buoys $c0-$c7 behave
+# alike but sit on water). Engine home/map.asm GetMovementPermissions sets
+# a BLOCKING bit per facing: each byte refuses entry from specific sides
+# only -- e.g. COLL_UP_WALL ($b2) can be entered moving up/left/right but
+# never down. Verified live: Route 32 (4,71)->D onto (4,72)$b2 bumps, and
+# Union Cave 1F's corridors cross $b2 rows upward. Base nav treats the
+# whole family as solid, which sealed Union Cave's lower floor.
+_SIDE_WALL_BLOCKED = {
+    0xB0: {"L"},           # COLL_RIGHT_WALL
+    0xB1: {"R"},           # COLL_LEFT_WALL
+    0xB2: {"D"},           # COLL_UP_WALL
+    0xB3: {"U"},           # COLL_DOWN_WALL
+    0xB4: {"U", "L"},      # COLL_DOWN_RIGHT_WALL
+    0xB5: {"U", "R"},      # COLL_DOWN_LEFT_WALL
+    0xB6: {"D", "L"},      # COLL_UP_RIGHT_WALL
+    0xB7: {"D", "R"},      # COLL_UP_LEFT_WALL
 }
 
 
@@ -67,13 +73,12 @@ class TrekNav(MapData):
     """nav.MapData + two routing extensions, kept local to trek.py so the
     shared crystalagent/nav.py stays untouched:
 
-    - one-way side walls (_ONE_WAY_ENTRY) expand directionally in BFS;
-    - `blocked[map]` cells (live coord_event cutscene triggers, refreshed
-      by Driver._refresh_nav_blocks) are never routed through -- not even
-      as the goal. Without this, BFS happily plans over e.g. Route 32
-      (18,8), where the Cooltrainer scene re-fires forever (the script
-      never calls setscene) and shoves the player back toward Violet.
-    """
+    - side walls expand directionally per _SIDE_WALL_BLOCKED;
+    - `blocked[map]` cells (live coord_event triggers, refreshed by
+      Driver._refresh_nav_blocks) are never routed through -- not even as
+      the goal. Without this, BFS happily plans over e.g. Route 32 (18,8),
+      where the Cooltrainer scene re-fires forever until Elm's aide's
+      Togepi-egg scene flips the map's scene id."""
 
     def __init__(self, repo):
         super().__init__(repo)
@@ -126,8 +131,12 @@ class TrekNav(MapData):
                                 exits.append(((land[0], land[1]), d))
                         continue
                     c = grid[ny][nx]
-                    if (c in WALKABLE or c in WARPS or c in HOPS
-                            or c in _ONE_WAY_ENTRY.get(d, ())):
+                    if c in WALKABLE or c in WARPS or c in HOPS:
+                        plain.append((nxt, d))
+                    elif c in _SIDE_WALL_BLOCKED and \
+                            d not in _SIDE_WALL_BLOCKED[c]:
+                        # one-way wall: enterable from every facing except
+                        # its blocked side(s)
                         plain.append((nxt, d))
                 elif cross and CONN_NAME[d] in self.conns.get(M, {}):
                     land = self._conn_landing(M, CONN_NAME[d], x, y)
@@ -182,8 +191,51 @@ def _shared_nav():
     return _shared_nav_md
 
 
+_DISRUPTIVE_KEYWORDS = ("applymovement", "follow")
+_script_body_cache = {}
+
+
+def script_is_disruptive(repo, camel_file, script_label):
+    """True if the coord_event's script moves the player or makes an NPC
+    follow them (applymovement/follow) -- i.e. it would physically undo
+    progress, like Route 32's Cooltrainer push-back. Pure-dialog triggers
+    (the Slowpoke Tail pitch) are left routable: walk/goto already flush
+    textboxes."""
+    key = (camel_file, script_label)
+    if key not in _script_body_cache:
+        body = None
+        p = Path(repo, "maps", f"{camel_file}.asm")
+        try:
+            lines = p.read_text(errors="replace").splitlines()
+            start = None
+            for i, line in enumerate(lines):
+                if line.split(";")[0].strip().rstrip(":") == script_label \
+                        and ":" in line:
+                    start = i + 1
+                    break
+            if start is not None:
+                body = []
+                for line in lines[start:]:
+                    s = line.split(";")[0].strip()
+                    if not s:
+                        continue
+                    if s.endswith(":"):     # next label -> end of body
+                        break
+                    body.append(s)
+        except OSError:
+            pass
+        _script_body_cache[key] = (
+            False if body is None
+            else any(kw in instr for instr in body
+                     for kw in _DISRUPTIVE_KEYWORDS))
+    return _script_body_cache[key]
+
+
+_coord_event_cache = None
+
+
 def coord_events(repo):
-    """{map_const: [(x, y, scene_token)]} parsed from every
+    """{map_const: [(x, y, scene_token, script_label)]} parsed from every
     maps/<Camel>.asm def_coord_events table. Cached per process."""
     global _coord_event_cache
     if _coord_event_cache is not None:
@@ -201,7 +253,7 @@ def coord_events(repo):
             args = [a.strip() for a in s[len("coord_event"):].split(",")]
             if len(args) >= 4:
                 out.setdefault(_file_const(path.stem), []).append(
-                    (int(args[0]), int(args[1]), args[2]))
+                    (int(args[0]), int(args[1]), args[2], args[3]))
     _coord_event_cache = out
     return out
 
@@ -812,6 +864,13 @@ class Driver:
         self._refresh_nav_blocks()
         goal_map = self._resolve_map(map_name)
         goal = (x, y)
+        # An exit-warp cell of the CURRENT map as the goal (map not
+        # requested) means "walk out through this door": hold onto the
+        # tile, and success = having left the map. Escalating to cross-map
+        # routing here just bounces in and out forever.
+        exit_warp_goal = (map_name is None and goal_map == self.map_name()
+                          and self._is_warp_cell(x, y))
+        entry_map = self.map_name()
         replans = idle = passes = 0
         if label or goal_map != self.map_name():
             print(f"[goto {goal}"
@@ -820,27 +879,59 @@ class Driver:
         while replans < 20 and idle < 40 and passes < 60:
             passes += 1
             cur_map, cur = self.map_name(), self.pos()[2:]
-            if cur_map == goal_map and cur == goal:
+            if exit_warp_goal:
+                if cur_map != entry_map:
+                    print(f"  -> left through warp {goal}", flush=True)
+                    return True
+            elif cur_map == goal_map and cur == goal:
+                return True
+            # a warp-tile goal fires on arrival: standing at that warp's
+            # landing cell means we walked through it (e.g. goto on a
+            # Pokécenter door ends inside, not stuck bouncing on the mat)
+            land = (self.nav.warps.get(goal_map, {}).get(goal)
+                    and self.nav._warp_landing(goal_map, goal))
+            if land and land[0] == cur_map and \
+                    abs(cur[0] - land[1][0]) + abs(cur[1] - land[1][1]) <= 2:
+                print(f"  -> arrived through warp {goal}", flush=True)
                 return True
             # NPCs scope to the replan's start map inside _bfs, so always
             # thread around them -- cross-map legs hit NPCs just the same
             avoid = self.npc_cells()
-            path = self.nav.find_route(cur_map, cur, goal_map, goal, avoid)
-            if not path:
-                # distinguish "NPC in the way" from "statically unreachable":
-                # if a relaxed (ignore-NPC) route exists, take it and let
-                # step_dir handle the bumps -- waiting never moves trainers.
-                relaxed = self.nav.find_route(cur_map, cur, goal_map, goal)
-                if not relaxed:
-                    print(f"  no static path {cur_map} {cur} -> "
-                          f"{goal_map} {goal}", flush=True)
-                    return False
-                self.press(".:40")   # brief beat for genuinely moving NPCs
-                replans += 1
-                if replans % 5 == 0:
-                    print(f"  threading {cur} -> {goal} past NPCs",
-                          flush=True)
-                path = relaxed
+            if goal_map == cur_map:
+                # Same-map goal: stay on this map. Routing through warps
+                # here just bounce-exits (e.g. standing north of Union
+                # Cave's entrance carpet, every "shortcut" leaves the map).
+                path = self.nav.find_path(cur_map, cur, goal, avoid)
+                if not path:
+                    # distinguish "NPC in the way" from "statically
+                    # unreachable": relaxed (ignore-NPC) routes let
+                    # step_dir handle the bumps -- waiting never moves
+                    # trainers.
+                    path = self.nav.find_path(cur_map, cur, goal)
+                    if not path:
+                        print(f"  no static path {cur_map} {cur} -> "
+                              f"{goal}", flush=True)
+                        return False
+                    replans += 1
+                    if replans % 5 == 1:
+                        print(f"  threading {cur} -> {goal} past NPCs",
+                              flush=True)
+            else:
+                path = self.nav.find_route(cur_map, cur, goal_map, goal,
+                                           avoid)
+                if not path:
+                    relaxed = self.nav.find_route(cur_map, cur, goal_map,
+                                                  goal)
+                    if not relaxed:
+                        print(f"  no static path {cur_map} {cur} -> "
+                              f"{goal_map} {goal}", flush=True)
+                        return False
+                    self.press(".:40")  # beat for genuinely moving NPCs
+                    replans += 1
+                    if replans % 5 == 0:
+                        print(f"  threading {cur} -> {goal} past NPCs",
+                              flush=True)
+                    path = relaxed
             moved = False
             for mv in path:
                 r = self._step(mv)
@@ -900,7 +991,8 @@ class Driver:
                     cur = "unreadable"
             order = {n: i for i, n in enumerate(consts.get(const, [])) if n}
             cells = set()
-            for x, y, tok in evs:
+            camel = self.nav.camel.get(const, const)
+            for x, y, tok, script in evs:
                 v = -1 if tok.startswith("-") else order.get(tok)
                 if v == -1:
                     fires = True           # SCENE_ALWAYS: fires every time
@@ -912,7 +1004,8 @@ class Driver:
                     fires = True           # can't tell -> assume the worst
                 else:
                     fires = cur == v
-                if fires:
+                if fires and script_is_disruptive(self.nav._repo, camel,
+                                                  script):
                     cells.add((x, y))
             if cells:
                 blocks[const] = cells
@@ -926,12 +1019,14 @@ class Driver:
                 adj.setdefault(e["from_map"], []).append(e)
         return adj
 
-    def _edge_step(self, e):
-        """How to walk edge `e`: ((ax, ay), dir_letter) where standing on
-        (ax, ay) and stepping `dir` fires the warp/connection. Validated
-        against this repo's collision grids -- an edge the terrain doesn't
-        actually allow (e.g. a connection band walled off by trees) yields
-        None and BFS routes around it. None too for maps with no grid."""
+    def _edge_steps(self, e):
+        """All ways to walk edge `e`: [((ax, ay), dir_letter), ...] sorted
+        closest-first, where standing on (ax, ay) and stepping `dir` fires
+        the warp/connection. Validated against this repo's collision grids;
+        an edge the terrain doesn't allow yields []. None for maps with no
+        grid. Multiple candidates matter: the same door can have a walkable
+        approach from one side only (Union Cave's door is entered stepping
+        UP off the ledge lip below it -- its north cell is walled off)."""
         try:
             grid = self.nav.grid(e["from_map"])
         except KeyError:
@@ -964,11 +1059,11 @@ class Driver:
         else:
             return None
         if not cands:
-            return None
+            return []
         px, py = self.pos()[2:]
-        return min(cands,
-                   key=lambda c: (abs(c[0][0] - px) + abs(c[0][1] - py),
+        cands.sort(key=lambda c: (abs(c[0][0] - px) + abs(c[0][1] - py),
                                   c[0]))
+        return cands
 
     def route(self, dest_map):
         """Plan-only cross-map route to `dest_map`: BFS over mapgraph.json's
@@ -994,9 +1089,9 @@ class Driver:
                 nxt = e["to_map"]
                 if nxt in prev:
                     continue
-                step = self._edge_step(e)
-                if step:
-                    prev[nxt] = (m, e, step)
+                cands = self._edge_steps(e)
+                if cands:
+                    prev[nxt] = (m, e, cands)
                     q.append(nxt)
         if dest not in prev:
             raise LookupError(f"no routable mapgraph path {src} -> {dest}")
@@ -1005,11 +1100,14 @@ class Driver:
             hops.append(prev[m])
             m = prev[m][0]
         steps = []
-        for frm, e, ((ax, ay), d) in reversed(hops):
+        for frm, e, cands in reversed(hops):
+            (ax, ay), d = cands[0]
             steps.append({"kind": "walk", "map": frm, "x": ax, "y": ay,
                           "why": f"approach {e['kind']} to {e['to_map']}"})
             trans = {"kind": e["kind"], "from": frm, "to": e["to_map"],
-                     "dir": d, "notes": e.get("notes")}
+                     "dir": d, "notes": e.get("notes"),
+                     "approaches": [{"x": a[0][0], "y": a[0][1], "dir": a[1]}
+                                    for a in cands]}
             if e["kind"] == "warp":
                 trans["cell"] = list(e["cells"])
                 trans["warp_id"] = e.get("warp_id")
@@ -1035,7 +1133,9 @@ class Driver:
         fires with the key held sideways), settle() after every transition,
         then verify landing map + cell. Small drift past the modeled
         landing is expected (held key glides ~2 cells; AGENTS.md gotcha
-        14); anything worse raises TravelError."""
+        14); anything worse raises TravelError. If an edge's approach cell
+        is unreachable from our side (one-way ledges/walls), falls back to
+        that edge's other approaches."""
         dest = self._resolve_map(dest_map)
         self._refresh_nav_blocks()
         if self.map_name() == dest:
@@ -1044,16 +1144,45 @@ class Driver:
         print(f"[travel -> {dest}] {len(steps)} steps from "
               f"{self.map_name()} {self.pos()[2:]}"
               f"{' ' + label if label else ''}".rstrip(), flush=True)
+        _edge_counts = {}
         for i, st in enumerate(steps):
             cur = self.map_name()
             if st["kind"] == "walk":
                 if cur != st["map"]:
                     raise TravelError(f"leg {i}: plan expects "
                                       f"{st['map']}, we're on {cur}")
-                if not self.goto(st["x"], st["y"], f"travel -> {dest}"):
-                    raise TravelError(f"leg {i}: no path to approach cell "
-                                      f"{(st['x'], st['y'])} on {cur}")
+                nxt = steps[i + 1] if i + 1 < len(steps) else None
+                alts = (nxt.get("approaches") if nxt else None) or []
+                if self.goto(st["x"], st["y"], f"travel -> {dest}"):
+                    for alt in alts:
+                        if [alt["x"], alt["y"]] == [st["x"], st["y"]]:
+                            nxt["dir"] = alt["dir"]
+                    continue
+                # this approach may sit on the far side of a one-way ledge
+                # or wall -- fall back to the edge's other approaches
+                for alt in alts:
+                    if [alt["x"], alt["y"]] == [st["x"], st["y"]]:
+                        continue
+                    print(f"  approach {(st['x'], st['y'])} unreachable; "
+                          f"trying {alt['dir']} from "
+                          f"{(alt['x'], alt['y'])}", flush=True)
+                    if self.goto(alt["x"], alt["y"], f"travel -> {dest}"):
+                        nxt["dir"] = alt["dir"]
+                        break
+                else:
+                    raise TravelError(
+                        f"leg {i}: no path to any approach of the next "
+                        f"{nxt['kind'] if nxt else 'transition'} on {cur}")
                 continue
+            key = json.dumps([st["kind"], st["from"], st["to"], st["dir"],
+                              st.get("cell") or st.get("band")], sort_keys=True)
+            edge_count = _edge_counts.get(key, 0) + 1
+            _edge_counts[key] = edge_count
+            if edge_count > 2:
+                raise TravelError(
+                    f"leg {i}: transition {st['from']} -> {st['to']} via "
+                    f"{st['dir']} executed {edge_count}x this travel() -- "
+                    f"bailing out instead of ping-ponging")
             if cur != st["from"]:
                 raise TravelError(f"leg {i}: plan transitions from "
                                   f"{st['from']}, we're on {cur}")
@@ -1087,6 +1216,8 @@ class Driver:
                     f"leg {i}: landed {here} {(mx, my)}, modeled landing "
                     f"{expected} (drift {drift} > 3)")
             print(f"  -> {here} {(mx, my)} (drift {drift})", flush=True)
+            if here == dest:
+                return steps      # landed on the destination: done
         return steps
 
     def grind(self, pace="D U", target_level=13, min_hp=7, max_battles=80):
@@ -1126,7 +1257,9 @@ class Driver:
         reachable (warp tiles, counters). Standing spots must be real."""
         try:
             grid = self.nav.grid(name)
-            return grid[c[1]][c[0]] in WALKABLE or grid[c[1]][c[0]] in HOPS
+            if 0 <= c[0] < len(grid[0]) and 0 <= c[1] < len(grid):
+                return grid[c[1]][c[0]] in WALKABLE or grid[c[1]][c[0]] in HOPS
+            return False
         except KeyError:
             return False
 
