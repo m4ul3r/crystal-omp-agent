@@ -3,6 +3,9 @@ an input DSL, and savestate files.
 """
 
 import json
+import hashlib
+import sys
+from importlib import metadata as _pkg_metadata
 from pathlib import Path
 
 SCREEN_W, SCREEN_H = 20, 18
@@ -20,6 +23,22 @@ _BUTTONS = {
 
 class InputError(ValueError):
     pass
+
+
+def _rom_digest(path):
+    """SHA-256 of the ROM file; savestates only load against the same ROM."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _pyboy_version():
+    try:
+        return _pkg_metadata.version("pyboy")
+    except Exception:
+        return "unknown"
 
 
 def parse_sequence(text):
@@ -67,6 +86,8 @@ class Crystal:
         self.charmap = charmap
         self.py = PyBoy(str(rom_path), window="null", sound_emulated=False,
                         log_level="CRITICAL", symbols=None)
+        self._pyboy_version = _pyboy_version()
+        self._rom_sha256 = _rom_digest(rom_path)
         # PyBoy's frame counter is per-process; carry the cumulative count
         # across invocations in a sidecar next to the state file.
         self._base_frames = 0
@@ -74,8 +95,23 @@ class Crystal:
             with open(state_path, "rb") as f:
                 self.py.load_state(f)
             meta = Path(f"{state_path}.meta")
+            stamped = {}
             if meta.exists():
-                self._base_frames = json.loads(meta.read_text()).get("frames", 0)
+                stamped = json.loads(meta.read_text())
+                self._base_frames = stamped.get("frames", 0)
+            missing = [k for k in ("pyboy", "rom_sha256") if k not in stamped]
+            if missing:
+                print(f"note: {meta.name} lacks provenance stamps "
+                      f"({', '.join(missing)}); assuming compatible",
+                      file=sys.stderr)
+            for key, ours in (("pyboy", self._pyboy_version),
+                              ("rom_sha256", self._rom_sha256)):
+                theirs = stamped.get(key)
+                if theirs is not None and theirs != ours:
+                    raise RuntimeError(
+                        f"{state_path}: written by {key}={theirs!r}, running "
+                        f"{key}={ours!r}; refusing to load (savestate format "
+                        "is version-coupled)")
         self._start_count = self.py.frame_count
 
     # -- memory ------------------------------------------------------------
@@ -180,7 +216,11 @@ class Crystal:
             self.py.save_state(f)
         tmp.replace(state_path)
         meta_tmp = Path(f"{state_path}.meta.tmp")
-        meta_tmp.write_text(json.dumps({"frames": self.frame}))
+        meta_tmp.write_text(json.dumps({
+            "frames": self.frame,
+            "pyboy": self._pyboy_version,
+            "rom_sha256": self._rom_sha256,
+        }))
         meta_tmp.replace(Path(f"{state_path}.meta"))
 
     def stop(self):

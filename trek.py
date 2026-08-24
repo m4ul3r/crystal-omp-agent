@@ -5,7 +5,9 @@ in a single persistent process (no per-command emulator reload).
 Usage: .venv/bin/python trek.py <leg> [args]   (see main() dispatch)
 """
 
+import heapq
 import json
+import logging
 import sys
 from collections import deque
 from pathlib import Path
@@ -13,14 +15,18 @@ sys.path.insert(0, str(Path(__file__).parent))
 from crystalagent import paths
 from crystalagent.battle import Battle, BattleData, bag_item_index, cancel_pack, goto_pocket, _norm_item
 from crystalagent.charmap import Charmap
-from crystalagent.emu import Crystal, parse_sequence
-from crystalagent.menus import Menus, battle_menu_up
+from crystalagent.emu import Crystal, parse_sequence, InputError
+from crystalagent import hookevents
+from crystalagent.menus import Menus, battle_menu_up, dialog_press_safe
 from crystalagent.names import Names
 from crystalagent.nav import MapData, STEP, WARPS, WALKABLE, HOPS, CONN_NAME, ICE, COLL_PIT
 from crystalagent.nav import WATER as _NAV_WATER
 from crystalagent.nav import ICE as _NAV_ICE
+from crystalagent.schemas import validate_observe, validate_route
 from crystalagent.state import game_state, status_line
 from crystalagent.symfile import Symbols
+
+log = logging.getLogger("trek")
 
 DIRS = {"U": "UP", "D": "DOWN", "L": "LEFT", "R": "RIGHT"}
 
@@ -183,6 +189,115 @@ class TrekNav(MapData):
                     prev[nxt] = (cur, mv)
                     q.append(nxt)
         return None
+
+
+# --- ASCII map view ---------------------------------------------------------
+
+_GLYPH_LEGEND = [
+    ("@", "player"),
+    (".", "floor / walkable"),
+    ("%", "tall grass"),
+    ("~", "water (surf to cross)"),
+    ("O", "warp: door, stairs, ladder"),
+    ("^", "one-way ledge hop"),
+    ("=", "ice floor (slides)"),
+    ("x", "pit"),
+    ("!", "sealed or live-blocked cell"),
+    ("N", "NPC"),
+    ("#", "solid wall"),
+    (" ", "unreachable from here"),
+]
+
+
+def _cell_glyph(c):
+    if c == 0x14:
+        return "%"
+    if c in _NAV_WATER:
+        return "~"
+    if c in WARPS:
+        return "O"
+    if c in HOPS:
+        return "^"
+    if c in _NAV_ICE:
+        return "="
+    if c == COLL_PIT:
+        return "x"
+    if c in WALKABLE:
+        return "."
+    return "#"
+
+
+def _reach(nav, map_name, start, surf):
+    """Cells reachable with plain moves + ledge hops + ice slides; warps
+    and map edges are walls for view purposes."""
+    grid = nav.grid(map_name)
+    hgt, wid = len(grid), len(grid[0])
+    blocked = getattr(nav, "blocked", {}).get(map_name, ())
+    seen = {tuple(start)}
+    q = deque([tuple(start)])
+    while q:
+        x, y = q.popleft()
+        here = grid[y][x]
+        for d, (dx, dy) in STEP.items():
+            if here in HOPS and HOPS[here] == d:
+                nx, ny = x + 2 * dx, y + 2 * dy
+            elif here in _NAV_ICE:
+                nx, ny = nav.slide(map_name, x, y, d)
+            else:
+                nx, ny = x + dx, y + dy
+            if not (0 <= nx < wid and 0 <= ny < hgt):
+                continue
+            if (nx, ny) in seen or (nx, ny) in blocked:
+                continue
+            if nav._enterable(map_name, nx, ny):
+                seen.add((nx, ny))
+                q.append((nx, ny))
+    return seen
+
+
+def render_map_view(nav, map_name, pos, npcs=(), surf=False):
+    """ASCII view of the region reachable on foot/surf from `pos`, cropped
+    to its bounding box (+1). Global coordinates in the rulers so the
+    deciding LLM can quote them straight back to goto()/talk_to()."""
+    grid = nav.grid(map_name)
+    hgt, wid = len(grid), len(grid[0])
+    reach = _reach(nav, map_name, pos, surf)
+    blocked = set(getattr(nav, "blocked", {}).get(map_name, ()))
+    npc_set = {tuple(c) for c in npcs}
+    xs = [x for x, _ in reach | {tuple(pos)}]
+    ys = [y for _, y in reach | {tuple(pos)}]
+    ox, oy = max(min(xs) - 1, 0), max(min(ys) - 1, 0)
+    ex, ey = min(max(xs) + 1, wid - 1), min(max(ys) + 1, hgt - 1)
+    lines = [f"map={map_name} origin=({ox},{oy}) "
+             f"pos=({pos[0]},{pos[1]})"]
+    # two-row ruler: tens only where they change, units everywhere
+    tens_row = "".join(
+        str((x // 10) % 10) if (x - ox) % 10 == 0 else " "
+        for x in range(ox, ex + 1))
+    units_row = "".join(str(x % 10) for x in range(ox, ex + 1))
+    lines.append("     " + tens_row)
+    lines.append("     " + units_row)
+    for y in range(oy, ey + 1):
+        row = []
+        for x in range(ox, ex + 1):
+            if (x, y) == tuple(pos):
+                row.append("@")
+            elif (x, y) in npc_set:
+                row.append("N")
+            elif (x, y) in blocked:
+                row.append("!")
+            elif (x, y) in reach:
+                row.append(_cell_glyph(grid[y][x]))
+            else:
+                row.append(" ")
+        lines.append(f"{y:4d} " + "".join(row))
+    used = {ch for line in lines[3:] for ch in line.split(" ", 1)[-1]}
+    legend = [f"  {g} {desc}" for g, desc in _GLYPH_LEGEND
+              if g != " " and g in used]
+    if legend:
+        lines.append("legend:")
+        lines += legend
+    return "\n".join(lines)
 
 
 _coord_event_cache = None
@@ -415,6 +530,7 @@ class Driver:
         self._whiteout_pending = False   # set by fight() on a detected wipe
         self.whiteouts = 0
         self.whiteout_policy = "abort"   # 'abort' | 'continue' (old behavior)
+        self.hooks = hookevents.install(self.emu)
 
     # -- observations ------------------------------------------------------
 
@@ -426,6 +542,29 @@ class Driver:
     def map_name(self):
         g, n, _, _ = self.pos()
         return self.names.maps.get((g, n), f"?{g}:{n}")
+
+    def _map_const(self):
+        """Position's CONST_NAME: grid()/camel are keyed by CONST_NAME
+        (nav.camel maps CONST_NAME -> CamelCase)."""
+        name = self.map_name()
+        for const, camel in self.nav.camel.items():
+            if camel == name:
+                return const
+        return name                       # already CONST_NAME (or unknown)
+
+    def map_view(self, map_name=None):
+        """ASCII view of the region reachable on foot/surf from the
+        player's cell (render_map_view); pass a CamelCase or CONST map
+        name to view another map from its origin cell (0,0)."""
+        if map_name and map_name != self.map_name():
+            const = next((c for c, camel in self.nav.camel.items()
+                          if camel == map_name or c == map_name), None)
+            if const is None:
+                raise SystemExit(f"unknown map {map_name!r}")
+            return render_map_view(self.nav, const, (0, 0))
+        return render_map_view(self.nav, self._map_const(),
+                               self.pos()[2:], npcs=self.npc_cells(),
+                               surf=bool(getattr(self.nav, "surf", False)))
 
     def battle(self):
         return self.emu.read_u8("wBattleMode")
@@ -603,7 +742,7 @@ class Driver:
                                      and 0 <= nx < len(g[0]) else "off-map")
         except Exception:
             pass
-        return {
+        obs = {
             "map": loc["map"], "group": loc["map_group"],
             "number": loc["map_number"], "x": loc["x"], "y": loc["y"],
             "tiles": tiles,
@@ -617,6 +756,7 @@ class Driver:
                    "battle": bool(s["battle"])},
             "frame": s["frame"],
         }
+        return validate_observe(obs)
 
     def settle(self, quiet=3, spacing=20, max_frames=900):
         """Wait until map + position stop changing: door/cutscene warps
@@ -770,10 +910,10 @@ class Driver:
         """Confirm a naming screen. With a name, actually type it; without,
         confirm with the minimal name (fast path)."""
         if name:
-            print(f"  naming keyboard: typing {name!r}", flush=True)
+            log.info(f"  naming keyboard: typing {name!r}")
             self.type_name(name)
             return
-        print("  naming keyboard: confirming", flush=True)
+        log.info("  naming keyboard: confirming")
         self.press("START:4 .:20 A:4 .:30")          # jump to END, confirm
         if self.keyboard_open():                      # empty name refused:
             self.press("A:2 .:10 START:4 .:20 A:4 .:30")  # type one letter
@@ -808,7 +948,7 @@ class Driver:
         chars = [c for c in name.upper()[:max_len] if c in grid]
         if not chars:
             chars = ["A"]
-        print(f"  typing name {''.join(chars)!r}", flush=True)
+        log.info(f"  typing name {''.join(chars)!r}")
         self.press("START:6 .:20")               # snap to END zone (8,4)
         x, y = kb_step("U", (8, 3))              # control row moves by ZONE,
         for ch in chars:                         # so navigate on char rows
@@ -830,16 +970,54 @@ class Driver:
                     break
         self.press("START:6 .:20 A:10 .:40")     # snap to END, confirm
 
-    def flush_dialog(self, max_frames=6000, quiet_frames=40):
-        """Press A while a textbox is up; return once it's been gone a bit.
-        Handles a naming keyboard if one appears."""
+    def _flush_dialog_hooks(self, max_frames, quiet_frames=40):
+        """Event-driven advance: A only while the engine reports a page
+        waiting for a button (PromptButton hook); stop the moment a menu
+        or battle-end event fires -- zero blind presses."""
         f0, quiet = self.emu.frame, 0
         while self.emu.frame - f0 < max_frames:
             if self.battle():
                 return "battle"
-            if self.textbox():
+            events = self.hooks.drain()
+            kinds = [k for k, _ in events]
+            if hookevents._STOP_EVENTS & set(kinds):
+                self.press(".:12")
+                return "menu"
+            if "page_wait" in kinds and dialog_press_safe(
+                    self.emu.screen_text()):
                 self.press("A:2 .:8")
                 quiet = 0
+                continue
+            if self.keyboard_open():
+                self.dismiss_keyboard()
+                quiet = 0
+                continue
+            self.press(".:8")
+            quiet += 8
+            if quiet >= quiet_frames:
+                return "done"
+        return "timeout"
+
+    def flush_dialog(self, max_frames=6000, quiet_frames=40):
+        """Press A while a textbox is up; return once it's been gone a bit.
+        Handles a naming keyboard if one appears. With live hooks this is
+        event-driven; otherwise the legacy cadence applies, gated by
+        dialog_press_safe so a stray menu never gets blind-picked."""
+        f0, quiet = self.emu.frame, 0
+        while self.emu.frame - f0 < max_frames:
+            if self.battle():
+                return "battle"
+            if self.hooks is not None and \
+                    self.hooks.has("page_wait"):
+                return self._flush_dialog_hooks(max_frames, quiet_frames)
+            rows = self.emu.screen_text()
+            if self.textbox() and dialog_press_safe(rows):
+                self.press("A:2 .:8")
+                quiet = 0
+            elif self.textbox():
+                # cursor glyph outside the box: a choice/menu opened --
+                # report instead of blind-picking it (AGENTS.md gotcha 13)
+                return "menu"
             elif self.keyboard_open():
                 self.dismiss_keyboard()
                 quiet = 0
@@ -876,20 +1054,43 @@ class Driver:
         self._pending_nickname = None
         self._resolve_learn_flow(4000)   # sweep post-battle leftovers
         self.flush_dialog(3000)
-        # Wipe signature: losing teleports to the last Pokécenter and
-        # full-heals, and money only ever falls during a battle by LOSING
-        # it -- drop + full heal = whiteout (post-wipe 'hp > 0' proves
-        # nothing; PROGRESS.md gotcha).
-        if money0 is not None and not self.battle():
+        # Wipe signature: play() reports 'wipe' when the party is down at
+        # battle end -- authoritative by itself. The money heuristic below
+        # covers wipes whose cutscene resolves during flush_dialog (and
+        # the broke-trainer edge where the loss drops Y0), because full HP
+        # after the fact proves nothing on its own.
+        wiped = outcome == "wipe"
+        if not wiped and money0 is not None and not self.battle():
             s = game_state(self.emu, self.names)
-            if s["player"].get("money", money0) < money0 and \
-                    all(m["hp"] == m["max_hp"]
-                        for m in s["party"] if not m["egg"]):
-                self.whiteouts += 1
-                self._whiteout_pending = True
-                print(f"  [WHITEOUT] wiped -> {self.map_name()} "
-                      f"{self.pos()[2:]}; auto-healed at last Pokécenter",
-                      flush=True)
+            wiped = s["player"].get("money", money0) < money0 and \
+                all(m["hp"] == m["max_hp"]
+                    for m in s["party"] if not m["egg"])
+        if wiped and not self.battle():
+            self.whiteouts += 1
+            self._whiteout_pending = True
+            log.warning(f"  [WHITEOUT] wiped -> {self.map_name()} "
+                  f"{self.pos()[2:]}; auto-healed at last Pokécenter",
+                  )
+        elif outcome in ("timeout", "stuck"):
+            # Burn ZERO blind retries: dump the frozen battle so the wedge
+            # is diagnosable (the historic Bridget/Jigglypuff freeze cost
+            # ~10 retries before anyone looked at the screen).
+            try:
+                me, enemy = b.me(), b.enemy()
+                log.warning("  [fight diagnostic] frozen screen:")
+                for r in self.emu.screen_text():
+                    if r.strip():
+                        log.info(f"    | {r}")
+                mv = [(self.names.moves.get(m, f"?id{m}"), p)
+                      for m, p in me["moves"]]
+                log.warning(f"  [fight diagnostic] me={me['name']} L{me['level']} "
+                      f"{me['hp']}/{me['max_hp']} moves={mv}")
+                log.warning(f"  [fight diagnostic] enemy={enemy['name']} "
+                      f"L{enemy['level']} {enemy['hp']}/{enemy['max_hp']}",
+                      )
+            except Exception as diag_err:
+                log.warning(f"  [fight diagnostic] unavailable: {diag_err}",
+                      )
         # Scratch sidecar, NOT the working state: a snapshot taken during
         # battle resolution must never become a resumable fork if the leg
         # crashes before the next real save. watch.py can still open
@@ -897,9 +1098,9 @@ class Driver:
         if self.state_path:
             self.emu.save(Path(self.state_path).with_suffix(".watch.state"))
         lead = self.lead()
-        print(f"  battle [{outcome}, {self.emu.frame - f0} frames] -> "
+        log.info(f"  battle [{outcome}, {self.emu.frame - f0} frames] -> "
               f"{lead['name']} L{lead['level']} {lead['hp']}/{lead['max_hp']}",
-              flush=True)
+              )
         return lead
 
     def _whiteout_stop(self, where):
@@ -911,8 +1112,8 @@ class Driver:
             return False
         self._whiteout_pending = False
         if self.whiteout_policy == "abort":
-            print(f"  [whiteout] aborting {where} -- party healed at "
-                  f"{self.map_name()}; relaunch deliberately", flush=True)
+            log.warning(f"  [whiteout] aborting {where} -- party healed at "
+                  f"{self.map_name()}; relaunch deliberately")
             return True
         return False
 
@@ -1063,7 +1264,7 @@ class Driver:
         heal_pokecenter(self)
         if best != here:
             self.travel(here)
-        print("  train: nurse heal done", flush=True)
+        log.info("  train: nurse heal done")
 
     def train(self, target_level, max_battles=150):
         """Rotation-train every non-egg party member to >= target_level in
@@ -1075,27 +1276,36 @@ class Driver:
         if not grass:
             raise ValueError(f"no grass on {self.map_name()} -- walk/travel "
                              "to a route with grass first")
-        print(f"[train] target L{target_level}, cap {max_battles} battles",
-              flush=True)
+        log.info(f"[train] target L{target_level}, cap {max_battles} battles",
+              )
         battles = dry = 0
         while True:
             obs = self.observe()
             party = obs["party"]
             members = [(i, m) for i, m in enumerate(party)
                        if not m.get("egg")]
-            elig = sorted((i for i, m in members
-                           if m["hp"] > 0 and m["level"] < target_level),
-                          key=lambda i: party[i]["level"])
-            if not elig or battles >= max_battles:
+            underleveled = any(m["level"] < target_level
+                               for _, m in members)
+            if not underleveled or battles >= max_battles:
                 break
             lead = party[0]
             sick = any(m.get("status") == "PSN" or m["hp"] <= 0
                        for _, m in members)
             if sick or lead["hp"] / max(lead["max_hp"], 1) < 0.35:
-                print(f"  train: healing rail ({lead['species']} "
-                      f"{lead['hp']}/{lead['max_hp']})", flush=True)
+                log.info(f"  train: healing rail ({lead['species']} "
+                      f"{lead['hp']}/{lead['max_hp']})")
                 self._train_heal()
                 continue               # relocate grass from wherever we land
+            elig = sorted((i for i, m in members
+                           if m["hp"] > 0 and m["level"] < target_level),
+                          key=lambda i: party[i]["level"])
+            if not elig:
+                # everyone still under target is FAINTED: the rail above
+                # only fires on lead-HP/poison, so revive explicitly
+                # instead of reporting a bogus 'done' (bit a verify run:
+                # Poliwag fainted -> elig empty -> exited at min L4/10).
+                self._train_heal()
+                continue
             if not self.battle():
                 cx, cy = obs["x"], obs["y"]
                 near = sorted(grass, key=lambda c: abs(c[0] - cx)
@@ -1110,6 +1320,12 @@ class Driver:
                     raise RuntimeError("train: no reachable grass cell on "
                                        f"{self.map_name()}")
                 while not self.battle():
+                    if self.menu_open():
+                        # a leftover post-battle modal silently eats every
+                        # movement press (gotcha 7) -- 400 'dry steps' of
+                        # nothing. B out of it before pacing on.
+                        self.close_menus()
+                        continue
                     o = self.observe()
                     tiles = o["tiles"]
                     npcs = {tuple(c) for c in o["npcs"]}
@@ -1143,28 +1359,34 @@ class Driver:
             def policy(rows, me, enemy, _nxt=nxt, _tgt=tgt,
                        _did=switched):
                 """Once per battle: rotate the next underleveled member in;
-                afterwards None lets the default smart attack/potion/flee
-                policy take over."""
+                afterwards None lets the default smart attack policy take
+                over. A hurting active mon FLEES instead of falling through
+                to the default potion flow: its target-slot-0 heal lands on
+                a full-HP lead ("no effect"), never consumes, and the
+                potion target list wedged 150 battles straight. The nurse
+                rail between battles does the healing instead."""
                 if not _did[0] and _nxt and not (
                         me["name"] == _tgt["species"]
                         and me["level"] == _tgt["level"]
                         and me["max_hp"] == _tgt["max_hp"]):
                     _did[0] = True
                     return ("switch", _nxt)
-                return None
+                if me["hp"] / max(me["max_hp"], 1) < 0.30:
+                    return "flee"       # trainer battles: fails, wedge
+                return None             # guard degrades to plain attack
 
             self.fight(policy=policy)
             battles += 1
             dry = 0
-            print(f"  train: battle {battles}/{max_battles}", flush=True)
+            log.info(f"  train: battle {battles}/{max_battles}")
             if battles % 10 == 0:
                 self.save()
         final = [m["level"] for m in self.observe()["party"]
                  if not m.get("egg")]
         lo = min(final) if final else 0
-        print(f"[train] done after {battles} battles: party min L{lo}"
+        log.info(f"[train] done after {battles} battles: party min L{lo}"
               f"{' (target reached)' if lo >= target_level else ''}",
-              flush=True)
+              )
         self.save()
         return lo
 
@@ -1327,7 +1549,7 @@ class Driver:
                 break
             self.press(".:40")
         else:
-            print("  START menu did not open", flush=True)
+            log.warning("  START menu did not open")
             return False
         # has_label() is a startswith test and POKéDEX also starts with
         # "POK", so steer by the row text instead of a label prefix.
@@ -1339,28 +1561,28 @@ class Driver:
             self.press("D:6 .:12")
         else:
             self.close_menus()
-            print("  could not open the party menu", flush=True)
+            log.info("  could not open the party menu")
             return False
         self.press(".:25")
         for row, label in ((row_a, "first"), (row_b, "second")):
             if not self._party_cursor_to(row):
                 self.close_menus()
-                print(f"  cursor never reached {label} row {row}", flush=True)
+                log.info(f"  cursor never reached {label} row {row}")
                 return False
             self.press("A:4 .:25")
             if label == "first":
                 # slot menu: STATS / SWITCH / ITEM / CANCEL
                 if not self.menu.select_label("SWITCH", max_presses=6):
                     self.close_menus()
-                    print("  SWITCH entry not found", flush=True)
+                    log.info("  SWITCH entry not found")
                     return False
                 self.press(".:25")
         self.press(".:30")
         self.close_menus()
         after = [m["species"] for m in game_state(self.emu, self.names)["party"]]
         ok = after == want
-        print(f"  party_swap {row_a}<->{row_b}: {'ok' if ok else 'FAILED'} {after}",
-              flush=True)
+        log.warning(f"  party_swap {row_a}<->{row_b}: {'ok' if ok else 'FAILED'} {after}",
+              )
         return ok
 
     def use_cut(self, tree_x, tree_y, label="", forget_move=None):
@@ -1383,7 +1605,7 @@ class Driver:
                                f"cuttable tree on {name}")
         knows, knower = self._party_knows_cut()
         if not knows:
-            print("  no one knows CUT; teaching HM01", flush=True)
+            log.info("  no one knows CUT; teaching HM01")
             self._teach_hm01(forget_move=forget_move)
             knows, knower = self._party_knows_cut()
         # approach cell: any standable neighbour we can actually reach,
@@ -1404,7 +1626,7 @@ class Driver:
                     break
             if placed:
                 break
-            print("  approach blocked (wandering NPC?); pausing", flush=True)
+            log.info("  approach blocked (wandering NPC?); pausing")
             self.press(".:60 .:60 .:60 A:4 .:30")
         if not placed:
             raise RuntimeError(
@@ -1484,8 +1706,8 @@ class Driver:
             raise RuntimeError(
                 f"use_cut: tree at {(tree_x, tree_y)} still standing after "
                 f"CUT (step {r} -> {self.pos()[2:]})")
-        print(f"  [cut] tree at {(tree_x, tree_y)} removed; stepped {r} "
-              f"-> {self.map_name()} {self.pos()[2:]}", flush=True)
+        log.info(f"  [cut] tree at {(tree_x, tree_y)} removed; stepped {r} "
+              f"-> {self.map_name()} {self.pos()[2:]}")
         return True
 
 
@@ -1505,17 +1727,17 @@ class Driver:
         e = self.emu
         idx = bag_item_index(e, self.names, item_name, "items")
         if idx is None:
-            print(f"  no {item_name} in bag", flush=True)
+            log.info(f"  no {item_name} in bag")
             return False
         self.press("START:4 .:25")               # open START menu
         if not self.menu_open():
             # Post-warp the START press sometimes lands during the fade;
             # blind D/A presses here WALK THE PLAYER (once onto a ladder).
-            print("  START menu did not open", flush=True)
+            log.warning("  START menu did not open")
             return False
         if not self.menu.select_label("PACK", max_presses=8):
             self.press("B:4 .:10")
-            print("  could not open PACK", flush=True)
+            log.info("  could not open PACK")
             return False
         if not goto_pocket(self.menu, "items"):
             cancel_pack(self.menu)
@@ -1527,7 +1749,7 @@ class Driver:
         if not self.menu.wait_for_label("USE", 300) or \
                 not self.menu.select_label("USE", max_presses=4):
             cancel_pack(self.menu)
-            print(f"  no USE option for {item_name}", flush=True)
+            log.info(f"  no USE option for {item_name}")
             return False
         used = True
         # healing/status items ask for a target ("Use on which PM?");
@@ -1562,7 +1784,7 @@ class Driver:
         """Walk a path like 'L*12 U*3 D'. Handles battles, NPC dialogs, and
         map transitions along the way; reports blocks instead of looping."""
         if label:
-            print(f"[{label}] from {self.map_name()} {self.pos()[2:]}", flush=True)
+            log.info(f"[{label}] from {self.map_name()} {self.pos()[2:]}")
         for token in path.split():
             d, _, n = token.partition("*")
             d, n = d[0].upper(), int(n or 1)
@@ -1575,7 +1797,7 @@ class Driver:
                         return False
                 elif r == "warp":
                     self.settle()
-                    print(f"  -> {self.map_name()} {self.pos()[2:]}", flush=True)
+                    log.info(f"  -> {self.map_name()} {self.pos()[2:]}")
                     done += 1
                     stuck = 0
                 elif r == "moved":
@@ -1589,8 +1811,8 @@ class Driver:
                     if stuck == 2:
                         self.press("B:4 .:10")  # close a stray menu, then retry
                     if stuck >= 4:
-                        print(f"  BLOCKED {d} at {self.map_name()} {self.pos()[2:]}",
-                              flush=True)
+                        log.warning(f"  BLOCKED {d} at {self.map_name()} {self.pos()[2:]}",
+                              )
                         return False
         return True
 
@@ -1627,26 +1849,31 @@ class Driver:
         replans = idle = passes = 0
         edge_counts = {}    # (from_map, to_map): crossings this one call
         if label or goal_map != self.map_name():
-            print(f"[goto {goal}"
+            log.info(f"[goto {goal}"
                   f"{'' if goal_map == self.map_name() else ' -> ' + goal_map}]"
-                  f"{' ' + label if label else ''}".rstrip(), flush=True)
+                  f"{' ' + label if label else ''}".rstrip())
         while replans < 20 and idle < 40 and passes < 60:
             passes += 1
             cur_map, cur = self.map_name(), self.pos()[2:]
             if exit_warp_goal:
                 if cur_map != entry_map:
-                    print(f"  -> left through warp {goal}", flush=True)
+                    log.info(f"  -> left through warp {goal}")
                     return True
             elif cur_map == goal_map and cur == goal:
                 return True
-            # a warp-tile goal fires on arrival: standing at that warp's
-            # landing cell means we walked through it (e.g. goto on a
-            # Pokécenter door ends inside, not stuck bouncing on the mat)
+            # a warp-tile goal fires the instant it is stepped on, so you
+            # can never STAND on it when approaching from outside -- but
+            # arrival never re-triggers, so coming out of goal_map's own
+            # exit leaves you standing there. Accept proximity ONLY while
+            # inside goal_map: requiring land[0] == cur_map instead once
+            # blessed a PC-interior goal as "arrived" while we stood
+            # outside on the street, having never walked in (silent
+            # objective skip -- the straight-through killer).
             land = (self.nav.warps.get(goal_map, {}).get(goal)
                     and self.nav._warp_landing(goal_map, goal))
-            if land and land[0] == cur_map and \
+            if land and cur_map == goal_map and \
                     abs(cur[0] - land[1][0]) + abs(cur[1] - land[1][1]) <= 2:
-                print(f"  -> arrived through warp {goal}", flush=True)
+                log.info(f"  -> arrived through warp {goal}")
                 return True
             # NPCs scope to the replan's start map inside _bfs, so always
             # thread around them -- cross-map legs hit NPCs just the same
@@ -1663,13 +1890,13 @@ class Driver:
                     # trainers.
                     path = self.nav.find_path(cur_map, cur, goal)
                     if not path:
-                        print(f"  no static path {cur_map} {cur} -> "
-                              f"{goal}", flush=True)
+                        log.info(f"  no static path {cur_map} {cur} -> "
+                              f"{goal}")
                         return False
                     replans += 1
                     if replans % 5 == 1:
-                        print(f"  threading {cur} -> {goal} past NPCs",
-                              flush=True)
+                        log.info(f"  threading {cur} -> {goal} past NPCs",
+                              )
             else:
                 path = self.nav.find_route(cur_map, cur, goal_map, goal,
                                            avoid)
@@ -1677,14 +1904,14 @@ class Driver:
                     relaxed = self.nav.find_route(cur_map, cur, goal_map,
                                                   goal)
                     if not relaxed:
-                        print(f"  no static path {cur_map} {cur} -> "
-                              f"{goal_map} {goal}", flush=True)
+                        log.info(f"  no static path {cur_map} {cur} -> "
+                              f"{goal_map} {goal}")
                         return False
                     self.press(".:40")  # beat for genuinely moving NPCs
                     replans += 1
                     if replans % 5 == 0:
-                        print(f"  threading {cur} -> {goal} past NPCs",
-                              flush=True)
+                        log.info(f"  threading {cur} -> {goal} past NPCs",
+                              )
                     path = relaxed
             moved = False
             for mv in path:
@@ -1697,7 +1924,7 @@ class Driver:
                 elif r == "warp":
                     here = self.map_name()
                     self.settle()
-                    print(f"  -> {here} {self.pos()[2:]}", flush=True)
+                    log.info(f"  -> {here} {self.pos()[2:]}")
                     key = (cur_map, here)
                     edge_counts[key] = edge_counts.get(key, 0) + 1
                     if edge_counts[key] > 2:
@@ -1728,8 +1955,8 @@ class Driver:
                         cause = " [npc on target cell]"
                     else:
                         cause = ""
-                    print(f"  blocked {mv} at {self.map_name()} "
-                          f"{(bx, by)}{cause}", flush=True)
+                    log.info(f"  blocked {mv} at {self.map_name()} "
+                          f"{(bx, by)}{cause}")
                     if self.textbox():
                         self.flush_dialog()
                     elif self.menu_open():
@@ -1742,8 +1969,8 @@ class Driver:
                 continue   # path exhausted; loop re-checks arrival/replans
             if not moved:
                 idle += 1
-        print(f"  GAVE UP at {self.map_name()} {self.pos()[2:]} -> "
-              f"{goal_map} {goal}", flush=True)
+        log.warning(f"  GAVE UP at {self.map_name()} {self.pos()[2:]} -> "
+              f"{goal_map} {goal}")
         return False
 
     # Deliberate-trip opt-in (FABLE_FEEDBACK failure pattern 5): after
@@ -1791,10 +2018,12 @@ class Driver:
                 if not script_is_disruptive(self.nav._repo, camel, script):
                     continue
                 if self.trip_scenes:
-                    print(f"  [trip_scenes] crossing {const} scene cell "
-                          f"{(x, y)} unblocked", flush=True)
+                    log.info(f"  [trip_scenes] crossing {const} scene cell "
+                          f"{(x, y)} unblocked")
                     continue
                 cells.add((x, y))
+            if cells:
+                blocks[const] = cells
         self.nav.blocked = blocks
 
     def _mg_edges(self):
@@ -1851,43 +2080,96 @@ class Driver:
                                   c[0]))
         return cands
 
-    def route(self, dest_map):
-        """Plan-only cross-map route to `dest_map`: BFS over mapgraph.json's
-        validated warp/connection edges, expanded into per-leg steps --
+    # Dijkstra edge costs: walking inside a map is ~1 unit/cell, every
+    # map transition is a flat beat (door hold + settle + drift risk).
+    # Hop-count BFS treated a 20-map detour ring (Azalea -> Route 33 ->
+    # Union Cave -> ... -> Goldenrod -> Route 34 -> Ilex) as EQUAL to the
+    # 2-hop direct route -- it then got EXECUTED whenever the direct
+    # approach was unavailable. That ring is the user-reported Ilex loop
+    # and Fable's Route-26 reversal, both burned tens of thousands of
+    # frames before anyone looked.
+    TRANSITION_COST = 60
+    DEFAULT_MAX_COST = 700   # rejects Johto-ring plans (~1500+) while
+                            # allowing legitimate multi-town routes
+
+    def route(self, dest_map, max_cost=None):
+        """Plan-only cross-map route to `dest_map`: Dijkstra over
+        mapgraph.json's validated warp/connection edges with walk-distance
+        costs, expanded into per-leg steps --
         [{"kind": "walk", "map", "x", "y"}, {"kind": "warp"|"connection",
-        "from", "to", "dir", ...}, ...]. Raises LookupError on unreachable;
-        never moves the player."""
+        "from", "to", "dir", ...}, ...]. Raises LookupError when nothing
+        routes, or when the cheapest plan exceeds max_cost (a "detour
+        ring" -- almost certainly not what a straight-through run wants;
+        anchor closer or raise max_cost deliberately). Never moves the
+        player."""
         self._refresh_nav_blocks()
         dest = self._resolve_map(dest_map)
         src = self.map_name()
+        if max_cost is None:
+            max_cost = self.DEFAULT_MAX_COST
         if dest == src:
             return []
         adj = self._mg_edges()
+        px, py = self.pos()[2:]
+        best = {src: 0}
+        entry = {src: (px, py)}       # where we'd start walking on that map
         prev = {src: None}
-        q = deque([src])
-        while q:
-            m = q.popleft()
+        heap = [(0, src)]
+        seen = set()
+        while heap:
+            cost, m = heapq.heappop(heap)
+            if m in seen:
+                continue
+            seen.add(m)
             if m == dest:
                 break
+            ex, ey = entry[m]
             for e in sorted(adj.get(m, ()),
                             key=lambda e: (e["to_map"], e["kind"],
                                            json.dumps(e["cells"]))):
                 nxt = e["to_map"]
-                if nxt in prev:
+                if nxt in seen:
                     continue
-                cands = self._edge_steps(e)
-                if cands:
-                    prev[nxt] = (m, e, cands)
-                    q.append(nxt)
+                # scene seals are plan-truth too: an edge whose only
+                # approach cells sit behind an armed coord_event is not
+                # routable RIGHT NOW, even though the collision grid says
+                # otherwise (Route 32 descent, Azalea neck approaches)
+                sealed = self.nav.blocked.get(m, ())
+                cands = [c for c in self._edge_steps(e)
+                         if c[0] not in sealed]
+                if not cands:
+                    continue
+                walk = min(abs(ax - ex) + abs(ay - ey)
+                           for (ax, ay), _ in cands)
+                ncost = cost + walk + self.TRANSITION_COST
+                if nxt in best and best[nxt] <= ncost:
+                    continue
+                best[nxt] = ncost
+                (ax, ay), d = min(cands, key=lambda c: (
+                    abs(c[0][0] - ex) + abs(c[0][1] - ey), c[0]))
+                prev[nxt] = (m, e, (ax, ay), d, cands)
+                land = (tuple(e["dest_cell"]) if e["kind"] == "warp"
+                        else None)
+                if land is None:
+                    # connection landing depends on the departure cell;
+                    # approximate with the far edge cell toward travel
+                    grid = self.nav.grid(nxt)
+                    land = (len(grid[0]) - 1 if d == "L" else 0, ey)
+                entry[nxt] = land
+                heapq.heappush(heap, (ncost, nxt))
         if dest not in prev:
             raise LookupError(f"no routable mapgraph path {src} -> {dest}")
+        if best[dest] > max_cost:
+            raise LookupError(
+                f"cheapest {src} -> {dest} plan costs {best[dest]} "
+                f"(> max {max_cost}) -- detour ring; anchor at a nearer "
+                f"waypoint or pass a deliberate max_cost")
         hops, m = [], dest
         while prev[m]:
             hops.append(prev[m])
             m = prev[m][0]
         steps = []
-        for frm, e, cands in reversed(hops):
-            (ax, ay), d = cands[0]
+        for frm, e, (ax, ay), d, cands in reversed(hops):
             steps.append({"kind": "walk", "map": frm, "x": ax, "y": ay,
                           "why": f"approach {e['kind']} to {e['to_map']}"})
             trans = {"kind": e["kind"], "from": frm, "to": e["to_map"],
@@ -1902,7 +2184,7 @@ class Driver:
                 trans["band"] = [list(c) for c in e["cells"]]
                 trans["offset"] = e.get("offset")
             steps.append(trans)
-        return steps
+        return validate_route(steps)
 
     def _landing(self, st, x, y):
         """Modeled landing cell for transition step `st` taken at (x, y)."""
@@ -1927,9 +2209,9 @@ class Driver:
         if self.map_name() == dest:
             return []
         steps = self.route(dest)
-        print(f"[travel -> {dest}] {len(steps)} steps from "
+        log.info(f"[travel -> {dest}] {len(steps)} steps from "
               f"{self.map_name()} {self.pos()[2:]}"
-              f"{' ' + label if label else ''}".rstrip(), flush=True)
+              f"{' ' + label if label else ''}".rstrip())
         _edge_counts = {}
         for i, st in enumerate(steps):
             cur = self.map_name()
@@ -1949,9 +2231,9 @@ class Driver:
                 for alt in alts:
                     if [alt["x"], alt["y"]] == [st["x"], st["y"]]:
                         continue
-                    print(f"  approach {(st['x'], st['y'])} unreachable; "
+                    log.info(f"  approach {(st['x'], st['y'])} unreachable; "
                           f"trying {alt['dir']} from "
-                          f"{(alt['x'], alt['y'])}", flush=True)
+                          f"{(alt['x'], alt['y'])}")
                     if self.goto(alt["x"], alt["y"], f"travel -> {dest}"):
                         nxt["dir"] = alt["dir"]
                         break
@@ -2005,7 +2287,7 @@ class Driver:
                 raise TravelError(
                     f"leg {i}: landed {here} {(mx, my)}, modeled landing "
                     f"{expected} (drift {drift} > 3)")
-            print(f"  -> {here} {(mx, my)} (drift {drift})", flush=True)
+            log.info(f"  -> {here} {(mx, my)} (drift {drift})")
             if here == dest:
                 return steps      # landed on the destination: done
         return steps
@@ -2033,7 +2315,7 @@ class Driver:
         for mon in self.observe()["party"]:
             if any(m.get("name") == "SURF" for m in mon.get("moves", [])):
                 self.nav.surf = True
-                print("  [surf] water routing enabled", flush=True)
+                log.info("  [surf] water routing enabled")
                 return True
         raise RuntimeError("enable_surf: nobody in the party knows SURF")
 
@@ -2079,13 +2361,13 @@ class Driver:
             fdx, fdy = STEP[facing]
             spot = (x - fdx, y - fdy)     # stand opposite the facing dir
             if not self._standable(self.map_name(), spot):
-                print(f"  facing={facing} spot {spot} not standable",
-                      flush=True)
+                log.info(f"  facing={facing} spot {spot} not standable",
+                      )
                 return False
         else:
             spot = self._approach_cell(x, y)
         if spot is None:
-            print(f"  no approach to ({x},{y})", flush=True)
+            log.info(f"  no approach to ({x},{y})")
             return False
         if not self.goto(*spot, label or f"approach ({x},{y})"):
             return False
@@ -2127,7 +2409,7 @@ class Driver:
         self.emu.save(target)
         if name:  # also update the working state
             self.emu.save(self.state_path)
-        print(f"[saved {target.name}] {self.status()}", flush=True)
+        log.info(f"[saved {target.name}] {self.status()}")
 
     # -- shopping -----------------------------------------------------------
 
@@ -2164,7 +2446,7 @@ class Driver:
             if self.talk_to(x, y, label or "clerk") != "talked":
                 return False
             if not any("¥" in r for r in self.emu.screen_text()):
-                print("  shop menu did not open", flush=True)
+                log.warning("  shop menu did not open")
                 self.press("B:4 .:10")
                 return False
         bought = False
@@ -2178,7 +2460,7 @@ class Driver:
                 if not self.menu.wait_for(
                         lambda r: any("How many?" in s for s in r),
                         timeout_frames=400):
-                    print("  no quantity picker", flush=True)
+                    log.info("  no quantity picker")
                     break
                 def picker_qty():
                     for s in self.emu.screen_text():
@@ -2213,8 +2495,8 @@ class Driver:
         self.press(".:40")
         after = bag_count()
         ok = bought and after >= before + qty
-        print(f"  mart_buy {item_name} x{qty}: "
-              f"{'ok' if ok else 'FAILED'} ({before} -> {after})", flush=True)
+        log.info(f"  mart_buy {item_name} x{qty}: "
+              f"{'ok' if ok else 'FAILED'} ({before} -> {after})")
         return ok
 
 
@@ -2237,8 +2519,8 @@ def heal_pokecenter(d):
     hurt = [m for m in party if not m.get("egg")
             and m.get("hp", 0) < m.get("max_hp", 0)]
     lead = d.lead()
-    print(f"  healed: {lead['name']} {lead['hp']}/{lead['max_hp']}",
-          flush=True)
+    log.info(f"  healed: {lead['name']} {lead['hp']}/{lead['max_hp']}",
+          )
     if hurt:
         raise RuntimeError(
             f"heal_pokecenter: party not fully healed "
@@ -2254,7 +2536,7 @@ def leg_to_violet(d):
     d.goto(5, 0, "route 30 north end")     # BFS threads the ledges/trainers
     d.walk("U", "cross to Route 31")
     d.goto(4, 6, "route 31 gate")
-    print(f"  now in {d.map_name()} {d.pos()[2:]}", flush=True)
+    log.info(f"  now in {d.map_name()} {d.pos()[2:]}")
 
 
 def leg_errand1(d):
@@ -2265,7 +2547,7 @@ def leg_errand1(d):
     d.step_dir("U")
     d.press("A:2 .:20")
     d.flush_dialog(30000)                # egg + Oak + Pokedex: very long
-    print(f"  done: {d.map_name()} {d.pos()[2:]}", flush=True)
+    log.info(f"  done: {d.map_name()} {d.pos()[2:]}")
 
 
 def leg_errand2(d):
@@ -2314,7 +2596,7 @@ def leg_violet(d):
         d.goto(4, 7, "gate door (south half)")
     d.goto(0, 4, "gate west door")
     d.flush_dialog(1500)
-    print(f"  now in {d.map_name()} {d.pos()[2:]}", flush=True)
+    log.info(f"  now in {d.map_name()} {d.pos()[2:]}")
 
 
 def leg_route29(d):
@@ -2353,18 +2635,75 @@ def audit_saves():
               f"{age / 3600:.1f}h")
 
 
+
+def gc_saves(apply=False, keep=3):
+    """`trek gc`: checkpoint lifecycle. Dry-run by default; lists
+    disposable saves -- 1-byte stubs and stale numbered series
+    (<session>-<kind>-<n>.state, keeping the newest `keep` per series).
+    Never touches: anything named in PROGRESS.md (milestones),
+    default.state, the watch viewer's state."""
+    progress = Path("PROGRESS.md")
+    protected = {w for w in (progress.read_text().split()
+                             if progress.exists() else [])
+                 if w.endswith(".state")}
+    protected.add(paths.DEFAULT_STATE.name)
+    protected.add("watch.state")
+
+    stubs, series = [], {}
+    for p in sorted(Path(paths.SAVES_DIR).glob("*.state")):
+        if p.name in protected or p.name.endswith(".watch.state"):
+            continue
+        if p.stat().st_size <= 1:
+            stubs.append(p)
+            continue
+        parts = p.stem.rsplit("-", 1)
+        if len(parts) == 2 and parts[1].isdigit():
+            series.setdefault(parts[0], []).append(p)
+
+    victims = list(stubs)
+    for base, ps in sorted(series.items()):
+        ps.sort(key=lambda p: int(p.stem.rsplit("-", 1)[1]))
+        victims += ps[:-keep] if len(ps) > keep else []
+
+    if not victims:
+        print("gc: nothing to clean")
+        return
+    print(f"gc: {len(victims)} file(s)"
+          f"{' (dry run; pass --apply to delete)' if not apply else ''}")
+    total = 0
+    for p in victims:
+        size = p.stat().st_size
+        meta = Path(f"{p}.meta")
+        extra = meta.stat().st_size if meta.exists() else 0
+        print(f"  {'DELETE' if apply else 'would delete'} {p.name} "
+              f"({size + extra} bytes)")
+        total += size + extra
+        if apply:
+            p.unlink()
+            if meta.exists():
+                meta.unlink()
+    print(f"gc: {'freed' if apply else 'reclaimable'} {total} bytes")
+
+
+
 def main():
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO,
+                        format="%(message)s")
     argv = sys.argv[1:]
     if not argv or argv[0] in ("-h", "--help"):
         sys.exit("usage: trek.py <leg> [<state>] [args...]\n"
              "legs: walk PATH | goto X Y [MAP] | talk X Y | "
              "      flush | heal | train LEVEL | route MAP | travel MAP |\n"
+             "      mart X Y ITEM QTY | catch [NICKNAME] | fight |\n"
+             "      map [MAP_NAME] (read-only ASCII view) |\n"
              "      route29 | to_violet |\n"
              "      errand1 errand2 errand3 errand4 violet\n"
              "      verify FLAG... (event flags / badges; exit 1 if any\n"
              "      is missing or unknown -- read-only, no save) |\n"
              "      states (saves/ table: frame from .meta, missing-meta\n"
-             "      marker, age)\n"
+             "      marker, age) |\n"
+             "      gc [--apply] [--keep N] (checkpoint lifecycle;\n"
+             "      dry-run default, protects PROGRESS.md milestones)\n"
              "goto MAP: CONST_NAME or CamelCase (e.g. VIOLET_CITY) -- routes\n"
              "across maps via warps + edge connections\n"
              "<state>: savestate path ('' or omitted = saves/default.state)")
@@ -2374,6 +2713,9 @@ def main():
         "route": (1, 1), "travel": (1, 1),
         "mart": (4, 4),
         "verify": (1, 10), "states": (0, 0), "train": (1, 1),
+        "gc": (0, 2), "map": (0, 1),
+        "catch": (0, 1), "fight": (0, 0), "flush": (0, 0),
+        "heal": (0, 0), "route29": (0, 0),
         "to_violet": (0, 0), "errand1": (0, 0), "errand2": (0, 0),
         "errand3": (0, 0), "errand4": (0, 0), "violet": (0, 0),
     }
@@ -2384,6 +2726,11 @@ def main():
     if leg == "states":
         audit_saves()
         return
+    if leg == "gc":
+        gc_saves(apply="--apply" in rest,
+                 keep=int(rest[rest.index("--keep") + 1])
+                 if "--keep" in rest else 3)
+        return
     # state path comes right after the leg: '' = default, or a *.state file;
     # anything else is the leg's first real argument
     state_arg = None
@@ -2391,8 +2738,8 @@ def main():
         state_arg = rest.pop(0) or None
     if not lo <= len(rest) <= hi:
         usage = {"walk": "PATH", "goto": "X Y [MAP]", "talk": "X Y",
-                 "mart": "X Y ITEM QTY",
-                 "route": "MAP", "travel": "MAP",
+                 "mart": "X Y ITEM QTY", "catch": "[NICKNAME]",
+                 "route": "MAP", "travel": "MAP", "map": "[MAP_NAME]",
                  "train": "TARGET_LEVEL"}.get(leg, "")
         sys.exit(f"usage: trek.py {leg} [<state>] {usage}".rstrip())
     if state_arg is None and not env_flag("CRYSTAL_ALLOW_DEFAULT"):
@@ -2405,7 +2752,9 @@ def main():
     except FileNotFoundError as e:
         sys.exit(f"no such state file: {e.filename}")
     print(f"[start] {d.status()}", flush=True)
-    if leg == "walk":
+    if leg == "map":
+        print(d.map_view(rest[0] if rest else None))
+    elif leg == "walk":
         d.walk(rest[0])
     elif leg == "goto":
         d.goto(int(rest[0]), int(rest[1]),
@@ -2416,6 +2765,8 @@ def main():
         print(json.dumps(d.route(rest[0]), indent=1), flush=True)
     elif leg == "travel":
         d.travel(rest[0])
+    elif leg == "mart":
+        d.mart_buy(int(rest[0]), int(rest[1]), rest[2], int(rest[3]))
     elif leg == "verify":
         ok = True
         s = game_state(d.emu, d.names)
@@ -2462,7 +2813,7 @@ def main():
         leg_errand4(d)
     elif leg == "violet":
         leg_violet(d)
-    if leg not in ("route", "verify"):
+    if leg not in ("route", "verify", "map", "states", "gc"):
         # both are pure reads: don't rewrite the state
         d.save()
     print(f"[end] {d.status()}", flush=True)

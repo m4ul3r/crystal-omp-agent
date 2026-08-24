@@ -1,5 +1,61 @@
 # PROGRESS — Pokémon Crystal run
 
+## harness upgrade (ox-alpha, Aug 24 2026) — ai-plays-pokemon adoption
+
+Engineering pass on the driver itself; NO timeline advanced. All existing
+milestones/working states remain valid and load unchanged (provenance
+guard warns once on legacy sidecars, then proceeds).
+
+- **Pins + provenance:** `pyproject.toml` pins `pyboy==2.7.0` (savestate
+  format is version-coupled). `Crystal.save` now stamps every `.meta`
+  with pyboy version + ROM sha256; `Crystal.__init__` REFUSES to load a
+  state stamped for another pyboy/ROM (legacy unstamped sidecars warn and
+  load). Never rebuild the ROM without expecting old forks to be refused.
+- **One action registry:** `crystalagent/registry.py` — single source of
+  truth used by serve.py `run`, autopilot decisions, and documented legs.
+  Unknown verbs/kwargs/preconditions (`ui.battle`) are rejected with a
+  sentence instead of corrupting play. Fixed en route: serve.py cmd_run
+  NameError (every `run` was broken), trek leg drift (catch/fight/flush/
+  heal/route29 were unreachable, mart a silent no-op), autopilot
+  journaling ok:true alongside errors.
+- **Observability:** trek diagnostics are `logging` records on stderr
+  (stdout is pure protocol); journal lines carry wall-clock `t`, cycles
+  carry `used` frame spend.
+- **Tests:** `tests/unit/` — battle math vs the real type chart, nav BFS/
+  ledges/ice/side-walls/blocked cells, sym/charmap/input parsers, state
+  decoders, menu classifiers, registry contract, rolling memory. Marker
+  meta-test enforces discipline. Run: `.venv/bin/python -m pytest tests`.
+  `scripts/trek_selftest.py` still passes (emulator-in-loop).
+- **Knowledge layer:** `crystalagent/rolling.py` hierarchical rolling
+  memory (SQLite, LEAF 20 / SOFT 100 / 3000 chars; naive summarizer until
+  an LLM one is plugged in). Autopilot stdin gained `{"cmd":"memory"}`;
+  cycle replies carry `mem_tail`. `trek map [MAP]` renders the reachable-
+  region ASCII view with global-coordinate rulers and pruned legend —
+  read-only leg. `crystalagent/schemas.py` validates observe/game_state/
+  route/NDJSON/decision/journal shapes at the boundary (dicts out, loud
+  errors in).
+- **Event hooks:** `crystalagent/hookevents.py` registers signature-
+  validated PyBoy hooks at sym anchors — PromptButton 00:0AAF (text page
+  waiting), _2DMenu 00:202A + InitVerticalMenuCursor 00:1C10 (menus),
+  ExitBattle 0F:769E. Verified live: START menu -> menu_open, neighbor
+  dialog -> page_wait. flush_dialog goes event-driven when hooks are live;
+  legacy cadence now refuses to mash when a menu cursor sits outside the
+  textbox (returns "menu"). Kill switch: CRYSTAL_HOOKS=0. Signatures are
+  ROM-build-coupled: after a ROM rebuild hooks self-disable (warning) and
+  polling heuristics take over.
+- **watch SSE:** `/stream` pushes snapshots+events at 4 Hz (max 4
+  clients); page uses EventSource and falls back to the old pollers.
+  Feed events persist to `saves/<base>.watch.jsonl` and survive restarts.
+- **Checkpoint GC:** `trek gc [--apply] [--keep N]` — dry-run default,
+  deletes 1-byte stubs + stale numbered series (newest N kept per
+  series). Protects default.state, watch.state and anything named in
+  PROGRESS.md.
+- **DESIGN.md** documents the decision-boundary doctrine (9 rules).
+- NOTE: an orphaned `watch.py --state saves/visibility.state --port 8123`
+  from an earlier session had to be killed to free the port during
+  verification. Watchers on 8124/8888 belong to other live sessions.
+
+---
 
 _Second timeline started Aug 23 (ox-alpha): fresh boot, player "GOLD",_
 _CYNDAQUIL L5 chosen at Elm's Lab. Milestone `saves/cyndaquil-start.state`_
@@ -36,6 +92,26 @@ _Second timeline started Aug 23 (ox-alpha): fresh boot, player "GOLD",_
   wait .:100 and re-read npc_cells before pressing again. Boulders reset
   on map re-entry; re-arm Strength per map entry.
 
+
+## team-run (balanced team, this session)
+
+- Fresh boot replayed with TYPED names: player GOLD, rival SILVER
+  (named at the Elm-lab cop scene, NOT the intro -- Crystal moved it),
+  CYNDAQUIL nicknamed CINDER. Milestone `saves/team-start.state`
+  (New Bark free-roam, egg delivered, 5 balls).
+- Roster so far (party verified in WRAM): CINDER CYNDAQUIL L11,
+  IVY BELLSPROUT L5 (Route 31), GUST PIDGEY L4 (Route 31),
+  BOULDER GEODUDE L4 (Dark Cave), HAUNT ZUBAT L2 (Dark Cave).
+  6th slot SPLASH (POLIWAG, Old Rod) pending Zephyr badge.
+- SUBSTITUTIONS vs plan: nite encounters are UNREACHABLE in this
+  harness (see gotcha below) -> ORACLE/HootHoot became GUST/Pidgey,
+  QUAGMIRE/Wooper became SPLASH/Poliwag (Old Rod, Violet pond group),
+  HAUNT/Gastly became HAUNT/Zubat (same cave flavor, day table).
+- Tools added: `scripts/wilds.py` (encounter tables, --grep),
+  `Driver.train()` + `trek train LEVEL STATE` (rotation trainer with
+  nurse rail). Trainer fixes landed in battle.py: USE-popup retry in
+  use_battle_item, faint-guard in _forced_switch_up (potion target
+  list used to wedge battles 90k frames each).
 ## Story progress
 
 1. Started game, picked Cyndaquil ("AA"), rival named "AA"
@@ -259,6 +335,7 @@ promote progress under NEW filenames. See AGENTS.md "Multiple agents".
 |------|-------|---------|
 | healed-1.state | 39549 | after first Pokecenter heal |
 | cyndaquil-start.state | 32131 | NEW TIMELINE: GOLD, CYNDAQUIL L5, New Bark Town |
+| team-start.state | 240755 | TEAM-RUN: GOLD/SILVER/CINDER, egg done, New Bark |
 | pre-rival.state | 68317 | before rival ambush on Route 29 |
 | egg-delivered.state | 81004 | egg handed to Elm |
 | default.state | 106506 | pre-Journey fork point (Route 29) |
@@ -289,6 +366,22 @@ promote progress under NEW filenames. See AGENTS.md "Multiple agents".
 ## Gotchas discovered this run
 
 (See AGENTS.md for the full list; newest here.)
+- TEAM-RUN: PyBoy 2.7's in-game RTC reads are BROKEN (hHours reads
+  constant garbage 201 -> GetTimeOfDay yields MORN only). Nite
+  encounters are unreachable; day/morn tables only. wStartHour shifts
+  the (broken) result but never reaches NITE. DO NOT use pyboy
+  gameshark codes or hook_register: both CORRUPT the savestate
+  (signature: garbage battle, PRIMEAPE L0 14592/14592, map=?).
+  wTimeOfDay can be written per-frame but VBlank's UpdateTimeAndPals
+  re-clobbers it before every encounter roll (race always lost).
+- TEAM-RUN: post-battle leftover modals silently eat ALL movement
+  input -> looks like '400 steps, zero encounters'. train() now runs
+  close_menus() when menu_open() before pacing.
+- TEAM-RUN: cross-map travel planner fails ROUTE_29 (59,8) -> west
+  exit (0,6) with 'no static path' (corridor is open; same cells
+  path fine from the east side). Hand-walk: L*55 U*2 L*4 L.
+- TEAM-RUN: mart_buy qty can overshoot by +1/+2 (picker UP presses);
+  verify bag counts and budget for it (cost ~400 extra once).
 - Battle menu cursor is `wMenuCursorY/X`, not `wMenuCursorPosition`
   (that one only writes on confirm) — cost a full debugging session.
 - Move-selection menu has no literal "PP" text; detect it by ▶+move-name.
@@ -365,6 +458,53 @@ prefix kept moving during analysis (working state hit frame 1590995;
 sudowoodo/ecruteak/rival-failed/gym-locked checkpoints appeared) --
 treat any codex-luna* file as potentially live from another session:
 fork before risky work, promote milestones under NEW names.
+
+Round 8 (same day, "straight-through" hardening) -- two more bugs found
+by live repro and fixed:
+- THE SCENE SEAL NEVER SEALED: _refresh_nav_blocks built the per-map
+  cell set but never stored it (blocks[const] = cells was missing), so
+  nav.blocked was ALWAYS {} -- Route 32's Cooltrainer oscillation, the
+  Azalea-neck rival trips mid-goto, and the director loss-loops all
+  walked straight through "sealed" cells. Fixed + live-verified: armed
+  AZALEA_TOWN neck now yields a clean 'no static path' refusal instead
+  of three wipes. NOTE: routes that used to stumble through armed scenes
+  will now abort -- that was the bug. Deliberate crossing still goes
+  through d.trip_scenes = True for the one goto.
+- WARP-TILE GOALS CAN'T LIE: goto's 'arrived through warp' shortcut
+  accepted landing-side proximity on ANY map, blessing e.g.
+  `goto 3 7 AZALEA_POKECENTER_1F` as success while standing OUTSIDE on
+  the street (silent objective skip). Now requires cur_map == goal_map;
+  ill-posed door-tile targets fail loudly via the seam guard instead.
+  Door-exit pattern unchanged: omit map_name and target the CURRENT
+  map's exit tile.
+Also verified: battle.py 0-PP handling is already hardened (pre-check +
+  rejection-screen detection + wedge guard); the PROGRESS 'STILL OPEN'
+  note predates those fixes.
+
+Round 9 (same day, continued straight-through hardening):
+- WHITEOUT DETECTION now also trusts play()'s 'wipe' outcome directly
+  (the money heuristic remains as the cutscene-resolve / broke-trainer
+  fallback -- a loss that drops Y0 used to be invisible).
+  fight() on 'timeout'/'stuck' dumps the frozen screen + both sides'
+  HP/moves before returning, so wedges are diagnosed on attempt ONE
+  (the Bridget/Jigglypuff freeze burned ~10 blind retries).
+- route() REWRITTEN as cost-aware Dijkstra (walk distance + flat
+  per-transition beat). Hop-count BFS treated the 20-map Johto ring
+  (Azalea->R33->UnionCave->...->Goldenrod->R34->Ilex) as equal to the
+  direct route and EXECUTED it whenever the direct approach was
+  unavailable -- this is the mechanism behind the codex-luna Ilex loop
+  AND Fable's Route-26 reversal. Plans costing more than
+  DEFAULT_MAX_COST (700; override via route(dest, max_cost=...)) raise
+  LookupError('detour ring') instead. Direct plans verified unchanged:
+  Azalea gym -> gate = 2 transitions; -> Violet PC = 4 through the cave.
+- route() also treats scene seals as plan truth: edges whose approach
+  cells are behind an armed coord_event are dropped at PLAN time, so
+  travel() fails with 'no path to any approach' up front rather than
+  mid-leg.
+- REGRESSION SUITE: scripts/trek_selftest.py -- 10 sections covering
+  every guard from rounds 7-9, runs headless on throwaway forks in
+  ~5 s, never touches saves/. Run it after ANY trek.py/nav.py change:
+  .venv/bin/python scripts/trek_selftest.py
 
 ## Ilex Forest cleared (claude-lex fork, Aug 23)
 

@@ -3,6 +3,7 @@
 Party/enemy struct offsets are derived from the labels the disassembly
 gives every field (wPartyMon1HP - wPartyMon1, etc.) -- no magic numbers.
 """
+from .schemas import validate_game_state
 
 MON_NAME_LENGTH = 11
 
@@ -124,12 +125,16 @@ def game_state(emu, names, include_screen=False):
 
     if include_screen:
         s["screen"] = emu.screen_text()
-    return s
+    return validate_game_state(s, include_screen)
 
 
 def status_line(state):
     loc = state["location"]
     line = f"frame={state['frame']} map={loc['map']} pos=({loc['x']},{loc['y']})"
+    j, k = state["player"]["johto_badges"], state["player"]["kanto_badges"]
+    line += f" badges={len(j)}/8+{len(k)}/8"
+    if j or k:
+        line += " (" + " ".join(j + k) + ")"
     if state["party"]:
         lead = state["party"][0]
         line += f" lead={lead['name']} L{lead['level']} {lead['hp']}/{lead['max_hp']}"

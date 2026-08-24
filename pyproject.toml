@@ -1,0 +1,25 @@
+[project]
+name = "crystal-agent"
+version = "0.1.0"
+description = "Headless Pokemon Crystal driver: sym-derived maps, savestate forks, NDJSON/autopilot servers."
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    # Exact pin: savestate format is version-coupled. A floating pyboy invalidates
+    # every .state in saves/ (same rationale as ai-plays-pokemon).
+    "pyboy==2.7.0",
+    "pillow>=12,<13",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pydantic>=2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "unit: pure logic, no emulator",
+    "integration: drives the emulator",
+]

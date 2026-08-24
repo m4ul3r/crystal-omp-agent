@@ -130,3 +130,29 @@ def textbox_up(rows):
     """The bottom two textbox rows hold text (non-blank, non-border)."""
     bottom = rows[14] + rows[15] + rows[16] + rows[17] if len(rows) >= 18 else ""
     return any(ch not in " ─└┘│ " for ch in bottom)
+
+
+def _cursor_outside_box(rows):
+    """Any menu-cursor glyph above the textbox rows: a choice/menu is
+    open and blind A presses would pick something."""
+    for r in rows[:13]:
+        if _cursor_x(r) >= 0:
+            return True
+    return False
+
+
+def plain_dialog_up(rows):
+    """Strict gate for the A-mash lane: a bottom textbox with text in it
+    AND nothing at all on the rest of the screen (no HUD, no menus)."""
+    if len(rows) < 18 or not textbox_up(rows):
+        return False
+    outside = "".join(rows[:13])
+    return not any(ch not in " ─│┌┐└┘" for ch in outside)
+
+
+def dialog_press_safe(rows):
+    """A-press safety for flush_dialog: textbox up, and no menu cursor
+    sitting outside the box. Battle screens (HUD text above) still pass
+    -- the battle path handles its own text."""
+    return len(rows) >= 18 and textbox_up(rows) \
+        and not _cursor_outside_box(rows)

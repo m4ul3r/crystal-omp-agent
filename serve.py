@@ -28,32 +28,18 @@ Usage: .venv/bin/python serve.py --state saves/<fork>.state
 import argparse
 import json
 import os
+import logging
 import sys
-from contextlib import redirect_stdout
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from trek import Driver, heal_pokecenter
+from trek import Driver
+from crystalagent.registry import resolve
+from crystalagent.schemas import ServeRequest
+from pydantic import ValidationError
 
-# primitives runnable via the `run` command -> how to call them
-# (None = plain Driver method, called with kwargs)
-RUN_METHODS = {
-    "goto": None,
-    "walk": None,
-    "fight": None,
-    "catch": None,
-    "heal": lambda d, **kw: heal_pokecenter(d),
-    "talk_to": None,
-    "mart_buy": None,
-    "use_item": None,
-    "settle": None,
-    "route": None,
-    "travel": None,
-    # decision-free mechanics: the deciding loop paces/trains itself by
-    # composing these with observe() -- no bundled stop-condition legs
-    "step_dir": None,
-    "press": None,
-}
+# primitives runnable via the `run` command live in the shared registry:
+# crystalagent/registry.py (same surface autopilot decisions validate against)
 
 
 def _release_all(d):
@@ -80,8 +66,7 @@ def cmd_save(d, args):
         d.emu.save(target)          # writes .state AND .meta sidecar
     else:
         target = None
-        with redirect_stdout(sys.stderr):   # Driver.save prints to stdout
-            d.save(args.get("name"))
+        d.save(args.get("name"))    # Driver.save logs via the trek logger
     return {"saved": str(target) if target else args.get("name") or str(d.state_path),
             "frame": d.emu.frame}
 
@@ -108,19 +93,7 @@ def cmd_load(d, args):
 
 def cmd_run(d, args):
     name = args.get("name")
-    if name not in RUN_METHODS:
-        raise ValueError(
-            f"run: unknown primitive {name!r}; "
-            f"allowed: {', '.join(sorted(RUN_METHODS))}")
-    kwargs = args.get("kwargs") or {}
-    if not isinstance(kwargs, dict):
-        raise ValueError("run: 'kwargs' must be an object")
-    spec = RUN_METHODS[name]
-    if spec is None:
-        fn = getattr(d, name)
-        result = fn(**kwargs)
-    else:                                   # e.g. heal -> heal_pokecenter(d)
-        result = spec(d, **kwargs)
+    result = resolve(d, name, args.get("kwargs") or {})
     return {"ran": name, "result": result}
 
 
@@ -147,10 +120,9 @@ def handle(d, req):
         args = req.get("args") or {}
         if not isinstance(args, dict):
             raise ValueError("'args' must be a JSON object")
-        # Driver internals print() progress to stdout; contain it so the
-        # NDJSON stream stays clean (stdout is our only protocol channel).
-        with redirect_stdout(sys.stderr):
-            data = handler(d, args)
+        # Driver progress goes through the "trek" logger (stderr); stdout
+        # is our only protocol channel.
+        data = handler(d, args)
         return {"id": rid, "ok": True, "data": data}, False
     except Exception as e:
         print(f"[serve] error on {req!r}: {type(e).__name__}: {e}",
@@ -159,6 +131,8 @@ def handle(d, req):
 
 
 def main():
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO,
+                        format="%(message)s")
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--state", default=None,
                     help="savestate to boot (fork of a milestone; refusing "
@@ -181,9 +155,15 @@ def main():
             continue
         try:
             req = json.loads(line)
+            ServeRequest.model_validate(req)
         except json.JSONDecodeError as e:
             resp = {"id": None, "ok": False,
                     "error": f"bad JSON: {e}"}
+        except ValidationError as e:
+            first = e.errors()[0]
+            resp = {"id": None, "ok": False,
+                    "error": f"bad request: {first['msg']} at "
+                             f"{list(first['loc'])}"}
         else:
             resp, quit_now = handle(d, req)
             json.dump(resp, sys.stdout)

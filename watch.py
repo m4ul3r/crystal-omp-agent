@@ -285,40 +285,45 @@ function renderBattle(b){
  $('bhpn').textContent=e.hp+'/'+e.max_hp;
  el.className='on';
 }
-async function poll(){
+function renderState(s){
  const st=$('status');
+ if(s.error){st.textContent='error: '+s.error;st.className='err';return;}
+ st.textContent=s.status;st.className='';
+ $('frame').textContent=fmt(s.frame);$('ptime').textContent=s.play_time;
+ $('file').textContent=s.save;
+ const live=s.state_age_ms<8000,pill=$('live');
+ pill.className='pill '+(live?'live':'stale');
+ $('livetxt').textContent=live?'live':'idle '+age(s.state_age_ms);
+ const loc=s.location;
+ $('s-map').textContent=loc.map;$('s-map').title=loc.map;
+ $('s-pos').textContent='('+loc.x+', '+loc.y+') · group '+loc.map_group+' #'+loc.map_number;
+ $('mapname').textContent=loc.map;
+ $('s-name').textContent=s.player.name;
+ const jb=s.player.johto_badges,JALL=['ZEPHYR','HIVE','PLAIN','FOG','STORM','MINERAL','GLACIER','RISING'];
+ $('s-badges').innerHTML=JALL.map(n=>'<span class="badge'+(jb.includes(n)?' on':'')+'" title="'+n+'"></span>').join('');
+ $('s-badgen').textContent=jb.length+'/8';
+ const kb=s.player.kanto_badges,KALL=['BOULDER','CASCADE','THUNDER','RAINBOW','SOUL','MARSH','VOLCANO','EARTH'];
+ $('s-kbadges').innerHTML=KALL.map(n=>'<span class="badge'+(kb.includes(n)?' on':'')+'" title="'+n+'"></span>').join('');
+ $('s-kbadgen').textContent=kb.length+'/8'+(s.player.kanto_badges.length?' · '+s.player.kanto_badges.join(' '):'');
+ const lead=s.party[0];
+ if(lead){$('s-lead').textContent=lead.name+' Lv '+lead.level;
+  $('s-leadhp').textContent=lead.hp+'/'+lead.max_hp+' HP'+(lead.status.length?' · '+lead.status.join(' '):'');}
+ else{$('s-lead').textContent='—';$('s-leadhp').textContent='';}
+ renderBattle(s.battle);
+ renderParty(s.party);
+ $('txt').textContent=s.screen.join('\n');
+ drawMap(s.map);
+ drawShot();
+}
+function netErr(e){
+ const st=$('status');st.textContent='offline: '+e;st.className='err';
+ $('live').className='pill stale';$('livetxt').textContent='offline';
+}
+async function poll(){
  try{
   const r=await fetch('/state.json?save='+encodeURIComponent(cur()));
-  const s=await r.json();
-  if(s.error){st.textContent='error: '+s.error;st.className='err';return;}
-  st.textContent=s.status;st.className='';
-  $('frame').textContent=fmt(s.frame);$('ptime').textContent=s.play_time;
-  $('file').textContent=s.save;
-  const live=s.state_age_ms<8000,pill=$('live');
-  pill.className='pill '+(live?'live':'stale');
-  $('livetxt').textContent=live?'live':'idle '+age(s.state_age_ms);
-  const loc=s.location;
-  $('s-map').textContent=loc.map;$('s-map').title=loc.map;
-  $('s-pos').textContent='('+loc.x+', '+loc.y+') · group '+loc.map_group+' #'+loc.map_number;
-  $('mapname').textContent=loc.map;
-  $('s-name').textContent=s.player.name;
-  const jb=s.player.johto_badges,JALL=['ZEPHYR','HIVE','PLAIN','FOG','STORM','MINERAL','GLACIER','RISING'];
-  $('s-badges').innerHTML=JALL.map(n=>'<span class="badge'+(jb.includes(n)?' on':'')+'" title="'+n+'"></span>').join('');
-  $('s-badgen').textContent=jb.length+'/8';
-  const kb=s.player.kanto_badges,KALL=['BOULDER','CASCADE','THUNDER','RAINBOW','SOUL','MARSH','VOLCANO','EARTH'];
-  $('s-kbadges').innerHTML=KALL.map(n=>'<span class="badge'+(kb.includes(n)?' on':'')+'" title="'+n+'"></span>').join('');
-  $('s-kbadgen').textContent=kb.length+'/8'+(s.player.kanto_badges.length?' · '+s.player.kanto_badges.join(' '):'');
-  const lead=s.party[0];
-  if(lead){$('s-lead').textContent=lead.name+' Lv '+lead.level;
-   $('s-leadhp').textContent=lead.hp+'/'+lead.max_hp+' HP'+(lead.status.length?' · '+lead.status.join(' '):'');}
-  else{$('s-lead').textContent='—';$('s-leadhp').textContent='';}
-  renderBattle(s.battle);
-  renderParty(s.party);
-  $('txt').textContent=s.screen.join('\n');
-  drawMap(s.map);
-  drawShot();
- }catch(e){st.textContent='offline: '+e;st.className='err';
-  $('live').className='pill stale';$('livetxt').textContent='offline';}
+  renderState(await r.json());
+ }catch(e){netErr(e);}
 }
 function kind(m){
  if(/^battle/.test(m))return['⚔','t-battle'];
@@ -326,29 +331,31 @@ function kind(m){
  if(/^badge/.test(m))return['★','t-badge'];
  if(/^money/.test(m))return['₽','t-money'];
  if(/^checkpoint/.test(m))return['💾','t-save'];
- if(/^entered/.test(m))return['➜','t-map'];
- if(/party/.test(m))return['●','t-party'];
- return['·',''];
+function addEvent(e){
+ const[ic,cls]=kind(e.msg);
+ const div=document.createElement('div');
+ div.className='ev'+(first?'':' new');
+ div.innerHTML='<span class="fr">'+fmt(e.frame)+'</span><span class="ic '+cls+'">'+ic+'</span>'+
+  '<span class="'+cls+'">'+esc(e.msg)+'</span><span class="ts">'+e.t+'</span>';
+ $('log').prepend(div);
+}
+function eventsDone(){
+ const log=$('log');
+ while(log.children.length>200)log.lastChild.remove();
+ if(cursor>=0){}
+ $('lcnt').textContent=log.children.length?log.children.length+' events':'';
+ if(!log.children.length)log.innerHTML='<div class="empty">waiting for events…</div>';
+ else{const em=log.querySelector('.empty');if(em)em.remove();}
+ first=false;
 }
 async function pollEvents(){
  try{
   const r=await fetch('/events.json?save='+encodeURIComponent(cur())+'&since='+cursor);
   const d=await r.json();
   if(d.error)return;
-  const log=$('log');
-  for(const e of d.events){
-   const[ic,cls]=kind(e.msg);
-   const div=document.createElement('div');
-   div.className='ev'+(first?'':' new');
-   div.innerHTML='<span class="fr">'+fmt(e.frame)+'</span><span class="ic '+cls+'">'+ic+'</span>'+
-    '<span class="'+cls+'">'+esc(e.msg)+'</span><span class="ts">'+e.t+'</span>';
-   log.prepend(div);}
-  while(log.children.length>200)log.lastChild.remove();
+  for(const e of d.events)addEvent(e);
   if(d.cursor>=0)cursor=d.cursor;
-  first=false;
-  $('lcnt').textContent=log.children.length?log.children.length+' events':'';
-  if(!log.children.length)log.innerHTML='<div class="empty">waiting for events…</div>';
-  else{const em=log.querySelector('.empty');if(em)em.remove();}
+  eventsDone();
  }catch(e){}
 }
 async function refreshSaves(){
@@ -361,9 +368,24 @@ async function refreshSaves(){
    if(o.name===c)op.selected=true;sel.append(op);}
  }catch(e){}
 }
-refreshSaves();setInterval(refreshSaves,5000);
-pollEvents();setInterval(pollEvents,1500);
-poll();setInterval(poll,1000);
+function startStream(){
+ const es=new EventSource('/stream?save='+encodeURIComponent(cur()));
+ es.onmessage=(ev)=>{
+  let m;try{m=JSON.parse(ev.data);}catch(e){return;}
+  if(m.type==='state')renderState(m.s);
+  else if(m.type==='events'){
+   for(const e of m.events)addEvent(e);
+   if(m.cursor>=0)cursor=m.cursor;
+   eventsDone();}
+ };
+ es.onerror=()=>{           // SSE unavailable: fall back to polling
+  es.close();
+  refreshSaves();setInterval(refreshSaves,5000);
+  pollEvents();setInterval(pollEvents,1500);
+  poll();setInterval(poll,1000);
+ };
+}
+refreshSaves();pollEvents();poll();startStream();
 </script></body></html>"""
 
 
@@ -464,6 +486,26 @@ class Viewer:
         self._last = {}            # save name -> previous snapshot for diffing
         self._known_saves = None   # checkpoint-watch: *.state names seen so far
         self._last_png = None      # wall clock of last /shot.png render
+        self._preload_feed()       # restarts keep their event history
+
+    def _feed_path(self, save_name):
+        base = save_name[:-len(".state")] if save_name.endswith(".state") \
+            else save_name
+        return paths.SAVES_DIR / f"{base}.watch.jsonl"
+
+    def _preload_feed(self):
+        """Reload the tail of every persisted feed so events survive
+        watch.py restarts."""
+        for p in sorted(paths.SAVES_DIR.glob("*.watch.jsonl")):
+            save_name = p.name[: -len(".watch.jsonl")] + ".state"
+            try:
+                rows = [json.loads(l)
+                        for l in p.read_text(encoding="utf-8").splitlines()
+                        if l.strip()]
+            except (OSError, ValueError):
+                continue
+            if rows:
+                self.events[save_name] = rows[-400:]
 
     def select(self, path):
         with self.lock:
@@ -633,10 +675,20 @@ class Viewer:
         if msgs:
             lst = self.events.setdefault(save_name, [])
             now = time.strftime("%H:%M:%S")
+            fresh = []
             for m in msgs:
-                lst.append({"i": len(lst), "frame": gs["frame"],
-                            "t": now, "msg": m})
+                e = {"i": len(lst) + len(fresh), "frame": gs["frame"],
+                     "t": now, "msg": m}
+                lst.append(e)
+                fresh.append(e)
             del lst[:-400]
+            try:                       # persist: feed survives restarts
+                with open(self._feed_path(save_name), "a",
+                          encoding="utf-8") as f:
+                    for e in fresh:
+                        f.write(json.dumps(e, ensure_ascii=False) + "\n")
+            except OSError:
+                pass
 
 
 def _sprite_url(species, shiny=False, form=None):
@@ -655,8 +707,48 @@ def _safe_save(name):
 
 def make_handler(viewer):
     class H(BaseHTTPRequestHandler):
+        streams = 0                # concurrent /stream clients (capped)
+
         def log_message(self, *a):
             pass
+
+        def _stream(self, name):
+            """SSE: push full state snapshots + incremental events; the
+            page falls back to polling if this endpoint never connects."""
+            sname = name or paths.DEFAULT_STATE.name
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            ev_cursor = -1
+            last_beat = time.time()
+            try:
+                while True:
+                    try:
+                        if name:
+                            viewer.select(_safe_save(name))
+                        snap = viewer.snapshot(sname)
+                    except Exception as e:
+                        snap = {"error": str(e)}
+                    self.wfile.write(b"data: " + json.dumps(
+                        {"type": "state", "s": snap},
+                        ensure_ascii=False).encode() + b"\n\n")
+                    with viewer.lock:
+                        lst = viewer.events.get(sname, [])
+                        out = [e for e in lst if e["i"] > ev_cursor]
+                        ev_cursor = lst[-1]["i"] if lst else -1
+                    if out:
+                        self.wfile.write(b"data: " + json.dumps(
+                            {"type": "events", "cursor": ev_cursor,
+                             "events": out}).encode() + b"\n\n")
+                    now = time.time()
+                    if now - last_beat > 15:
+                        self.wfile.write(b": ping\n\n")
+                        last_beat = now
+                    self.wfile.flush()
+                    time.sleep(0.25)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass              # client went away: done streaming
 
         def _send(self, code, ctype, body):
             self.send_response(code)
@@ -693,6 +785,15 @@ def make_handler(viewer):
                 except Exception as e:
                     self._send(500, "application/json",
                                json.dumps({"error": str(e)}).encode())
+            elif u.path == "/stream":
+                H.streams += 1
+                try:
+                    if H.streams > 4:
+                        self._send(503, "text/plain", b"too many streams")
+                        return
+                    self._stream(name)
+                finally:
+                    H.streams -= 1
             elif u.path == "/events.json":
                 sname = name or paths.DEFAULT_STATE.name
                 try:

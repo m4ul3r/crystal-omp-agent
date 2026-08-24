@@ -16,10 +16,13 @@ per line, replies on stdout, serve.py-style):
                       "success": {"map"?:        str,
                                   "min_badges"?: int,
                                   "flag"?:       str}}}
-            {"id": N, "cmd": "observe"}          # debug peek, no journal
-            {"id": N, "cmd": "screen"}           # decoded screen text + UI
             {"id": N, "cmd": "save",             # force-save WRAM now
                  "args": {"path": "saves/x.state"}}
+            {"id": N, "cmd": "quit"}
+            {"id": N, "cmd": "observe"}          # debug peek, no journal
+            {"id": N, "cmd": "screen"}           # decoded screen text + UI
+            {"id": N, "cmd": "memory",           # rolling-memory view
+                 "args": {"tail"?: N}}           #   (frontier + raw tail)
             {"id": N, "cmd": "quit"}
 
 Rails run in deterministic code and NEVER trust the decider:
@@ -53,18 +56,17 @@ import json
 import os
 import shutil
 import sys
-from contextlib import redirect_stdout
 from pathlib import Path
-
+from datetime import datetime, timezone
+from crystalagent import registry
+from crystalagent.rolling import RollingMemory
+from crystalagent.schemas import validate_cycle_record, validate_decision
 sys.path.insert(0, str(Path(__file__).parent))
-from trek import Driver, heal_pokecenter
+from trek import Driver
+from crystalagent import registry
 
-# Primitives a decision may invoke (same surface as serve.py's `run`,
-ACTIONS = {
-    "goto", "walk", "fight", "catch", "heal", "talk_to",
-    "mart_buy", "use_item", "settle", "press", "step_dir",
-    "route", "travel", "use_cut",
-}
+# Primitives a decision may invoke: the shared registry in
+# crystalagent/registry.py (same surface serve.py's `run` validates against).
 # Intentionally world-neutral actions the stuck detector must ignore.
 IDLE_ACTIONS = {"settle"}
 
@@ -169,11 +171,15 @@ class Autopilot:
         self.stuck_limit = stuck_limit
         self.stuck_run = 0
         self._last_sig = None          # (name, kwargs, goal) of last cycle
+        self.mem = RollingMemory(Path(journal_dir) / f"{session}.memory.db")
+        self.stuck_run = 0
         self.cycles = self._count_forks()
 
     # -- bookkeeping ------------------------------------------------------
 
     def _note(self, entry):
+        entry.setdefault("t", datetime.now(timezone.utc)
+                         .isoformat(timespec="seconds"))
         with open(self.journal, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, separators=(",", ":")) + "\n")
 
@@ -209,8 +215,7 @@ class Autopilot:
 
     def _checkpoint(self, kind, frame):
         name = self._next_checkpoint_name(kind)
-        with redirect_stdout(sys.stderr):
-            self.d.save(name)               # new filename, never overwrite
+        self.d.save(name)               # new filename, never overwrite
         self._note({"event": "checkpoint", "kind": kind, "file": name,
                     "frame": frame})
         return name
@@ -242,29 +247,22 @@ class Autopilot:
         self._note({"event": "whiteout", "loaded": ckpt,
                     "frame": obs["frame"]})
         if "POKECENTER" in obs["map"].upper():
-            with redirect_stdout(sys.stderr):
-                heal_pokecenter(self.d)
+            registry.resolve(self.d, "heal", {})
         elif any(v > 0 for k, v in obs["bag"].items()
                  if "POTION" in k.upper()):
-            with redirect_stdout(sys.stderr):
-                self.d.use_item(next(k for k, v in obs["bag"].items()
-                                     if "POTION" in k.upper()))
+            self.d.use_item(next(k for k, v in obs["bag"].items()
+                                 if "POTION" in k.upper()))
         # retraining after a whiteout is a STRATEGY decision (where to
         # pace, what to fight, when to stop): the deciding loop owns it
         # via observe() + step_dir/fight -- no bundled stop-condition leg
 
     # -- one decision cycle --------------------------------------------------
 
-    def _resolve_action(self, name):
-        """Action name -> callable. 'heal' has no Driver method -- it maps
-        to trek.heal_pokecenter (same as serve.py's RUN_METHODS)."""
-        if name == "heal":
-            return lambda **kw: heal_pokecenter(self.d)
-        fn = getattr(self.d, name, None)
-        if fn is None:
-            raise AttributeError(
-                f"{type(self.d).__name__} has no action {name!r}")
-        return fn
+    def _resolve_action(self, name, kwargs):
+        """Validate against the shared registry, then return the bound
+        callable ('heal' maps to trek.heal_pokecenter)."""
+        registry.check(self.d, name, kwargs)
+        return registry.callable_for(self.d, name)
 
     def cycle(self, args, rid=None):
         """Exception-proof shell: a bad decision must NEVER kill the
@@ -286,6 +284,14 @@ class Autopilot:
                     "error": f"decision failed: {err}"}
 
     def _cycle(self, args, rid=None):
+        try:
+            validate_decision(args)
+        except Exception as e:
+            err = f"decision shape: {type(e).__name__}: {e}"
+            self._note({"frame": None,
+                        "action": (args.get("action") or {}),
+                        "ok": False, "error": err})
+            return {"id": rid, "ok": False, "error": err}
         action = args.get("action") or {}
         name = action.get("name")
         kwargs = dict(action.get("kwargs") or {})
@@ -300,10 +306,10 @@ class Autopilot:
             self.stuck_run = 0
         self._last_sig = sig
 
-        if name not in ACTIONS:
+        if name not in registry.ACTIONS:
             reply = {"id": rid, "ok": False,
-                     "error": f"unknown action {name!r}; "
-                              f"allowed: {', '.join(sorted(ACTIONS))}"}
+                     "error": f"unknown action {name!r}; allowed: "
+                              f"{', '.join(sorted(registry.ACTIONS))}"}
             self._note({"frame": None, "action": {"name": name},
                         "ok": False, "error": reply["error"]})
             return reply
@@ -315,7 +321,7 @@ class Autopilot:
         if args.get("risky"):
             self.fork(f"cycle{len(list(iter_journal(self.journal))) + 1}")
 
-        fn = self._resolve_action(name)
+        fn = self._resolve_action(name, kwargs)
         code = getattr(fn, "__code__", None)
         if code is not None and \
                 "max_frames" in code.co_varnames[:code.co_argcount]:
@@ -323,10 +329,9 @@ class Autopilot:
 
         error = None
         try:
-            with redirect_stdout(sys.stderr):
-                fn(**kwargs)
-                if name != "settle":
-                    self.d.settle(max_frames=600)
+            fn(**kwargs)
+            if name != "settle":
+                self.d.settle(max_frames=600)
         except Exception as e:
             error = f"{type(e).__name__}: {e}"
 
@@ -334,8 +339,9 @@ class Autopilot:
         dig_after = digest(after)
         used = self.d.emu.frame - f0
 
-        ok, why = True, []
+        ok, why = False, []
         if not error:
+            ok = True
             if "map" in success and \
                     after["map"].upper() != str(success["map"]).upper():
                 ok = False
@@ -366,12 +372,12 @@ class Autopilot:
         record = {"frame": after["frame"], "lead_lv": lead.get("level"),
                   "obs_digest": dig_after,
                   "action": {"name": name, "kwargs": kwargs},
-                  "goal": goal, "ok": ok}
+                  "goal": goal, "ok": ok, "used": used}
         if error:
             record["error"] = error
         if why:
             record["why"] = why
-        self._note(record)
+        self._note(validate_cycle_record(record))
 
         for kind in classify_milestones(before, after):
             self._checkpoint(kind, after["frame"])
@@ -392,6 +398,15 @@ class Autopilot:
             except Exception as e:
                 why.append(f"state save failed: {type(e).__name__}: {e}")
 
+        # Rolling memory: one compact line per decision, so a future
+        # decider re-injection reads history without the whole journal.
+        try:
+            outcome = "ok" if ok else (error or "; ".join(why) or "failed")
+            self.mem.add(f"[{name}]{f' {goal}' if goal else ''} -> {outcome}")
+            self.mem.finalize_iteration()
+        except Exception:
+            pass                       # memory must never break play
+
         reply = {"id": rid, "ok": ok, "obs": compact_obs(after)}
         if fired_stuck:
             reply["error"] = "stuck"
@@ -400,12 +415,18 @@ class Autopilot:
             reply["error"] = error
         elif why:
             reply["error"] = "; ".join(why)
+        try:                           # short-horizon continuity for deciders
+            reply["mem_tail"] = [c for _, c in self.mem.tail(3)]
+        except Exception:
+            pass
         return reply
 
-
-# --- stdin loop -----------------------------------------------------------
+    # --- stdin loop ---------------------------------------------------------
 
 def main():
+    import logging
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO,
+                        format="%(message)s")
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--state", required=True,
                     help="working savestate (a fork you own)")
@@ -463,6 +484,14 @@ def main():
                         "ui": {"textbox": d.textbox(),
                                "battle": bool(d.battle())},
                         "frame": d.emu.frame}
+            elif cmd == "memory":
+                # Rolling-memory view for decider re-injection: summary
+                # frontier plus the raw tail. Pure read, no rails.
+                n = int((req.get("args") or {}).get("tail", 10))
+                resp = {"id": rid, "ok": True,
+                        "frontier": [f"[{s}-{e}]L{l}: {c}"
+                                     for s, e, l, c in ap_.mem.frontier()],
+                        "tail": [c for _, c in ap_.mem.tail(n)]}
             elif cmd == "save":
                 # Force-save CURRENT WRAM (mid-battle included) to
                 # args.path as .state + .meta sidecar. No rails.
@@ -481,7 +510,7 @@ def main():
             else:
                 resp = {"id": rid, "ok": False,
                         "error": f"unknown cmd {cmd!r}; expected "
-                                 f"decision|observe|screen|save|quit"}
+                                 f"decision|observe|screen|memory|save|quit"}
         json.dump(resp, sys.stdout)
         sys.stdout.write("\n")
         sys.stdout.flush()
