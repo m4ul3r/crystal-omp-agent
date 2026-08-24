@@ -51,9 +51,58 @@ guard warns once on legacy sidecars, then proceeds).
   series). Protects default.state, watch.state and anything named in
   PROGRESS.md.
 - **DESIGN.md** documents the decision-boundary doctrine (9 rules).
-- NOTE: an orphaned `watch.py --state saves/visibility.state --port 8123`
-  from an earlier session had to be killed to free the port during
-  verification. Watchers on 8124/8888 belong to other live sessions.
+- **oxa-johto field feedback, triaged same day:** mart_buy shop-list race
+  fixed (passive wait-for-¥ after talk_to, no A presses in the window);
+  heal_pokecenter drains straggler pages before HP verification; goto
+  failures now set `d.last_goto_reason` (no-path / no-progress +
+  script-scene-active / replan-storm / pass-cap / last-block=...) and the
+  GAVE UP log carries it. trek map '@' off-by-one report did NOT
+  reproduce (glyph column == pos() x on test state); watching for a repro.
+
+## session oxa-johto owns fresh Johto run, working state saves/oxa-johto.state
+
+Fresh timeline started Aug 24 2026 (ox-alpha operator mission): raw boot,
+player **OXALPHA**, rival **OMEGA** (named at the Elm-lab cop scene on the
+post-errand return — Crystal moved it out of the intro, confirmed in
+maps/ElmsLab.asm NameRival special).
+
+**ZEPHYR BADGE WON** (Aug 24). Milestones this session: `oxa-johto-intro`
+(bedroom), `oxa-johto-starter` (New Bark), `oxa-johto-rival-named` (lab),
+`oxa-johto-egg-delivered`, `oxa-johto-rival-beaten` (Cherrygrove),
+`oxa-johto-violet`, `oxa-johto-zephyr-badge` (VIOLET_GYM (5,2) post-fight).
+Working state `saves/oxa-johto.state` = healed VIOLET_POKECENTER_1F.
+Party: QUILAVA "CINDER" L15 (Tackle/Leer/Smokescreen/Quick Attack).
+Bag: 14 Poké Balls. Money ₽1139.
+
+Session gotchas (new):
+- game_state "name" shows the SPECIES string; true nickname is a separate
+  party field — verify with d.lead()['nickname'].
+- mart_buy can race the shop-list open ("shop menu did not open") and its
+  B-exit path can cancel/stray purchases; I accidentally bought 9 extra
+  POKé BALLs (₽1800) from mis-timed presses near the qty picker. Hand-roll
+  purchases with passive ¥-wait loops + settle after every menu transition.
+- train()'s heal rail wedges when heal_pokecenter returns before the nurse
+  dialog finishes; wrapping heal_pokecenter with drain()+verify fixed it.
+- Repeated goto GAVE UP usually means an invisible pending scene
+  (wScriptMode=1 before any textbox renders): probe step_dir, then drain.
+  Same for post-battle TM-gift tails that block all movement.
+- Violet City south half: row-21 corridor is the only W-E link; x=13-14
+  is the only N-S column through rows 22-26; R31 gate landing — stay on
+  row 6 to the door, the ledge band strands you south of it (one-way).
+
+Next objective: HIVE badge — Route 32 south → Union Cave → Route 33 →
+AZALEA_TOWN (Bugsy). Fork as oxa-johto-pre-<risk>.state before cave/gym.
+Operator Q&A Aug 24 (hub send to Main still self-routed/no peers; logged here):
+1. Team: TOGEPI slot is an unhatched egg (egg:true, 0/18 is normal), not a
+   faint. Solo-until-Zephyr was deliberate; catches start now — GEODUDE in
+   Union Cave (tank), POLIWAG via R32 Old Rod (water/HM mule), flyer as CUT
+   mule. 14 balls in bag.
+2. Moves: forget order LEER > SMOKESCREEN > TACKLE; CUT goes to a bird, else
+   forgets TACKLE on Quilava; always re-read d.lead()['moves'] first.
+3. Harness fixes wanted: goto GAVE UP reason codes (pending-scene storms),
+   mart_buy shop-open race + cursor verify (cost me ₽1800 of accidental
+   balls), heal_pokecenter drain race; trek map @ renders one col right of
+   pos() x. MVP tools: trek map, event hooks, goto auto-fight.
 
 ---
 
@@ -225,6 +274,7 @@ UNION CAVE. Grind POLIWAG up alongside Cyndaquil. Next badge is HIVE
 | claude-lex | **DONE: PLAIN BADGE WON** (see milestone `plain-badge-healed.state`) — ox-alpha goal run above is now redundant, stand down | `saves/claude-lex2.state` (frame 2287621) |
 | team-run | fresh-boot balanced-team run: 6 nicknamed mons, rotation training, badges Zephyr->Hive minimum | saves/team-run.state |
 | ox-alpha (MoE) | owns MoE multi-agent harness build — worktree `../MoE-multiagents`, branch `MoE-multiagents` (plan: `MOE_PLAN.md`; scaffold committed `a9e152c`; conductor smoke green). No game-run ownership; smoke fork `MoE-multiagents/saves/moe-dev.state`. Zen key is FREE-TIER ONLY (`x-preview-f-free`, flaky 503/empty today) | n/a (harness work) |
+| oxa-johto | fresh boot -> Zephyr badge progression | `saves/oxa-johto.state` |
 
 Rule: never write another session's working state or a milestone checkpoint;
 promote progress under NEW filenames. See AGENTS.md "Multiple agents".

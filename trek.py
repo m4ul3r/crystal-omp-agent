@@ -1848,6 +1848,9 @@ class Driver:
         entry_map = self.map_name()
         replans = idle = passes = 0
         edge_counts = {}    # (from_map, to_map): crossings this one call
+        last_block = ""     # diagnosis text from the most recent blocked step
+        reason = "unspecified"
+        self.last_goto_reason = None
         if label or goal_map != self.map_name():
             log.info(f"[goto {goal}"
                   f"{'' if goal_map == self.map_name() else ' -> ' + goal_map}]"
@@ -1892,6 +1895,8 @@ class Driver:
                     if not path:
                         log.info(f"  no static path {cur_map} {cur} -> "
                               f"{goal}")
+                        reason = f"no-path {cur_map} {cur} -> {goal}"
+                        self.last_goto_reason = reason
                         return False
                     replans += 1
                     if replans % 5 == 1:
@@ -1906,8 +1911,10 @@ class Driver:
                     if not relaxed:
                         log.info(f"  no static path {cur_map} {cur} -> "
                               f"{goal_map} {goal}")
+                        reason = (f"no-path cross-map {cur_map} -> "
+                                  f"{goal_map} {goal}")
+                        self.last_goto_reason = reason
                         return False
-                    self.press(".:40")  # beat for genuinely moving NPCs
                     replans += 1
                     if replans % 5 == 0:
                         log.info(f"  threading {cur} -> {goal} past NPCs",
@@ -1955,6 +1962,8 @@ class Driver:
                         cause = " [npc on target cell]"
                     else:
                         cause = ""
+                    last_block = (cause.strip(" []")
+                                  or "unexplained blocked step")
                     log.info(f"  blocked {mv} at {self.map_name()} "
                           f"{(bx, by)}{cause}")
                     if self.textbox():
@@ -1969,8 +1978,22 @@ class Driver:
                 continue   # path exhausted; loop re-checks arrival/replans
             if not moved:
                 idle += 1
-        log.warning(f"  GAVE UP at {self.map_name()} {self.pos()[2:]} -> "
-              f"{goal_map} {goal}")
+        if idle >= 40:
+            reason = f"no-progress ({idle} idle passes)"
+            try:
+                if self.emu.read_u8("wScriptMode"):
+                    reason += "; script-scene-active"
+            except Exception:
+                pass
+        elif replans >= 20:
+            reason = f"replan-storm ({replans} replans)"
+        elif passes >= 60:
+            reason = "pass-cap"
+        if last_block:
+            reason += f"; last-block={last_block}"
+        self.last_goto_reason = reason
+        log.warning(f"  GAVE UP ({reason}) at {self.map_name()} "
+              f"{self.pos()[2:]} -> {goal_map} {goal}")
         return False
 
     # Deliberate-trip opt-in (FABLE_FEEDBACK failure pattern 5): after
@@ -2445,11 +2468,19 @@ class Driver:
         if not shop_open:
             if self.talk_to(x, y, label or "clerk") != "talked":
                 return False
-            if not any("¥" in r for r in self.emu.screen_text()):
+            # the list pops in frames AFTER talk_to's flush returns; wait
+            # it out passively -- an A press here buys whatever the cursor
+            # sits on (gotcha 13, cost a real session 1800 yen)
+            opened = False
+            for _ in range(20):
+                if any("¥" in r for r in self.emu.screen_text()):
+                    opened = True
+                    break
+                self.press(".:8")
+            if not opened:
                 log.warning("  shop menu did not open")
-                self.press("B:4 .:10")
+                self.press("B:4 .:10 .:20")
                 return False
-        bought = False
         for _ in range(40):                       # bounded item search
             rows = self.emu.screen_text()
             cur = self._shop_cursor_row(rows)
@@ -2515,9 +2546,17 @@ def heal_pokecenter(d):
     d.flush_dialog()           # "shall we heal?" -> A = yes
     d.press(".:300")           # heal jingle
     d.flush_dialog()           # "we hope to see you again"
-    party = game_state(d.emu, d.names)["party"]   # has the egg flag
-    hurt = [m for m in party if not m.get("egg")
-            and m.get("hp", 0) < m.get("max_hp", 0)]
+    d.settle()
+    d.flush_dialog(1500)       # sweep straggler pages before verifying
+
+    def _hurt():
+        return [m for m in game_state(d.emu, d.names)["party"]
+                if not m.get("egg") and m.get("hp", 0) < m.get("max_hp", 0)]
+
+    hurt = _hurt()
+    if hurt:                   # late pages can sit between us and truth
+        d.flush_dialog(2000)
+        hurt = _hurt()
     lead = d.lead()
     log.info(f"  healed: {lead['name']} {lead['hp']}/{lead['max_hp']}",
           )
