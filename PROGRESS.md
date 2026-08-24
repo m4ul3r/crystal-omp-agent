@@ -66,32 +66,54 @@ player **OXALPHA**, rival **OMEGA** (named at the Elm-lab cop scene on the
 post-errand return — Crystal moved it out of the intro, confirmed in
 maps/ElmsLab.asm NameRival special).
 
-**ZEPHYR BADGE WON** (Aug 24). Milestones this session: `oxa-johto-intro`
-(bedroom), `oxa-johto-starter` (New Bark), `oxa-johto-rival-named` (lab),
-`oxa-johto-egg-delivered`, `oxa-johto-rival-beaten` (Cherrygrove),
-`oxa-johto-violet`, `oxa-johto-zephyr-badge` (VIOLET_GYM (5,2) post-fight).
-Working state `saves/oxa-johto.state` = healed VIOLET_POKECENTER_1F.
-Party: QUILAVA "CINDER" L15 (Tackle/Leer/Smokescreen/Quick Attack).
-Bag: 14 Poké Balls. Money ₽1139.
+**ZEPHYR + HIVE BADGES WON** (Aug 24). Milestones this session:
+`oxa-johto-intro` (bedroom), `oxa-johto-starter` (New Bark),
+`oxa-johto-rival-named` (lab), `oxa-johto-egg-delivered`,
+`oxa-johto-rival-beaten` (Cherrygrove), `oxa-johto-violet`,
+`oxa-johto-zephyr-badge`, `oxa-johto-rival-beaten`, `oxa-johto-well-cleared`
+(Slowpoke Well rockets all beaten), `oxa-johto-hive-badge`.
+Working state `saves/oxa-johto.state` = healed AZALEA_POKECENTER_1F.
+Party: QUILAVA "CINDER" L21 (Tackle/Leer/Smokescreen/Ember... verify with
+d.lead()['moves']), TOGEPI EGG unhatched. Bag: 14 Poké Balls, LURE BALL,
+TM31 Mud-Slap. Money ₽4754.
+
+Story gates hit en route (all cleared):
+- R32 Cooltrainer M blocks southbound until Zephyr badge + Togepi egg
+  received (coord_event 18,8 SCENE_ROUTE32_COOLTRAINER_M_BLOCKS; he then
+  hands you MIRACLE SEED — not collected yet, he's at R32 (19,8)).
+  Egg comes from ELMS AIDE at VIOLET POKECENTER (not Elm's lab!).
+- Slowpoke Well required before gym: Rocket grunt squats the AZALEA GYM
+  approach until EVENT_CLEARED_SLOWPOKE_WELL. Kurt trigger = talk to KURT
+  at his house (3,2) — NOT the granddaughter (5,3).
+- Azalea gym maze: twins don't aggro from row 11; cross row 11 east and
+  climb column 8 through Al's sight line.
 
 Session gotchas (new):
 - game_state "name" shows the SPECIES string; true nickname is a separate
   party field — verify with d.lead()['nickname'].
-- mart_buy can race the shop-list open ("shop menu did not open") and its
-  B-exit path can cancel/stray purchases; I accidentally bought 9 extra
-  POKé BALLs (₽1800) from mis-timed presses near the qty picker. Hand-roll
-  purchases with passive ¥-wait loops + settle after every menu transition.
-- train()'s heal rail wedges when heal_pokecenter returns before the nurse
-  dialog finishes; wrapping heal_pokecenter with drain()+verify fixed it.
-- Repeated goto GAVE UP usually means an invisible pending scene
-  (wScriptMode=1 before any textbox renders): probe step_dir, then drain.
-  Same for post-battle TM-gift tails that block all movement.
-- Violet City south half: row-21 corridor is the only W-E link; x=13-14
-  is the only N-S column through rows 22-26; R31 gate landing — stay on
-  row 6 to the door, the ledge band strands you south of it (one-way).
-
-Next objective: HIVE badge — Route 32 south → Union Cave → Route 33 →
-AZALEA_TOWN (Bugsy). Fork as oxa-johto-pre-<risk>.state before cave/gym.
+- talk_to can return 'talked' while hitting an INERT object (Kurt's
+  granddaughter, item balls): cross-check maps/<map>.asm object_event
+  coords before assuming a talk worked.
+- After importlib.reload(trek)+new Driver, any stale kernel var bound to
+  the OLD Driver's emu presses buttons on a GHOST emulator — always
+  rebind raw-input refs to d.emu after a reload.
+- fight() cells need tight frame budgets: a 30000-frame pre-drain +
+  unbounded fight() blew a 900s eval timeout mid-battle (kernel survives;
+  battle state was clean after interrupt).
+- Union Cave 1F: entrance pocket exits via ROW 2 westward to x=9-11,
+  NOT straight south (side-wall tiles $b2 block down at x=15-16).
+Next objective (claimed Aug 24, goal mode): **FOG BADGE = 4th gym** (Morty,
+Ecruteak) — subsumes PLAIN. Route: Ilex Farfetch'd -> HM01 -> tree ->
+R34/R35 -> Goldenrod gym -> Squirtbottle chain (Floria R36 first!) ->
+Sudowoodo -> R37 -> Ecruteak gym. NOTE Aug 24: all saves/oxa-johto* files
+were GC'd into saves/backup/ (trek gc didn't protect them despite
+PROGRESS.md mention); RESTORED via cp -n -- treat saves/backup as the
+canonical store for this series until gc is fixed.
+Catches still PENDING (Geodude/Poliwag/flyer); 14 balls + 1 Lure Ball
+ready. TOGEPI egg hatches on foot — keep it in party while walking.
+NOTE for concurrent sessions: `session vega` also claimed a fresh run
+after me — I have not touched saves/vega.state; my forks all start with
+oxa-johto-.
 Operator Q&A Aug 24 (hub send to Main still self-routed/no peers; logged here):
 1. Team: TOGEPI slot is an unhatched egg (egg:true, 0/18 is normal), not a
    faint. Solo-until-Zephyr was deliberate; catches start now — GEODUDE in
@@ -103,6 +125,105 @@ Operator Q&A Aug 24 (hub send to Main still self-routed/no peers; logged here):
    mart_buy shop-open race + cursor verify (cost me ₽1800 of accidental
    balls), heal_pokecenter drain race; trek map @ renders one col right of
    pos() x. MVP tools: trek map, event hooks, goto auto-fight.
+
+
+## session vega owns fresh Johto run, working state saves/vega.state
+Fresh timeline started Aug 24 2026 (second ox-alpha mission): raw boot via
+`scripts/vega_intro.py`, player **AVEGA**, rival to be **NOVA** (typed at
+the Elm-lab cop scene on the post-errand return).
+
+Milestones: `vega-intro` (bedroom), `vega-outside`,
+`vega-lab-exit` (aide balls received), `vega-starter` (CYNDAQUIL L5),
+`vega-pre-errand`. EVENT_GOT_MYSTERY_EGG_FROM_MR_POKEMON SET, CYNDAQUIL L7.
+Milestones so far: `vega-rival-named` (**NOVA**, typed on the lab cop-scene
+keyboard), `vega-egg-delivered` (EVENT_GAVE_MYSTERY_EGG_TO_ELM SET),
+`vega-cherrygrove-2` (healed), `vega-violet-healed` (CYNDAQUIL L11 33/33,
+healed VIOLET_POKECENTER_1F). Money ₽3000, no badges yet. Next objective:
+supplies at Violet Mart -> Sprout Tower grind -> FALKNER (Zephyr).
+
+**ZEPHYR BADGE WON** (Aug 24). Milestone `vega-zephyr-badge.state`
+(VIOLET_GYM (5,2) post-fight). Party: QUILAVA L19, TOGEPI "A" L5 (hatched
+en route; see hatch gotcha), WOOPER L5 caught in Union Cave. ~9 Poké Balls.
+
+**HIVE BADGE WON** (Aug 24, late). All Slowpoke Well rockets beaten
+(GruntM29/M2/M1/F1 — talk-to-trigger; sight-walking was unreliable), Kurt
+finale auto-set EVENT_CLEARED_SLOWPOKE_WELL. Bugsy beaten by QUILAVA L27.
+Party: QUILAVA L28, TOGEPI "A" L5, WOOPER L9. ₽3216.
+Working `saves/vega.state` = healed AZALEA_POKECENTER_1F.
+Union Cave traversed successfully via d.travel("ROUTE_33") from inside the
+cave — the harness router handles the internal warps correctly; manual
+step-walking does NOT (live layout diverges from nav grid mid-cave).
+
+NEXT (HIVE badge checklist):
+1. Slowpoke Well: re-enter via town door at (31,7) [NOT (17,16) — that's
+   where you exit]. GruntM29 (15,7) beaten; remaining: GruntM2 (5,6),
+   GruntM1 (5,2), GruntF1 (10,4) — sight trainers, walk their lines.
+2. Talk to KURT inside the well after the last rocket -> sets
+   EVENT_CLEARED_SLOWPOKE_WELL, clears the rocket squatting the gym path
+   at town (10,16).
+3. Bugsy gym (door 10,15). Twins don't aggro from row 11; cross row 11
+   east, climb column 8 through Al's sight line (oxa-johto notes).
+
+Cave gotchas (new):
+
+- fight() party-menu wedge ("QUILAVA is already out" frozen screen):
+  recover = B to close menu, then trek.Battle(...).play(default policy).
+- The entrance pad (17,2)/(17,3): stepping D anywhere on it EXITS to R32.
+  After entering, step L first; blacklist pad cells in any walker.
+- Wild battles interrupt constantly in UC1F/R32 grass: check d.battle()
+  every iteration; fight(policy=flee_policy) preserves HP/PP when just
+  traveling. Quilava wiped twice vs ONIX/GEODUDE with 0-PP damaging moves.
+
+More fresh-boot gotchas:
+- d.goto() often does NOT raise on failure (logs GAVE UP, returns) --
+  ALWAYS check d.pos() after goto instead of relying on exceptions.
+- Violet Gym: keepers sight-fire on the middle column; fight them at
+  full HP, then Falkner at (5,1) from (5,2) facing U. Wiped once entering
+  at 21/45 HP; won cleanly at full HP L14.
+- TOGEPI EGG HATCHES while walking (~1000+ steps). The hatch naming
+  keyboard can appear MID-ROUTE and wedge movement (wScriptMode=1):
+  close it with START+A (fast minimal name) — B-cancel does NOT close it.
+  After our wedge, Togepi stayed 0/18 "fainted" until a nurse heal.
+- Mart purchases: mart_buy's shop-open race still bites. Hand-rolled flow
+  that works: face clerk, A once, WAIT passively ~4s for BUY/SELL/QUIT,
+  A on BUY, cursor is already on POKé BALL, A opens qty(=1)+YES/NO,
+  A confirms. Each cycle = 1 ball ₽200. wNumBalls WRAM read unreliable;
+  verify by money delta.
+- ALL of saves/ got swept into saves/backup/ by another process mid-session
+  (second occurrence today). Restore with cp saves/backup/vega\* saves/.
+  Consider per-session subdirectories.
+- Sprout Tower 2F sage Nico (SPINRANDOM_FAST) permanently blocks the only
+  south exit of the NE pocket and never triggers his own sight battle;
+  tower skipped entirely (not required for Zephyr). Left unexplored.
+
+Earlier fresh-boot gotchas:
+- Elm's egg-delivery + officer scene: cop/rival naming fires as a coord
+  event at lab (4,5)/(5,5); BFS seals it -- walk the aisle with step_hold
+  and drain until keyboard_open(), then type_name().
+- Elm's phone call ("It's a disaster!") blocks ROUTE_30 (17,6) after the
+  egg; drain it before travel.
+- R30 x=5 corridor: Mikey (5,23) + Joey cutscene objects; after the egg is
+  delivered EVENT_ROUTE_30_BATTLE despawns the rattatas, but Mikey still
+  blocks the single-tile corridor -- hop WEST over the ledges at row 24
+  (step_hold L from (5,24)), then BugCatcherDon sight-fight at (1,10),
+  then goto(5,4).
+- to_violet leg works from R30 north end; R31 gate exit west warp lands
+  VIOLET_CITY (37,25).
+- ALWAYS d.save() in a finally block -- several crashes lost walked miles.
+
+Gotchas (fresh-boot specific):
+- step_hold() does NOT warp out of PLAYERS_HOUSE_2F stairs; raw press
+  ("U:60 .:60") works. goto across a live textbox replan-storms -- drain
+  scenes BEFORE nav, and after row-4 coord-event scenes step OFF the row
+  before routing.
+- Elm's lab: entry auto-dialog fires once; must FULLY drain Elm's speech
+  (talk at (5,3) facing U) before ball tiles respond; ball A-press often
+  needs one retry. Leaving the lab first time = aide balls scene mid-goto;
+  drain then goto again.
+- errand1 leg's flush_dialog(30000) is NOT enough for Mr Pokemon's egg
+  scene -- verify EVENT_GOT_MYSTERY_EGG_FROM_MR_POKEMON after; explicit
+  talk + long drain fixed it.
+
 
 ---
 
@@ -126,6 +247,7 @@ _Second timeline started Aug 23 (ox-alpha): fresh boot, player "GOLD",_
   Player UNA, rival AA, QUILAVA L25 and Togepi egg, with Zephyr, Hive, and
   Plain Badges. The Ilex gate loop was resolved by completing Farfetch'd,
   obtaining HM01, teaching Cut, and cutting the tree at (8,25).
+
   Loop postmortem + anti-loop harness guards (whiteout abort, goto seam
   guard, save() rollback refusal, `trek verify`/`trek states`): see
   "Harness round 7" below.

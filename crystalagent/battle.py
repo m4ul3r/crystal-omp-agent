@@ -367,6 +367,17 @@ class Battle:
                 not self.menu.select_label("USE", max_presses=4):
             self._cancel_pack()
             return False
+        # The confirming A can land during popup setup and get swallowed
+        # (gotcha 2): then the popup sits on USE forever, the CANCEL wait
+        # below times out, and no target is ever picked. Verify the popup
+        # actually left; re-press USE while it is still showing.
+        for _ in range(3):
+            if self.menu.wait_for(
+                    lambda r: any("CANCEL" in x for x in r)
+                    or not any("USE" in x for x in r),
+                    timeout_frames=300):
+                break
+            self.menu.press("A:6 .:20")
         # consumption lands once the battle text resolves; a quantity
         # that never drops means the USE misfired (wrong item, no effect)
         before = bag_quantity(self.emu, self.names, item_name)
@@ -426,10 +437,16 @@ class Battle:
     def _forced_switch_up(self, rows):
         """The post-faint party list (CANCEL row + 'HP / max' rows). Not
         the battle menu, so generic A-mashing parks on the fainted lead
-        and re-errors forever ("There's no will to battle!")."""
+        and re-errors forever ("There's no will to battle!").
+        A potion target list ("Use on which PM?") renders the same CANCEL
+        + HP rows -- only a FAINTED active mon makes it a real forced
+        switch; treating the heal list as one hammers a full-HP lead and
+        loops the battle to its frame cap (wedged 150 train battles)."""
         if not any("CANCEL" in r for r in rows):
             return False
-        return any(re.search(r"\d\s*/\s*\d+", r) for r in rows)
+        if not any(re.search(r"\d\s*/\s*\d+", r) for r in rows):
+            return False
+        return self.me()["hp"] <= 0
 
     def _drive_forced_switch(self):
         """Send out the first alive mon: select its slot, then keep
