@@ -1,0 +1,130 @@
+# DRIVER HANDBOOK — operating the crystal-agent harness
+
+Practical guide for agents driving Pokémon Crystal through this repo.
+Companion docs: `AGENTS.md` (session protocol + gotchas — binding),
+`DESIGN.md` (decision-boundary doctrine), `PROGRESS.md` (live journal).
+This file is about HOW to call the machine.
+
+## Choose your control surface
+
+| You want | Use |
+|---|---|
+| Long play session, model decides each step | persistent Python kernel holding ONE `trek.Driver` (see below) |
+| Scripted batch run / external decider loop | `autopilot.py` stdin NDJSON |
+| Another process pokes a running game | `serve.py` NDJSON |
+| One-shot shell command | `trek.py <leg>` (boots emulator per call — fine occasionally, wasteful in loops) |
+
+**Warm-process rule** (`AGENTS.md`): boot `Driver(state)` once per session
+and compose calls against it. Cold-booting per action wastes ~1 s+ each and
+re-reads nothing useful. Cell timings under ~50 ms prove you're warm;
+seconds mean you're re-booting.
+
+```python
+from trek import Driver
+d = Driver("saves/YOURS.state")     # never saves/default.state implicitly
+```
+
+## Actions go through the registry
+
+Every verb a decider may invoke is defined once in
+`crystalagent/registry.py`. Validation happens BEFORE execution: unknown
+verbs, unknown kwargs, missing kwargs, and preconditions are rejected with
+a human sentence (`ValueError: fight: needs an active battle
+(ui.battle=False)`). Rejection is information, not an obstacle — fix the
+decision or the precondition, don't bypass.
+
+| Action | Required kwargs | Optional | Precondition |
+|---|---|---|---|
+| `goto` | x, y | label, map_name | not in battle |
+| `walk` | path | label | not in battle |
+| `fight` | — | max_frames, policy | **in battle** |
+| `catch` | — | ball, max_balls, nickname | **in battle** |
+| `heal` | — | — | inside a Pokécenter |
+| `talk_to` | x, y | label, facing | not in battle |
+| `mart_buy` | x, y, item_name | qty, label | not in battle |
+| `use_item` | item_name | target_slot, field | not in battle |
+| `settle` | — | quiet, spacing, max_frames | — |
+| `route` | dest_map | max_cost | not in battle |
+| `travel` | dest_map | label | not in battle |
+| `step_dir` | mv | max_frames | not in battle |
+| `press` | seq | — | — |
+| `use_cut` | tree_x, tree_y | label, forget_move | not in battle |
+
+Call it from anywhere:
+
+```python
+from crystalagent.registry import resolve
+resolve(d, "goto", {"x": 6, "y": 5})
+d.last_goto_reason        # None on success; see failure table below
+```
+
+## Reading the world
+
+- `d.observe()` — full snapshot: position, tiles (here/N/E/S/W terrain
+  kinds), party (hp/pp/status/moves+max_pp), bag, money, badges, flags,
+  npc cells, ui.textbox/ui.battle, frame. This is the serve contract.
+- `game_state(emu, names)` — deeper: DVs, shininess, forms, nicknames,
+  play time. Egg slots carry `egg: true`; a resting egg shows 0 HP — that
+  is NOT a fainted mon.
+- `d.map_view(map_name=None)` — ASCII reachable-region view, global
+  coordinates in the rulers. Glyphs: `@` you, `.` floor, `%` grass,
+  `~` water, `O` warp, `^` ledge, `=` ice, `x` pit, `!` live-blocked,
+  `N` NPC, `#` wall, space unreachable. Quote coordinates straight back
+  into `goto`/`talk_to`.
+- `d.status()` — one-line summary for logs.
+
+## Failure signatures → first response
+
+| Signal | Meaning | First response |
+|---|---|---|
+| `d.last_goto_reason = "no-path ..."` | grid/truth says unreachable | check goal cell; maybe sealed (`!`) or wrong map |
+| `"no-progress (N idle passes)"` | steps consumed, world unchanged | stuck budget tripped; look at screen text |
+| `"...; script-scene-active"` | wScriptMode != 0, a scene owns input | wait/settle, or walk around the scene cell |
+| `"replan-storm"` / `"pass-cap"` | thrashing between plans | anchor nearer, split the journey |
+| `"; last-block=npc on target cell"` | wanderer parked on path | wait or approach from another side |
+| `TravelError: map seam ... ping-pong` | warp cycle | anchor at a waypoint and relaunch |
+| `flush_dialog()` returns `"menu"` | a choice box opened mid-drain | handle deliberately — mashing would pick something |
+| registry `ValueError` | bad decision shape/precondition | read the sentence; correct the call |
+
+## Recipes
+
+- **Catch**: get into battle (wilds trigger via `fight`'s caller normally);
+  `resolve(d, "catch", {"nickname": "NAME"})` throws balls with catch math
+  and names it. Check `observe().bag` for ball stock first.
+- **Train**: `d.train(target_level)` rotates the party, heals on the rail
+  via Pokécenter visits. Heal verification drains straggler pages before
+  asserting — if you must patch, don't; report instead.
+- **Shop**: `resolve(d, "mart_buy", {...})` waits passively for the shop
+  list after the clerk talks (no A presses in that window). Never mash A
+  near an open shop list (`AGENTS.md` gotcha 13).
+- **New moves**: read `d.lead()["moves"]` immediately before deciding;
+  declining a level-up learn is permanent in GSC. HM CUT prefers birds
+  (`use_cut(tree_x, tree_y)` handles teaching + swinging).
+- **Heal**: `heal` action (must be inside a Pokécenter) — verifies actual
+  HP post-jingle; raises if the party is still hurt rather than lying.
+
+## Autopilot / serve protocols (quick reference)
+
+Autopilot stdin commands: `decision`, `observe`, `screen`, `memory`,
+`save`, `quit`. Cycle replies carry `obs`, `ok`, `error`, `why`,
+`mem_tail` (recent rolling-memory lines). `{"cmd":"memory","args":
+{"tail":N}}` returns `{frontier, tail}` — the long-horizon view without
+reading files. Journal lines are JSONL in `journal/<session>.jsonl` with
+wall-clock `t`; cycle records include `used` frame spend.
+
+Serve commands: `observe`, `status`, `save`, `load`, `run`
+(registry-resolved), `quit`.
+
+Malformed requests get structured `ok:false`, never a dead pipe.
+
+## Hygiene
+
+- Forks before risk: `saves/<you>-pre-N.state` (+ `.meta`). Milestones:
+  `saves/<you>-<kind>-N.state`. Never touch another session's states.
+- `.meta` stamps pyboy version + ROM sha256 and loads refuse mismatches —
+  NEVER rebuild the ROM casually; hook signatures and every fork are
+  build-coupled.
+- Input/text event hooks are live by default (`CRYSTAL_HOOKS=0` disables).
+  After a ROM rebuild they self-disable with a warning until re-pinned.
+- Keep `.venv/bin/python -m pytest tests` green; run `trek gc --keep 3`
+  occasionally (dry-run default; protects milestones).

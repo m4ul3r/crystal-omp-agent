@@ -18,6 +18,12 @@ Context windows are the real enemy — agents don't die because the game is
 hard, they die re-exploring. `PROGRESS.md` + aggressive checkpoints are the
 countermeasure.
 
+**Before your first drive, read `HANDBOOK.md`** — the operational guide:
+control surfaces (trek legs vs serve/autopilot NDJSON vs warm kernel),
+the action registry with preconditions, observe()/map_view field maps,
+failure signatures and their first responses (`d.last_goto_reason`), and
+recipes for catch/train/shop/moves.
+
 ## Quick start
 
 ```sh
