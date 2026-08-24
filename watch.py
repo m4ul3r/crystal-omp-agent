@@ -331,6 +331,10 @@ function kind(m){
  if(/^badge/.test(m))return['★','t-badge'];
  if(/^money/.test(m))return['₽','t-money'];
  if(/^checkpoint/.test(m))return['💾','t-save'];
+ if(/^entered/.test(m))return['➜','t-map'];
+ if(/party/.test(m))return['●','t-party'];
+ return['·',''];
+}
 function addEvent(e){
  const[ic,cls]=kind(e.msg);
  const div=document.createElement('div');
