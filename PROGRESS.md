@@ -148,6 +148,7 @@ UNION CAVE. Grind POLIWAG up alongside Cyndaquil. Next badge is HIVE
 | ox-alpha (goal run) | owns Goldenrod -> WHITNEY (Plain Badge) | `saves/ox-alpha.state` (forked from claude-lex2 @ frame 1132973, Dept Store 2F) |
 | claude-lex | **DONE: PLAIN BADGE WON** (see milestone `plain-badge-healed.state`) — ox-alpha goal run above is now redundant, stand down | `saves/claude-lex2.state` (frame 2287621) |
 | team-run | fresh-boot balanced-team run: 6 nicknamed mons, rotation training, badges Zephyr->Hive minimum | saves/team-run.state |
+| ox-alpha (MoE) | owns MoE multi-agent harness build — worktree `../MoE-multiagents`, branch `MoE-multiagents` (plan: `MOE_PLAN.md`; scaffold committed `a9e152c`; conductor smoke green). No game-run ownership; smoke fork `MoE-multiagents/saves/moe-dev.state`. Zen key is FREE-TIER ONLY (`x-preview-f-free`, flaky 503/empty today) | n/a (harness work) |
 
 Rule: never write another session's working state or a milestone checkpoint;
 promote progress under NEW filenames. See AGENTS.md "Multiple agents".
