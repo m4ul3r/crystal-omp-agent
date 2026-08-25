@@ -348,3 +348,85 @@ def test_caps_at_max_moves():
     res = d.explore_bfs(at(0, 99, 99), max_moves=7)
     assert res["found"] is False
     assert len(moves) == 7                        # blocked bumps count too
+
+
+# -- staircase tiles: held keys bounce off, taps fire them --------------------
+
+class StairPy(FakePy):
+    """'S' cells warp only when entered by a TAP (button released before
+    the step completes) -- pokecrystal's COLL_STAIRCASE behaviour, which
+    made Victory Road's inter-floor stairs invisible to a held search."""
+
+    def _arrive(self, dx, dy):
+        st = self.state
+        key = (st["map"], st["x"], st["y"])
+        if self._cell(*key) == "S":
+            if not st["held"]:                 # tapped: the warp fires
+                st["map"], st["x"], st["y"] = self.warps[key]
+            else:                              # held: pushed back off
+                st["x"] -= dx
+                st["y"] -= dy
+            return
+        super()._arrive(dx, dy)
+
+
+def stair_driver(maps, start, warps):
+    py = StairPy(maps, start, warps)
+    d = Driver.__new__(Driver)
+    d.emu = FakeEmu(py)
+    d.names = SimpleNamespace(maps=MAP_NAMES)
+    return d, py
+
+
+def test_staircase_reached_only_via_tap_fallback():
+    maps = {0: ["#####",
+                "#.S.#",
+                "#####"],
+            1: ["#####",
+                "#...#",
+                "#####"]}
+    d, _ = stair_driver(maps, (0, 1, 1), {(0, 2, 1): (1, 2, 1)})
+    res = d.explore_bfs(lambda dr: dr.pos()[1] == 1)
+    assert res["found"] is True
+    assert d.pos() == (0, 1, 2, 1)
+
+
+def test_plain_wall_still_blocked_after_tap_retry():
+    d, py = stair_driver({0: ["###",
+                              "#.#",
+                              "###"]}, (0, 1, 1), {})
+    res = d.explore_bfs(lambda dr: dr.pos() == (0, 0, 9, 9), max_moves=8)
+    assert res["found"] is False
+    assert d.pos() == (0, 0, 1, 1)        # start state restored
+
+
+# -- reach(): goto first, savestate search when the grid lies ----------------
+
+def test_reach_prefers_goto_and_skips_the_search():
+    d, _ = bfs_driver(["###", "#.#", "###"], (0, 1, 1))
+    calls = {"goto": 0, "bfs": 0}
+
+    def goto(x, y, label=""):
+        calls["goto"] += 1
+        return True
+    d.goto = goto
+    d.explore_bfs = lambda *a, **k: calls.__setitem__("bfs", 1) or {"found": False}
+    assert d.reach(2, 1) is True
+    assert calls == {"goto": 1, "bfs": 0}
+
+
+def test_reach_falls_back_to_search_when_goto_lies():
+    """goto reports failure (wrong static grid) but the cell IS walkable:
+    the savestate search finds it and reach() returns True."""
+    d, _ = bfs_driver(["#####", "#...#", "#####"], (0, 1, 1))
+    d.goto = lambda x, y, label="": False
+    d.last_goto_reason = "unexplained blocked step"
+    assert d.reach(3, 1) is True
+    assert d.pos() == (0, 0, 3, 1)
+
+
+def test_reach_reports_false_when_truly_unreachable():
+    d, _ = bfs_driver(["###", "#.#", "###"], (0, 1, 1))
+    d.goto = lambda x, y, label="": False
+    d.last_goto_reason = "unreachable"
+    assert d.reach(9, 9, budget=12, nodes=8) is False

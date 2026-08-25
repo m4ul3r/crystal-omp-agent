@@ -714,7 +714,9 @@ def fight_world(d, monkeypatch):
             return {"name": "MILTANK"}
 
         def play(self, policy=None, **kw):
-            played.append(policy)
+            # fight() hands play() a wrapper (per-turn record + auto-log,
+            # wren pt6); wrapped.policy is who is actually steering
+            played.append(getattr(policy, "policy", policy))
             self.emu.u8["wBattleMode"] = 0
             return "win"
 

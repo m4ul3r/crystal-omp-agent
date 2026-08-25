@@ -280,8 +280,9 @@ def test_move_settled_blocked_wall():
 
 class BattleWorld(World):
     """The step lands (x=6 at held-8), then a wild battle interrupts at
-    frame 12 -- move_settled must play it out via self.fight and still
-    report the settled move."""
+    frame 12. As of wren pt6 move_settled SURFACES that battle instead
+    of playing it out: a step is not a journey, so the disposition
+    (ko/catch/flee) belongs to the caller unless fight=True."""
 
     def on_frame(self, buttons, a_edge, a_gap):
         e = self.emu
@@ -291,10 +292,18 @@ class BattleWorld(World):
             e.u8["wBattleMode"] = 1
 
 
-def test_move_settled_answers_battle_en_route():
+def test_move_settled_surfaces_battle_en_route():
     w = BattleWorld()
     d = bare_driver(w)
-    assert d.move_settled("R") == "moved"
+    assert d.move_settled("R") == "battle"
+    assert d.fight_calls == 0                  # harness decided nothing
+    assert d.emu.u8["wBattleMode"] == 1        # still up, for the caller
+
+
+def test_move_settled_fights_only_when_asked():
+    w = BattleWorld()
+    d = bare_driver(w)
+    assert d.move_settled("R", fight=True) == "moved"
     assert d.fight_calls == 1
     assert d.emu.u8["wBattleMode"] == 0
 

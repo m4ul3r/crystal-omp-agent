@@ -6,8 +6,10 @@ Usage: .venv/bin/python trek.py <leg> [args]   (see main() dispatch)
 """
 
 import heapq
+import inspect
 import json
 import logging
+import random
 import re
 import sys
 from collections import deque
@@ -29,7 +31,80 @@ from crystalagent.state import (game_state, status_line, live_sprites,
                                 SPRITE_WANDERERS)
 from crystalagent.symfile import Symbols
 
+# -- model-facing decision vocabulary (wren pt6) ---------------------------
+# crystalagent.decide carries the shared battle-decision vocabulary:
+# battle_frame() (one dict with everything a turn decision needs),
+# TurnLog (the per-turn record the Koga wipe had none of), and
+# DecisionRequired (the harness refusing to pick for the model).
+# Imported PER NAME and defensively: a live kernel may still hold an older
+# crystalagent, and trek.py must keep driving battles without any of them
+# (legacy (rows, me, enemy) policies, turn rows in a plain list).
+try:
+    from crystalagent.decide import battle_frame as _decide_frame
+except Exception:
+    _decide_frame = None
+try:
+    from crystalagent.decide import TurnLog as _TurnLog
+except Exception:
+    _TurnLog = None
+try:
+    from crystalagent.decide import DecisionRequired
+except Exception:
+    class DecisionRequired(RuntimeError):
+        """A decision the harness refuses to make: raised by
+        fight(require_decision=True) / d.decide_all when a policy returns
+        None. Carries the decision frame (.frame) so the model can answer
+        without re-reading the battle. Subclasses RuntimeError so existing
+        `except RuntimeError` guards keep working."""
+
+        def __init__(self, message, frame=None, kind=None, options=()):
+            super().__init__(message)
+            self.frame = frame
+            self.kind = kind
+            self.options = options
+
+
 log = logging.getLogger("trek")
+
+
+def _policy_style(pol):
+    """Which call shape a battle/encounter policy declares: 'frame' for
+    the wren-pt6 single-argument policy(frame), 'legacy' for the historic
+    policy(rows, me, enemy). Anything uninspectable (builtins) or
+    *args-shaped is legacy: every policy written before pt6 takes the
+    triple and a live kernel still holds some."""
+    if pol is None:
+        return "legacy"
+    try:
+        params = list(inspect.signature(pol).parameters.values())
+    except (TypeError, ValueError):
+        return "legacy"
+    slots = 0
+    for p in params:
+        if p.kind is inspect.Parameter.VAR_POSITIONAL:
+            return "legacy"
+        if p.kind in (inspect.Parameter.POSITIONAL_ONLY,
+                      inspect.Parameter.POSITIONAL_OR_KEYWORD):
+            slots += 1
+    return "frame" if slots == 1 else "legacy"
+
+
+def _turn_row(rec, **row):
+    """Append one turn to a decide.TurnLog (or the plain-list fallback)
+    and return the STORED row dict, so the next turn can fill in this
+    turn's after-HP. Never raises: bookkeeping must not lose a battle."""
+    put = getattr(rec, "record", None)
+    if callable(put):
+        try:
+            stored = put(**row)
+            return stored if isinstance(stored, dict) else row
+        except Exception as err:
+            log.warning(f"  [fight] turn log unusable ({err}); "
+                        f"recording this turn plainly")
+    if isinstance(rec, list):
+        rec.append(row)
+    return row
+
 
 DIRS = {"U": "UP", "D": "DOWN", "L": "LEFT", "R": "RIGHT"}
 
@@ -645,6 +720,32 @@ class Driver:
         self.move_changes = []
         self.hooks = hookevents.install(self.emu)
 
+    # -- decision defaults (session claude-wren pt6) ------------------------
+    # The harness must never decide a battle the model did not ask it to.
+    # Live evidence: a model-written pacing loop reported fights=0 while
+    # move_settled quietly fought ~20 encounters with the DEFAULT policy,
+    # fed every exp share to the wrong mon, and whited the party out.
+    #
+    # auto_fight (instance, True) gates the JOURNEY helpers -- walk/goto/
+    # travel -- which are allowed to clear encounters that merely stand
+    # between us and a destination. Set it False and those bubble the
+    # battle back to the decider instead.
+    #
+    # auto_fight_steps (class, False) gates the STEP PRIMITIVES:
+    # move_settled(fight=None) and pace(). One step is not a journey, so
+    # a battle walked into is SURFACED ('battle') with the battle still
+    # up. Flip this True (or pass fight=True) to opt a caller back into
+    # the old swallow-it behaviour.
+    auto_fight_steps = False
+
+    # encounter_policy: optional per-driver hook letting the MODEL decide
+    # a wild's disposition ('ko' | 'catch' | 'flee' | ('ball', NAME)) and
+    # each battle turn's decision. None = no hook (default_policy / AUTO).
+    encounter_policy = None
+    # decide_all: True means every battle needs an explicit decision --
+    # refuse to auto-pilot rather than silently pick for the model.
+    decide_all = False
+
     # -- observations ------------------------------------------------------
 
     def pos(self):
@@ -1138,20 +1239,31 @@ class Driver:
             pass
         return bool(self.textbox())
 
-    def move_settled(self, mv, hold=40, max_frames=600):
+    def move_settled(self, mv, hold=40, max_frames=600, fight=None):
         """One directional move sampled SAFELY: press `mv` held `hold`
         frames, then poll pos() until it reads identical 3 times in a
         row -- a single read mid-slide/mid-walk reports the tile being
-        crossed, so sampling right after the press lies. Battles are
-        played out (self.fight) and textboxes paged (A) en route.
-        Returns 'moved' | 'blocked' | 'warp'."""
+        crossed, so sampling right after the press lies. Textboxes are
+        paged (A) en route.
+
+        Battles are SURFACED, never swallowed: a step is not a journey,
+        so an encounter returns 'battle' with the battle still up and
+        the decision left to the caller (wren pt6 -- a model-written
+        pacing loop reported fights=0 while this method fought ~20
+        battles on the DEFAULT policy and whited the party out).
+        `fight=True` restores the old play-it-out behaviour; `fight=None`
+        follows self.auto_fight AND self.auto_fight_steps (False by
+        default, i.e. surface it).
+        Returns 'moved' | 'blocked' | 'warp' | 'battle'."""
         before = self.pos()
         self.press(f"{mv}:{hold}")
         last, stable = None, 0
         f0 = self.emu.frame
         while self.emu.frame - f0 < max_frames:
             if self.battle():
-                self.fight()
+                if not self._step_fights(fight):
+                    return "battle"
+                self._on_battle(f"move_settled {mv}", fight=True)
                 self.emu.tick(2)     # guarantee frame progress
                 last, stable = None, 0
                 continue
@@ -1172,6 +1284,41 @@ class Driver:
             return "warp"
         return "moved" if now != before else "blocked"
 
+    def _may_fight(self, fight=None):
+        """Journey resolution of the tri-state `fight` argument: an
+        explicit True/False wins, None follows self.auto_fight."""
+        if fight is not None:
+            return bool(fight)
+        return bool(getattr(self, "auto_fight", True))
+
+    def _step_fights(self, fight=None):
+        """Step-primitive resolution of `fight`: an explicit True/False
+        wins; None requires BOTH self.auto_fight and the opt-in
+        self.auto_fight_steps, so the default is to surface the battle."""
+        if fight is not None:
+            return bool(fight)
+        return (bool(getattr(self, "auto_fight", True))
+                and bool(getattr(self, "auto_fight_steps", False)))
+
+    def _on_battle(self, where="", fight=None):
+        """The ONE path by which a nav/field helper plays out an encounter
+        it walked into, so a policy/encounter hook always applies (every
+        route goes through fight(), never a private shortcut).
+
+        Returns True when the battle was fought -- the caller must still
+        check _whiteout_stop() -- and False when it is handed BACK
+        untouched (auto_fight=manual), with last_goto_reason set so the
+        refusal is diagnosable instead of silent."""
+        if not self._may_fight(fight):
+            self.last_goto_reason = (
+                f"battle during {where} (auto_fight=manual) -- "
+                "decide: fight()/catch() yourself")
+            log.info(f"  battle during {where}: handing it to the "
+                     f"decider (auto_fight=manual)")
+            return False
+        self.fight()
+        return True
+
     def clear_obstacle(self, direction, tries=6):
         """Clear a prompt-gated field obstacle one step in `direction`:
         whirlpools ($24), waterfalls ($33), and the surf-mount ask when
@@ -1183,8 +1330,9 @@ class Driver:
         mash loops always fail, so A presses keep >=40-frame gaps.
         Returns 'moved' (position or map changed), 'cleared-not-moved'
         (a prompt was answered but the follow-up step didn't take --
-        retry a plain move), or 'failed' (no prompt ever appeared:
-        plain wall)."""
+        retry a plain move), 'battle' (an encounter interrupted and
+        auto_fight=manual: decide it, then retry), or 'failed' (no
+        prompt ever appeared: plain wall)."""
         prompted = False
         for _attempt in range(tries):
             before = self.pos()
@@ -1193,7 +1341,8 @@ class Driver:
             f0 = self.emu.frame
             while self.emu.frame - f0 < 90:
                 if self.battle():
-                    self.fight()
+                    if not self._on_battle(f"clear_obstacle {direction}"):
+                        return "battle"
                     self.emu.tick(2)
                     continue
                 if self._script_or_text():
@@ -1215,9 +1364,110 @@ class Driver:
                 self.press("A:8 .:48")
             if self.pos() != before:             # the prompt itself moved
                 return "moved"                   # us (surf mount)
-            if self.move_settled(direction, hold=40) in ("moved", "warp"):
+            r = self.move_settled(direction, hold=40)
+            if r == "battle":         # primitive surfaced it; one path
+                if not self._on_battle(f"clear_obstacle {direction}"):
+                    return "battle"
+                continue
+            if r in ("moved", "warp"):
                 return "moved"
         return "cleared-not-moved" if prompted else "failed"
+
+    def _pace_dirs(self, dirs, box):
+        """The directions from the current cell that keep pace() inside
+        `box` (x_lo, x_hi, y_lo, y_hi, inclusive). Already outside it (a
+        warp dumped us elsewhere)? Only the moves that CLOSE the gap are
+        offered, so the walk works its way back in instead of deadlocking."""
+        if box is None:
+            return list(dirs)
+        x_lo, x_hi, y_lo, y_hi = box
+        x, y = self.pos()[2:]
+
+        def _miss(px, py):
+            """Manhattan distance from (px, py) to the box; 0 = inside."""
+            return (max(x_lo - px, 0, px - x_hi)
+                    + max(y_lo - py, 0, py - y_hi))
+
+        here = _miss(x, y)
+        out = []
+        for mv in dirs:
+            dx, dy = STEP[mv]
+            there = _miss(x + dx, y + dy)
+            if there == 0 or there < here:
+                out.append(mv)
+        return out
+
+    def pace(self, steps, dirs="UDLR", box=None, on_battle="return"):
+        """Random-walk `steps` steps on the current map: the grinding /
+        encounter-farming loop the driving model otherwise hand-rolls
+        every session (and hand-rolled wrong -- see move_settled).
+
+        `dirs`: directions to draw from ('LR' paces a corridor).
+        `box`: (x_lo, x_hi, y_lo, y_hi) INCLUSIVE bounding box the walk
+        may never leave -- an unclamped random walk drifted onto a
+        staircase and stranded a live run three floors deep in Victory
+        Road. Cells outside it are never stepped toward.
+        `on_battle`: 'return' (default) STOPS the instant an encounter
+        starts and leaves the battle up, so the model decides ko/catch/
+        flee; 'fight' hands each one to the caller's policy (through
+        fight(), so encounter_policy/default_policy apply) and keeps
+        pacing.
+
+        Returns {'steps': steps actually taken, 'battles': encounters
+        seen, 'stopped': why it ended} where 'stopped' is 'steps'
+        (budget spent), 'battle', 'boxed-in' (no legal direction),
+        'blocked' (walls in every drawn direction), 'warp' (left the
+        map), 'whiteout', or 'declined' (on_battle='fight' but
+        auto_fight=manual -- the decider owns it)."""
+        if on_battle not in ("return", "fight"):
+            raise ValueError(f"pace: on_battle={on_battle!r} -- use "
+                             f"'return' or 'fight'")
+        budget = max(0, int(steps))
+        picks = [c for c in str(dirs).upper() if c in STEP]
+        if not picks:
+            raise ValueError(f"pace: dirs={dirs!r} names no direction")
+        if box is not None:
+            box = tuple(int(v) for v in box)
+            if len(box) != 4 or box[0] > box[1] or box[2] > box[3]:
+                raise ValueError(
+                    f"pace: box={box!r} must be (x_lo, x_hi, y_lo, y_hi) "
+                    f"with lo <= hi")
+        taken = battles = blocked = 0
+        stopped = "steps"
+        while taken < budget:
+            legal = self._pace_dirs(picks, box)
+            if not legal:
+                stopped = "boxed-in"
+                break
+            r = self.move_settled(random.choice(legal), fight=False)
+            if r == "battle":
+                battles += 1
+                if on_battle == "return":
+                    stopped = "battle"
+                    break
+                if not self._on_battle(f"pace step {taken + 1}"):
+                    stopped = "declined"
+                    break
+                if self._whiteout_stop("pace"):
+                    stopped = "whiteout"
+                    break
+                blocked = 0
+                continue
+            if r == "warp":
+                taken += 1
+                stopped = "warp"      # off the map: the box means nothing
+                break
+            if r == "moved":
+                taken += 1
+                blocked = 0
+                continue
+            blocked += 1
+            if blocked >= 8:
+                stopped = "blocked"
+                break
+        log.info(f"  pace: {taken}/{budget} steps, {battles} battles, "
+                 f"stopped={stopped}")
+        return {"steps": taken, "battles": battles, "stopped": stopped}
 
     def keyboard_open(self):
         s = self.emu.screen_text()
@@ -1647,18 +1897,334 @@ class Driver:
             r = self._drain_scene(max_frames=min(max_frames, 2000))
         return r
 
-    def fight(self, max_frames=90000, policy=None):
+    # -- battle decisions (wren pt6) ---------------------------------------
+    # The harness used to decide battles by DEFAULT and say nothing about
+    # it: a "pacing" loop reported fights=0 while ~20 battles fought
+    # themselves (all the exp to the wrong mon, then a whiteout), ~78 of
+    # ~80 wild encounters were auto-KO'd without the model being asked
+    # 'KO / catch / flee', and a ping-pong switch policy fed Koga ~10 free
+    # switch-in hits with no per-turn record to diagnose it from.
+    #
+    # last_battle: per-turn record of the LAST fight() -- a decide.TurnLog
+    # when crystalagent.decide is importable, else a plain list of the same
+    # row dicts. Written by EVERY fight(), so a battle that went wrong is
+    # reviewable after the fact.
+    last_battle = None
+    # last_frame: the decision frame of the most recent turn (or encounter
+    # consult). A policy that wants the frame without assembling it by hand
+    # can read it; single-argument policies are handed it directly.
+    last_frame = None
+    # More than this many VOLUNTARY switch-ins in one battle gets a loud
+    # end-of-battle line: each one is a free hit for the foe.
+    FREE_HIT_LOUD = 2
+    # Bare 'catch' disposition: cheapest ball in the pocket first, so a
+    # plain 'catch' never burns an ULTRA BALL on a RATTATA.
+    BALL_PREFERENCE = ("POKE BALL", "GREAT BALL", "ULTRA BALL")
+
+    def battle_frame(self):
+        """The decision frame for the CURRENT battle -- the dict
+        crystalagent.decide.battle_frame documents (me/enemy/party/bag/
+        turn/wild/can_switch/moves) -- or None with no battle up (or no
+        decide module). Exactly what encounter_policy and frame-shaped
+        battle policies are handed, exposed so a model can read the same
+        thing by hand instead of stitching game_state()/observe() together
+        for every decision."""
+        if not self.battle():
+            return None
+        return self._frame(Battle(self.emu, self.names, self.bdata))
+
+    def _frame(self, b):
+        """decide.battle_frame(b) for the live battle, or None. Never
+        raises: the frame is an affordance, and losing it must not lose
+        the battle -- policies fall back to (rows, me, enemy)."""
+        if _decide_frame is None:
+            return None
+        try:
+            frame = _decide_frame(b)
+        except Exception as err:
+            if not getattr(self, "_frame_warned", False):
+                self._frame_warned = True
+                log.warning(f"  [fight] battle_frame unavailable ({err}); "
+                            f"policies get the legacy (rows, me, enemy)")
+            return None
+        self.last_frame = frame
+        return frame
+
+    @staticmethod
+    def _ask(hook, frame, rows, me, enemy):
+        """Call a decision hook in the shape it declares: pt6 hook(frame)
+        or legacy hook(rows, me, enemy). A frame-shaped hook is handed
+        None when crystalagent.decide is unavailable."""
+        if _policy_style(hook) == "frame":
+            return hook(frame)
+        return hook(rows, me, enemy)
+
+    def _consult_encounter(self, b, policy, must_decide):
+        """Ask self.encounter_policy ONCE, the moment a WILD appears, what
+        to do with it: 'ko' | 'catch' | 'flee' | ('ball', NAME). Returns
+        (disposition, per-turn policy): 'catch' and 'flee' REPLACE the
+        per-turn policy for this battle, 'ko' (and no answer) keep it.
+        Trainer battles never come here -- there is nothing to decide.
+
+        A hook that raises, or answers with something outside the
+        vocabulary, logs ONE warning and KOs: a bad hook never wedges a
+        battle. With decide_all/require_decision set, NO answer is an
+        error (DecisionRequired) rather than a silent auto-KO."""
+        hook = getattr(self, "encounter_policy", None)
+        if hook is None and not must_decide:
+            # nothing to ask and nothing to refuse: don't pay for a frame
+            return None, policy
+        frame = self._frame(b)
+        try:
+            rows = self.emu.screen_text()
+        except Exception:
+            rows = []
+        try:
+            me, enemy = b.me(), b.enemy()
+        except Exception:
+            me, enemy = {}, {}
+        who = enemy.get("name") if isinstance(enemy, dict) else None
+
+        def unanswered(why):
+            if must_decide:
+                raise DecisionRequired(
+                    f"wild {who}: {why} -- answer 'ko' | 'catch' | 'flee' "
+                    f"| ('ball', NAME)", frame=frame, kind="encounter",
+                    options=("ko", "catch", "flee", "ball"))
+            return None, policy
+
+        if hook is None:
+            return unanswered("no encounter_policy set")
+        try:
+            disp = self._ask(hook, frame, rows, me, enemy)
+        except DecisionRequired:
+            raise
+        except Exception as err:
+            log.warning(f"  [encounter] encounter_policy raised ({err}); "
+                        f"KO'ing wild {who}")
+            return "ko", policy
+        if disp is None:
+            return unanswered("encounter_policy returned None")
+        kind = disp[0] if isinstance(disp, tuple) and disp else disp
+        kind = kind.strip().lower() if isinstance(kind, str) else kind
+        ball = disp[1] if isinstance(disp, tuple) and len(disp) > 1 else None
+        if kind == "flee":
+            log.info(f"  [encounter] wild {who}: flee")
+            return "flee", lambda rows, me, enemy: "flee"
+        if kind in ("catch", "ball"):
+            ball = self._encounter_ball(ball)
+            log.info(f"  [encounter] wild {who}: catch with {ball}")
+            return f"catch:{ball}", self._ball_policy(ball)
+        if kind == "ko":
+            log.info(f"  [encounter] wild {who}: KO")
+            return "ko", policy
+        log.warning(f"  [encounter] encounter_policy answered {disp!r}, want "
+                    f"'ko' | 'catch' | 'flee' | ('ball', NAME); KO'ing "
+                    f"wild {who}")
+        return "ko", policy
+
+    def _new_turn_log(self):
+        """A decide.TurnLog, or a plain list when the module is missing --
+        a kernel reboot that drops the import must not drop the record."""
+        if _TurnLog is not None:
+            try:
+                return _TurnLog()
+            except Exception as err:
+                log.warning(f"  [fight] decide.TurnLog unusable ({err}); "
+                            f"recording turns in a plain list")
+        return []
+
+    def _action_label(self, act, me=None):
+        """One readable phrase for a battle decision ('attack slot 0
+        (SURF)'), so a log line names the move actually used."""
+        kind = act[0] if isinstance(act, tuple) and act else act
+        arg = act[1] if isinstance(act, tuple) and len(act) > 1 else None
+        if kind == "attack":
+            if not isinstance(arg, int):
+                return "attack (best move)"
+            name = "?"
+            try:
+                moves = (me or {}).get("moves") or []
+                if arg < len(moves):
+                    mid = moves[arg][0]
+                    name = self.names.moves.get(mid, f"?id{mid}")
+            except Exception:
+                pass
+            return f"attack slot {arg} ({name})"
+        if kind == "switch":
+            return f"switch to party slot {arg}"
+        if kind in ("ball", "item"):
+            return f"{kind} {arg}"
+        return str(kind)
+
+    def _auto_action(self, b, me, enemy, state, steered):
+        """What the harness would have played SILENTLY, resolved here (not
+        inside Battle.play's own fallback) so the log line can name the
+        exact slot and move that gets used. Logged ONCE per battle:
+        WARNING when nothing at all was steering, INFO when a policy
+        merely declined this turn."""
+        act = "attack"
+        try:
+            act = b._default_policy(me, enemy, 0.3)
+        except Exception:
+            pass
+        kind = act[0] if isinstance(act, tuple) and act else act
+        arg = act[1] if isinstance(act, tuple) and len(act) > 1 else None
+        if kind == "attack" and not isinstance(arg, int):
+            try:
+                slot = b.best_move()
+            except Exception:
+                slot = None
+            if slot is not None:
+                act = ("attack", slot)
+        if state["autos"] == 0:
+            label = self._action_label(act, me)
+            if steered:
+                log.info(f"  [fight] auto: {label} (policy declined this "
+                         f"turn)")
+            else:
+                log.warning(f"  [fight] auto: {label} -- no policy, no "
+                            f"default_policy, decide_all off: the HARNESS "
+                            f"is choosing this battle")
+        state["autos"] += 1
+        return act, "auto"
+
+    @staticmethod
+    def _close_turn(state, me, enemy):
+        """Fill the PREVIOUS turn's after-HP from the vitals read at the
+        start of this one: that difference is what a free hit costs."""
+        row = state.get("last_row")
+        if not isinstance(row, dict):
+            return
+        if isinstance(me, dict) and row.get("my_hp_after") is None:
+            row["my_hp_after"] = me.get("hp")
+        if isinstance(enemy, dict) and row.get("enemy_hp_after") is None:
+            row["enemy_hp_after"] = enemy.get("hp")
+
+    def _turn_policy(self, b, policy, must_decide, disposition=None):
+        """Wrap the per-turn policy so EVERY turn lands on self.last_battle
+        and the harness never picks invisibly. Returns (state, wrapped).
+
+        The wrapped policy ALWAYS returns a concrete action, so Battle.play
+        can no longer fall back to its best-damage picker behind our back:
+        with must_decide the missing decision raises DecisionRequired
+        (carrying the frame), otherwise the harness's own pick is resolved
+        here and logged."""
+        style = _policy_style(policy)
+        rec = self._new_turn_log()
+        self.last_battle = rec
+        state = {"turns": 0, "free_hits": 0, "autos": 0, "last_row": None,
+                 "disposition": disposition, "log": rec}
+
+        def wrapped(rows, me, enemy):
+            state["turns"] += 1
+            self._close_turn(state, me, enemy)
+            # a legacy policy that cannot be refused never looks at the
+            # frame: don't re-read the party and bag every turn for it
+            frame = (self._frame(b) if style == "frame" or must_decide
+                     else None)
+            act = None
+            if policy is not None:
+                act = (policy(frame) if style == "frame"
+                       else policy(rows, me, enemy))
+            source = "policy"
+            if act is None:
+                if must_decide:
+                    why = ("policy returned None" if policy is not None
+                           else "no policy set")
+                    raise DecisionRequired(
+                        f"turn {state['turns']}: {why} and this fight "
+                        f"requires a decision -- answer ('attack', slot) | "
+                        f"('switch', party_index) | ('item', NAME) | "
+                        f"('ball', NAME) | 'flee'",
+                        frame=frame, kind="turn",
+                        options=("attack", "switch", "item", "ball", "flee"))
+                act, source = self._auto_action(
+                    b, me, enemy, state, steered=policy is not None)
+            kind = act[0] if isinstance(act, tuple) and act else act
+            if kind == "switch":
+                # the switch-in itself eats a hit; Koga got ~10 of them
+                state["free_hits"] += 1
+            note = source if not disposition else f"{source}/{disposition}"
+            state["last_row"] = _turn_row(
+                rec, actor="me", action=act, turn=state["turns"],
+                enemy_species=(enemy.get("name")
+                               if isinstance(enemy, dict) else None),
+                enemy_hp_before=(enemy.get("hp")
+                                 if isinstance(enemy, dict) else None),
+                my_hp_before=me.get("hp") if isinstance(me, dict) else None,
+                note=note)
+            return act
+
+        # who is actually steering, for anything inspecting the policy
+        # Battle.play received (logs, tests, a decider asking "who chose
+        # that?"): the wrapper is not the decision-maker, this is.
+        wrapped.policy = policy
+        wrapped.disposition = disposition
+        return state, wrapped
+
+    def _log_turns(self, b, state, outcome):
+        """Close the last turn's record and say ONE loud line when the
+        battle handed the foe repeated free hits -- the Koga wipe (10 free
+        switch-in hits, 5 of 6 mons lost) must be visible at a glance.
+
+        The LOUD number is switch-ins: decide.TurnLog also counts item uses
+        and ball throws as ceded turns (they are), but a 4-ball catch is not
+        an anomaly and must not cry wolf. Returns
+        (switch_ins, ceded_turns)."""
+        try:
+            self._close_turn(state, b.me(), b.enemy())
+        except Exception:
+            pass
+        free = state["free_hits"]
+        ceded = free
+        counter = getattr(state.get("log"), "free_hits", None)
+        if callable(counter):
+            try:
+                ceded = counter()
+            except Exception:
+                ceded = free
+        if free > self.FREE_HIT_LOUD:
+            log.warning(f"  [fight] free_hits={free} in {state['turns']} "
+                        f"turns ({outcome}): every switch-in handed the foe "
+                        f"a free hit -- turn record on d.last_battle")
+        return free, ceded
+
+    def fight(self, max_frames=90000, policy=None, require_decision=False,
+              consult_encounter=True):
         """Play a battle out with real move selection (best expected
         damage, auto-POTION at low HP, flee hopeless wilds). Pauses at a
         naming keyboard (post-catch nickname prompt) to type
         self._pending_nickname if one is set. `policy=None` falls back
         to self.default_policy (still None by default): scripted battles
         the driver intercepts on its own (talk_to, goto, travel) obey a
-        pre-armed policy instead of silently fighting with the default."""
+        pre-armed policy instead of silently fighting with the default.
+
+        wren pt6 -- the MODEL decides, the harness only reports:
+        * a WILD battle asks self.encounter_policy ONCE, before the first
+          turn, for a disposition ('ko' | 'catch' | 'flee' |
+          ('ball', NAME)): 'catch' throws balls (catch()'s own logic),
+          'flee' runs, 'ko' plays the battle out with `policy`. TRAINER
+          battles never ask. consult_encounter=False suppresses the
+          question for callers that ARE the disposition (catch()).
+        * require_decision=True (or self.decide_all) refuses to pick: a
+          turn whose policy returns None raises DecisionRequired carrying
+          the frame, instead of quietly playing the best-damage move.
+        * every turn is recorded on self.last_battle, and a battle with
+          more than FREE_HIT_LOUD switch-ins says so in one line.
+        * with nothing steering, the harness's pick is logged ('auto:
+          attack slot 0 (SURF)') -- a pacing loop once reported fights=0
+          while ~20 battles fought themselves.
+        Policy shapes: policy(rows, me, enemy) (legacy, still supported)
+        or policy(frame) -- a single-argument policy is handed the decide
+        frame instead. Returns the lead mon, as before."""
         if policy is None:
             policy = self.default_policy
-        if not self.battle():
+        mode = self.battle()
+        if not mode:
             return self.lead()
+        must_decide = bool(require_decision) or bool(
+            getattr(self, "decide_all", False))
         self._resolve_learn_flow()   # repair a wedged mid-learn state
         moves0 = self._party_moves()   # learn-transparency baseline
         f0 = self.emu.frame
@@ -1668,9 +2234,16 @@ class Driver:
             enemy0 = b.enemy()
         except Exception:
             enemy0 = {}
+        disposition = None
+        if mode == 1 and consult_encounter:
+            # ONE question per wild encounter, asked before any turn
+            disposition, policy = self._consult_encounter(b, policy,
+                                                          must_decide)
+        state, turn_policy = self._turn_policy(b, policy, must_decide,
+                                               disposition)
         name = self._resolve_nickname(self._pending_nickname,
                                       b.enemy()["name"])
-        outcome = b.play(policy=policy, max_frames=max_frames,
+        outcome = b.play(policy=turn_policy, max_frames=max_frames,
                          want_nickname=bool(name),
                          text_handler=self._battle_text_handler)
         for _ in range(3):                       # naming handoff loop
@@ -1678,9 +2251,10 @@ class Driver:
                 break
             self._pending_nickname = None
             self.dismiss_keyboard(name)
-            outcome = b.play(policy=policy, max_frames=max_frames,
+            outcome = b.play(policy=turn_policy, max_frames=max_frames,
                              text_handler=self._battle_text_handler)
         self._pending_nickname = None
+        free_hits, ceded = self._log_turns(b, state, outcome)
         # surface mid-battle level-up swaps (b.play resolved them through
         # _battle_text_handler); the sweep below diffs its own window
         self._diff_learned_moves(moves0)
@@ -1750,6 +2324,10 @@ class Driver:
                 "moves0": sorted(moves0), "moves1": sorted(
                     self._party_moves()),
                 "policy": "custom" if policy is not None else "default",
+                "wild": mode == 1, "disposition": disposition,
+                "turns": state["turns"], "free_hits": free_hits,
+                "ceded_turns": ceded,
+                "decided": state["turns"] - state["autos"],
             })
         return lead
 
@@ -2090,11 +2668,11 @@ class Driver:
             return nickname.get(species)
         return nickname
 
-    def catch(self, ball="POKE BALL", max_balls=10, nickname=None):
-        """Throw `ball` at the current wild until it connects or the budget
-        runs out; flees rather than KO the target once out of balls.
-        `nickname`: str (applied to whatever is caught), dict keyed by
-        species name, or callable(species_name) -> str|None."""
+    def _ball_policy(self, ball="POKE BALL", max_balls=10):
+        """Per-turn policy that throws `ball` until it connects, the ball
+        pocket runs dry, or `max_balls` are gone -- then flees rather than
+        KO the target. Shared by catch() and the encounter hook's 'catch'
+        disposition, so both throw balls exactly the same way."""
         thrown = [0]
 
         def pol(rows, me, enemy):
@@ -2104,9 +2682,36 @@ class Driver:
             thrown[0] += 1
             return ("ball", ball)
 
+        return pol
+
+    def _encounter_ball(self, name=None):
+        """Which ball a bare 'catch' disposition throws: the named one, or
+        the cheapest ball actually in the pocket -- answering 'catch' must
+        not burn an ULTRA BALL on a RATTATA. Falls back to POKE BALL when
+        the pocket cannot be read (the ball policy then flees on a dry
+        bag rather than KO the target)."""
+        if name:
+            return name
+        for cand in self.BALL_PREFERENCE:
+            try:
+                if bag_item_index(self.emu, self.names, cand,
+                                  "balls") is not None:
+                    return cand
+            except Exception:
+                break
+        return self.BALL_PREFERENCE[0]
+
+    def catch(self, ball="POKE BALL", max_balls=10, nickname=None):
+        """Throw `ball` at the current wild until it connects or the budget
+        runs out; flees rather than KO the target once out of balls.
+        `nickname`: str (applied to whatever is caught), dict keyed by
+        species name, or callable(species_name) -> str|None.
+        This call IS the encounter disposition, so encounter_policy is not
+        asked again for this battle."""
         self._pending_nickname = nickname
         try:
-            return self.fight(policy=pol)
+            return self.fight(policy=self._ball_policy(ball, max_balls),
+                              consult_encounter=False)
         finally:
             self._pending_nickname = None
 
@@ -2972,12 +3577,8 @@ class Driver:
             while done < n:
                 r = self._step(d)
                 if r == "battle":
-                    if not self.auto_fight:
-                        self.last_goto_reason = (
-                            "battle during walk (auto_fight=manual) -- "
-                            "decide: fight()/catch() yourself")
+                    if not self._on_battle(f"walk '{path}'"):
                         return False
-                    self.fight()
                     if self._whiteout_stop(f"walk '{path}'"):
                         return False
                 elif r == "moved":
@@ -3165,12 +3766,8 @@ class Driver:
             for mv in path:
                 r = self._step(mv)
                 if r == "battle":
-                    if not self.auto_fight:
-                        self.last_goto_reason = (
-                            "battle during goto (auto_fight=manual) -- "
-                            "decide: fight()/catch() yourself")
+                    if not self._on_battle(f"goto {goal_map} {goal}"):
                         return False
-                    self.fight()
                     if self._whiteout_stop(f"goto {goal_map} {goal}"):
                         self.last_goto_reason = "whiteout-abort"
                         return False
@@ -3531,6 +4128,32 @@ class Driver:
         return _CONN_LAND[st["dir"]](len(grid[0]), len(grid),
                                      st["offset"] or 0, x, y)
 
+    def reach(self, x, y, label="", budget=200, nodes=140):
+        """Walk to (x, y) on THIS map, falling back to explore_bfs when
+        the static collision grid is wrong about the geometry.
+
+        Victory Road (and the Rocket base, and Ice Path) have floors whose
+        decoded grid disagrees with the live map: goto reports
+        'unexplained blocked step' / 'unreachable' for cells the avatar
+        can plainly walk to. goto is still tried first -- it is far
+        cheaper -- and only its failure pays for a savestate search.
+        Returns True when standing on (x, y)."""
+        target = (x, y)
+        if self.pos()[2:] == target:
+            return True
+        try:
+            if self.goto(x, y, label):
+                return True
+        except Exception:
+            pass
+        if self.pos()[2:] == target:
+            return True
+        log.info(f"  reach: goto failed ({self.last_goto_reason}); "
+                 f"searching for {target}")
+        res = self.explore_bfs(lambda dr: dr.pos()[2:] == target,
+                               max_moves=budget, max_nodes=nodes)
+        return bool(res["found"])
+
     def travel(self, dest_map, label=""):
         """Execute route(<dest_map>) leg by leg with the existing walk/
         _step/settle mechanics: goto each approach cell, hold through warps
@@ -3604,7 +4227,12 @@ class Driver:
             for _attempt in range(4):
                 r = self._step(st["dir"])
                 if r == "battle":
-                    self.fight()      # encounter mid-transition; then retry
+                    # encounter mid-transition; then retry
+                    if not self._on_battle("travel"):
+                        raise TravelError(
+                            f"leg {i}: battle mid-travel with "
+                            f"auto_fight=manual -- decide it "
+                            f"(fight()/catch()), then relaunch travel()")
                     if self._whiteout_stop("travel"):
                         raise TravelError(
                             f"leg {i}: wiped mid-travel, auto-healed at "
@@ -3677,34 +4305,53 @@ class Driver:
         with no input, forced signs pop textboxes mid-move, and wilds/
         trainers intercept. Polls pos() until stable, answers textboxes
         with A at 40+ frame gaps, and resolves battles per `on_battle`
-        ('fight' | 'skip'). Returns 'moved' | 'blocked' | 'skip'
-        (skip = dead branch: battle declined or lost)."""
+        ('fight' | 'skip'). A move that gets nowhere retries once with
+        _step_warp_tap: COLL_STAIRCASE tiles push a held key straight
+        back off, so Victory Road's inter-floor stairs read as walls to a
+        held-key search (the avatar even STANDS on them without firing).
+        Returns 'moved' | 'blocked' | 'skip' (skip = dead branch)."""
         before = self.pos()
+
+        def _drive():
+            last, quiet = None, 0
+            f0 = self.emu.frame
+            while self.emu.frame - f0 < max_frames:
+                if self.battle():
+                    if on_battle != "fight":
+                        return "skip"
+                    self.fight()
+                    if getattr(self, "_whiteout_pending", False):
+                        self._whiteout_pending = False   # the BRANCH died
+                        return "skip"
+                    last, quiet = None, 0
+                    continue
+                if self.textbox():
+                    self.press("A:4 .:40")   # 40+ frame gap between answers
+                    last, quiet = None, 0
+                    continue
+                cur = self.pos()
+                if cur == last:
+                    quiet += 1
+                    if quiet >= 3:
+                        break
+                else:
+                    last, quiet = cur, 0
+                self.emu.tick(20)
+            return None
+
         self.step_dir(mv)
-        last, quiet = None, 0
-        f0 = self.emu.frame
-        while self.emu.frame - f0 < max_frames:
-            if self.battle():
-                if on_battle != "fight":
-                    return "skip"
-                self.fight()
-                if getattr(self, "_whiteout_pending", False):
-                    self._whiteout_pending = False   # the BRANCH died
-                    return "skip"
-                last, quiet = None, 0
-                continue
-            if self.textbox():
-                self.press("A:4 .:40")   # 40+ frame gap between answers
-                last, quiet = None, 0
-                continue
-            cur = self.pos()
-            if cur == last:
-                quiet += 1
-                if quiet >= 3:
-                    break
-            else:
-                last, quiet = cur, 0
-            self.emu.tick(20)
+        out = _drive()
+        if out:
+            return out
+        if self.pos() != before:
+            return "moved"
+        try:
+            self._step_warp_tap(mv)     # staircase phase-shifted taps
+        except Exception:
+            return "blocked"
+        out = _drive()
+        if out:
+            return out
         return "moved" if self.pos() != before else "blocked"
 
     def explore_bfs(self, goal, max_moves=600, dirs="URDL", forbid_maps=(),
@@ -3723,14 +4370,17 @@ class Driver:
         cap modest.
 
         Returns {'found': bool, 'state': bytes|None, 'steps': int,
-        'visited': int}. On found, the winning savestate IS the loaded
-        emulation state (the returned blob is a keepsake); on not-found
-        the starting state is reloaded."""
+        'visited': int, 'cells': set[(map, x, y)]}. On found, the winning
+        savestate IS the loaded emulation state (the returned blob is a
+        keepsake); on not-found the starting state is reloaded. `cells` is
+        the frontier actually proven reachable -- read it to pick the next
+        waypoint when a floor's static grid lies about its geometry."""
         forbid = set(forbid_maps)
         self.settle()
         if goal(self):
             return {"found": True, "state": self._explore_snap(),
-                    "steps": 0, "visited": 1}
+                    "steps": 0, "visited": 1,
+                    "cells": {(self.map_name(),) + self.pos()[2:]}}
         root = self._explore_snap()
         seen = {(self.map_name(),) + self.pos()[2:]}
         q = deque([(root, 0)])
@@ -3751,7 +4401,8 @@ class Driver:
                              f"{self.pos()[2:]} after {depth + 1} steps "
                              f"({moves} moves, {len(seen)} states)")
                     return {"found": True, "state": state,
-                            "steps": depth + 1, "visited": len(seen)}
+                            "steps": depth + 1, "visited": len(seen),
+                            "cells": set(seen)}
                 if out == "blocked":
                     continue
                 key = (self.map_name(),) + self.pos()[2:]
@@ -3763,7 +4414,7 @@ class Driver:
         log.info(f"  explore_bfs: no goal within budget "
                  f"({moves} moves, {len(seen)} states)")
         return {"found": False, "state": None, "steps": 0,
-                "visited": len(seen)}
+                "visited": len(seen), "cells": set(seen)}
 
 
     def _standable(self, name, c):

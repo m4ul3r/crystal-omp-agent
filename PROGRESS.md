@@ -80,11 +80,70 @@ reports 'warp' when the mount carries you across a map seam — the New Bark ->
 Route 27 crossing mounted successfully and still returned 'blocked', so the
 seam was hand-rolled with raw presses. tests/unit/test_wren_pt6_surf_mount.py
 (5 green).
+[fix] MovementAutofightAgent (Aug 25): the movement primitives no longer
+decide battles — move_settled surfaces 'battle' (party still in it) instead of
+silently calling fight() with the DEFAULT policy (the pacing loop that reported
+fights=0 while the harness fought ~20 battles and whited us out); `fight=True`
+or the new class flag `auto_fight_steps` opts back in, and walk/goto/travel/
+clear_obstacle now clear encounters ONLY through the single `_on_battle()` path
+so a policy/encounter hook always applies. New `Driver.pace(steps, dirs, box,
+on_battle)` replaces the hand-rolled grind loop: box=(x_lo,x_hi,y_lo,y_hi)
+clamps the random walk so it cannot drift into a stairwell (the Victory Road
+three-floor strand), 'return' stops on the first encounter for the model to
+decide, 'fight' hands each to the policy and keeps going. Class attrs
+`encounter_policy`/`decide_all` added for the encounter hook.
+tests/unit/test_movement_no_autofight.py (26 green).
 OPEN DEBT (not attempted): travel() still has no warp-graph fallback for
 multi-floor interiors ('no routable mapgraph path RADIO_TOWER_5F ->
 GOLDENROD_CITY' — descend floor-by-floor by hand), and Victory Road's
 stair warps need _step_warp_tap (held keys bounce off COLL_STAIRCASE), so
 explore_bfs over held moves alone cannot leave that floor.
+
+### DOCTRINE (pt6, after user callout): the MODEL decides, not the harness
+The run had drifted into auto-pilot. Evidence: a "pacing" loop logged
+`fights=0` while move_settled silently fought ~20 battles, fed all exp to
+GATOR and whited the party out; a ping-pong policy handed Koga ~10 free
+switch-in hits and wiped 5 of 6 mons with no turn record to diagnose it;
+a kernel reboot dropped learn_policy and the auto-forget traded a
+deliberately-bought TM16 Icy Wind for Hydro Pump; ~78 of ~80 wild
+encounters were auto-KO'd without ever asking. Inverted defaults:
+- movement NEVER fights (move_settled surfaces 'battle'; auto_fight_steps
+  gates primitives, auto_fight still gates journeys), new pace(box=...)
+  for grinding without ceding control;
+- every WILD asks `encounter_policy(frame)` once: 'ko'|'catch'|'flee'|
+  ('ball', NAME); trainers never asked;
+- `fight(require_decision=True)` / `decide_all` raise DecisionRequired
+  (with the frame) instead of guessing; an unsteered fight logs
+  'auto: attack slot N (<move>) -- the HARNESS is choosing';
+- `battle_frame()` gives me/enemy/party/bag/turn/wild/can_switch/moves
+  (power, pp, effect_mult) in ONE read, so a real policy is ~5 lines;
+- `last_battle` TurnLog with .summary()/.free_hits() makes the Koga-style
+  wipe a single line instead of a postmortem.
+Also landed: Driver.reach(x,y) (goto, then explore_bfs when a floor's
+decoded grid lies) and explore_bfs's staircase-tap retry + 'cells' set.
+[fix] BattleFrameAgent (Aug 25): new `crystalagent/decide.py` — `battle_frame(b)`
+(or `(emu, names, bdata)`) assembles in ONE call what every hand-written policy
+was re-deriving (me/enemy with status, whole party, bag with spelling-proof
+lookup, turn, wild, `can_switch` minus active/fainted/eggs, and my moves WITH
+`effect_mult` vs the mon actually standing there); `TurnLog` keeps the
+append-only per-turn record with `free_hits()` — the number nobody counted while
+Koga got ~10 free switch-in hits — plus `summary()`/`explain()` one-liners and
+`DecisionRequired` for "the MODEL answers this". battle.py gains
+`my_hp()/enemy_hp()/hp_snapshot()`, a `status` key on me()/enemy(), and
+`BattleData.effectiveness` now counts a duplicate defender type ONCE (engine
+parity, CheckTypeMatchup: Water vs mono-WATER is 0.5x, was 0.25x).
+tests/unit/test_decide_frame.py (21 green).
+[fix] EncounterHookAgent (Aug 25): wilds are now a QUESTION, not a default —
+`d.encounter_policy(frame)` is asked ONCE per wild encounter for
+'ko'|'catch'|'flee'|('ball',NAME) ('catch' reuses catch()'s ball logic and picks
+the cheapest ball in the pocket; trainers are never asked), `fight(...,
+require_decision=True)` / `d.decide_all` raise `DecisionRequired` (carrying the
+frame) instead of quietly playing best-damage, every turn lands on
+`d.last_battle` (decide.TurnLog, plain list without the module) with one loud
+`free_hits=N` line per battle, and a fight nothing is steering logs exactly one
+`auto: attack slot 0 (SURF)` warning naming the harness's own pick. Battle.play
+now receives a WRAPPER, so fakes/inspection must read `wrapped.policy` to see
+who is steering. tests/unit/test_encounter_hook.py (27 green).
 
 # PROGRESS — Pokémon Crystal run
 

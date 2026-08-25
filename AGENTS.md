@@ -83,12 +83,18 @@ from the leg's own arguments.
 |------|-----|
 | Structured state (party/battle/money/badges) | `crystal state`, or `Driver.lead()` / `game_state()` |
 | Walkable map, BFS with ledges + NPC avoidance | `trek.Driver.goto(x,y)`; debug render: `MapData.render(map_const)` |
-| Fight battles | `Driver.fight()` — best-move selection from ROM move data, auto-POTION at <30% HP, flees hopeless wilds |
+| Fight battles | `Driver.fight(policy=...)` — YOU pick per turn; with nothing steering it logs `auto: attack slot 0 (SURF) -- the HARNESS is choosing` so auto-pilot is never silent |
 | Talk to an NPC / trigger a trainer | `Driver.talk_to(x, y)` or `trek talk X Y` — walks adjacent (handles counters), faces them, flushes dialog, fights trainer battles that trigger |
 | Buy from a Poké Mart | `Driver.mart_buy(x, y, item, qty)` or `trek mart X Y ITEM QTY` — clerk at (x,y); B-only exit (see gotcha 13) |
-| Catch / flee / switch mid-battle | custom policy: `d.fight(policy=lambda rows, me, enemy: ('ball',))`; options: `'flee'`, `('attack', slot)`, `('switch', party_idx)`, `('item','POTION')`, `('ball','POKE BALL')` — all verified live |
+| Decide a wild encounter | `d.encounter_policy = lambda frame: 'catch'` — asked ONCE per wild for `'ko'`/`'catch'`/`'flee'`/`('ball', NAME)`; trainers are never asked |
+| Decide every turn yourself | `d.fight(require_decision=True)` or `d.decide_all = True` — a turn your policy declines raises `trek.DecisionRequired` (`.frame`, `.kind`, `.options`) instead of the harness guessing |
+| See the whole battle in one read | `d.battle_frame()` → `{me, enemy, party, bag, turn, wild, can_switch, moves}`; each move carries `power`/`pp`/`effect_mult` (type effectiveness vs THIS enemy) |
+| Audit a battle afterwards | `d.last_battle` (`.rows()`, `.summary()`, `.free_hits()`) — free hits are the switch-in/item turns that wiped the party at Koga |
+| Mid-battle actions | policy returns `('attack', slot)`, `('switch', party_idx)`, `('item','SUPER POTION')`, `('ball','GREAT BALL')`, or `'flee'` |
 | Name a caught Pokémon | `d.catch(nickname="BUBBLES")` (str, species-keyed dict, or callable) or `trek catch NICKNAME` — types it on the naming keyboard; without a name the prompt is declined |
-| Use items out of battle | `Driver.use_item('POTION', target_slot=0)` |
+| Use items out of battle | `Driver.use_item('POTION', target_slot=0)` (falls back to screen-based pack detection when the WRAM gate misreads) |
+| Grind without surrendering control | `d.pace(steps, box=(x_lo,x_hi,y_lo,y_hi))` — random walk clamped to a box (keeps you out of stairwells), stops with `stopped='battle'` and the battle STILL UP |
+| Walk where the map data lies | `d.reach(x, y)` — `goto` first, then a savestate search (`d.explore_bfs`) when a floor's decoded grid is wrong (Victory Road, Rocket base, Ice Path) |
 | Menus anywhere | `d.menu.select_label('SAVE')` (instance method, cursor-glyph driven), `select_abs(i)` (scrolling lists), `wait_for_label('USE')`; open YES/NO box → `resolve_choice('YES')` |
 | Read any game variable | `crystal sym <pattern>` then `crystal read <symbol> -n N [--text]` |
 

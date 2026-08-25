@@ -17,7 +17,7 @@ import re
 from pathlib import Path
 
 from .menus import Menus, battle_menu_up, naming_keyboard_up, _cursor_x
-from .state import EGG, MON_NAME_LENGTH
+from .state import EGG, MON_NAME_LENGTH, _status
 
 log = logging.getLogger("trek")
 
@@ -69,8 +69,14 @@ class BattleData:
             }
 
     def effectiveness(self, atk_type, def_types):
+        """Type multiplier of `atk_type` against a defender's type pair.
+        Duplicate entries count ONCE: the engine (CheckTypeMatchup,
+        engine/battle/effect_commands.asm) walks the matchup table and
+        applies each row if its defending type equals type1 OR type2, so a
+        mono-type mon -- which stores its type twice -- is never squared
+        (Water vs a mono-WATER mon is 0.5x, not 0.25x)."""
         m = 1.0
-        for t in def_types:
+        for t in dict.fromkeys(def_types):
             m *= self.matchups.get((atk_type, t), 1.0)
         return m
 
@@ -177,11 +183,21 @@ class Battle:
                             MON_NAME_LENGTH)
         return self.emu.charmap.decode(raw)
 
+    def _status_of(self, label):
+        """Status-condition names ('PSN', 'SLP:3', ...) of a battler's
+        status byte. Defensive: a symbol table without the label (or a
+        pre-battle read) yields [] rather than breaking the snapshot."""
+        try:
+            return _status(self.emu.read_u8(label))
+        except Exception:
+            return []
+
     def me(self):
         """Active battler snapshot. Identity: 'name' is the SPECIES name
         (compat -- it CHANGES on mid-battle evolution and is shared by
         duplicate mons); 'nickname' + 'party_slot' are the stable handles
-        policies should match on (wCurBattleMon -> wPartyMonNicknames)."""
+        policies should match on (wCurBattleMon -> wPartyMonNicknames).
+        'status' lists the active conditions (wBattleMonStatus)."""
         rd = self._struct_reader("wBattleMon")
         moves = list(rd("Moves", 4))
         pps = list(rd("PP", 4))
@@ -196,13 +212,14 @@ class Battle:
             "hp": int.from_bytes(rd("HP", 2), "big"),
             "max_hp": int.from_bytes(rd("MaxHP", 2), "big"),
             "types": list(rd("Type", 2)),
+            "status": self._status_of("wBattleMonStatus"),
             "moves": [(m, p) for m, p in zip(moves, pps) if m],
         }
 
     def enemy(self):
         """Enemy battler snapshot; 'nickname' is the displayed name
-        (wEnemyMonNickname) and 'party_slot' the OT party index
-        (wCurOTMon; meaningless for wild mons)."""
+        (wEnemyMonNickname), 'party_slot' the OT party index (wCurOTMon;
+        meaningless for wild mons), 'status' its conditions."""
         rd = self._struct_reader("wEnemyMon")
         species = rd("Species")[0]
         return {
@@ -215,6 +232,27 @@ class Battle:
             "hp": int.from_bytes(rd("HP", 2), "big"),
             "max_hp": int.from_bytes(rd("MaxHP", 2), "big"),
             "types": list(rd("Type", 2)),
+            "status": self._status_of("wEnemyMonStatus"),
+        }
+
+    # -- cheap vitals (turn accounting) -------------------------------------
+    # me()/enemy() decode nicknames, move lists and status for every call;
+    # a per-turn before/after HP record only needs three numbers, so these
+    # read exactly those. Used by crystalagent.decide.TurnLog to count the
+    # free hits the Koga wipe had no record of.
+
+    def my_hp(self):
+        return self.emu.read_be("wBattleMonHP", 2)
+
+    def enemy_hp(self):
+        return self.emu.read_be("wEnemyMonHP", 2)
+
+    def hp_snapshot(self):
+        """{'my_hp', 'enemy_hp', 'enemy_species'} for one side of a turn."""
+        return {
+            "my_hp": self.my_hp(),
+            "enemy_hp": self.enemy_hp(),
+            "enemy_species": self.emu.read_u8("wEnemyMonSpecies"),
         }
 
     def _my_move_list_up(self, rows):
