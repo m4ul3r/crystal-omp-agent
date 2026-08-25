@@ -64,7 +64,10 @@ d.last_goto_reason        # None on success; see failure table below
 
 - `d.observe()` — full snapshot: position, tiles (here/N/E/S/W terrain
   kinds), party (hp/pp/status/moves+max_pp), bag, money, badges, flags,
-  npc cells, ui.textbox/ui.battle, frame. This is the serve contract.
+  npc cells, ui.textbox/ui.battle, frame, and `enemy` (species/level/hp)
+  WHILE ui.battle is up — the key is ABSENT otherwise, so read it with
+  obs.get('enemy') (independently verified by omp-fresh). This is the
+  serve contract.
 - `game_state(emu, names)` — deeper: DVs, shininess, forms, nicknames,
   play time. Egg slots carry `egg: true`; a resting egg shows 0 HP — that
   is NOT a fainted mon.
