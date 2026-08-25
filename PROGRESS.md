@@ -153,6 +153,18 @@ STILL OPEN (needs own sessions):
 4. ui.textbox dual-signal for non-$79 border renders — deliberately
    deferred: flush fallback covers the practical case; a loose glyph
    OR risks A-mashing inside shop/pack menus (gotcha 13).
+ROUND 3 (Aug 24, team-building enablement; commit f4bc039):
+omp-fresh's Operator Q&A answered the solo-run question (deliberate
+risk-economy: no catch-on-sight primitive made catching high-risk-
+low-reward) and its harness asks are now served:
+- registry `catch_up` (nickname/ball/max_balls/max_encounters): grass
+  belt pacing + wild engagement + ball budget in ONE call, structured
+  outcome. Live-proven: BELLSPROUT->PEBBLE on the zephyr timeline.
+- observe()['enemy'] while battling: species/level/hp for targeting.
+Still open from Q&A: lead-swap/PC-deposit registry surface,
+per-mon train() targets, roster-as-checkable-contract is a BRIEF
+mechanism (next run's mandate), persona must be explicitly wired into
+the instruction chain (persona.md existed; nothing pointed at it).
 (step_dir warp-hold from the addendum is already covered by
 _held_warp_entry/_step_warp_tap in the committed nav work.)
 
