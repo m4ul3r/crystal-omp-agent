@@ -43,6 +43,48 @@ standing on the goal, 3-pass wander tolerance), and a new goto(...,
 strict=True) kwarg raises TravelError on those (handoffs — manual battle,
 choice menu — still return False); travel's approach-fallback TravelError
 carries the last goto reason. tests/unit/test_goto_loud_failures.py (10 green).
+[fix] ObstacleFixer (Aug 25): tiles{} now names field obstacles instead of
+'blocked' (whirlpool $24, waterfall $33, buoy $27/$c0-$c7, sidewall-<dirs>
+$b0-$b7 via _tile_kind), and new Driver.clear_obstacle(dir, tries=6) answers
+the INVISIBLE whirlpool/waterfall/surf-mount ask (wScriptMode==2, textbox
+False, BLANK glyphs) with the fuzzed pause->A->pause cadence (A gaps >=40f) ->
+'moved'|'cleared-not-moved'|'failed'; new Driver.move_settled(dir) presses then
+polls pos to 3 stable reads (no more mid-slide samples), paging battles/
+textboxes en route. tests/unit/test_wren_pt6_obstacles.py (13 green).
+[fix] ExploreBfsFixer (Aug 25, finished by Main): Driver.explore_bfs(goal,
+max_moves, dirs, forbid_maps, on_battle, max_nodes) promotes the savestate
+BFS hand-rolled 10+ times this run (ice slides, Rocket base, Tohjo Falls) —
+in-memory snapshots, frontier keyed by (map,x,y), settled moves that page
+textboxes/fight intercepts, goal checked after every move incl. mid-move map
+changes; winning state is left LOADED. Its own fixture was broken (passed a
+bare row list where FakePy keys maps by id, so every cell read as wall):
+normalized. tests/unit/test_wren_pt6_explore_bfs.py (13 green).
+[fix] SpriteNavFixer (Aug 25, finished by Main): live sprite truth —
+state.decode_object_structs/live_sprites read wObjectStructs (wMapObjects is
+STATIC defs; reading it made pushed boulders look reset). New Driver.sprites()
+(slot 0 = player), npc_cells() now derives from it (degrades to empty set),
+observe()['sprites']. goto no longer storms against a squatter: cells on the
+relaxed path that sprites occupy are classified — stationary -> immediate
+'blocked-by-stationary-npc: <cell>', wanderer -> waits in WANDER_WAIT_CHUNK
+(150f) slices up to WANDER_WAIT_FRAMES (600f) then replans, else
+'waited-for-wanderer: still blocked'; unreadable table keeps the legacy
+'target-occupied'. tests/unit/test_wren_pt6_sprites.py (12 green).
+[fix] TravelGapsFixer (Aug 25, PARTIAL — finished/tested by Main): what landed
+is pack detection by SCREEN — _pack_pocket_banner/_pack_quantity_rows +
+Driver._items_pocket_by_screen, wired as use_item's fallback when
+goto_pocket's wJumptableIndex gate misreads in field context (live: 4
+SUPER POTIONs in the bag, use_item returned False 4x without moving a
+cursor). Tested in tests/unit/test_wren_pt6_pack_detect.py (9 green).
+[fix] Main: _mount_surf verified by POSITION as well as wPlayerState, and
+reports 'warp' when the mount carries you across a map seam — the New Bark ->
+Route 27 crossing mounted successfully and still returned 'blocked', so the
+seam was hand-rolled with raw presses. tests/unit/test_wren_pt6_surf_mount.py
+(5 green).
+OPEN DEBT (not attempted): travel() still has no warp-graph fallback for
+multi-floor interiors ('no routable mapgraph path RADIO_TOWER_5F ->
+GOLDENROD_CITY' — descend floor-by-floor by hand), and Victory Road's
+stair warps need _step_warp_tap (held keys bounce off COLL_STAIRCASE), so
+explore_bfs over held moves alone cannot leave that floor.
 
 # PROGRESS — Pokémon Crystal run
 
@@ -239,6 +281,13 @@ method (VAR_FACING read live from wPlayerDirection d4de; talk_to corrupts
 facing on the bird — raw A only). Whitney: Reflect opener vs Miltank +
 Razor Leaf; crying-scene coord event (8,5) needed trip_scenes + a second
 talk to yield badge/TM45. Ledger: `omp_saves/moss-ledger.md`.
+**LEG 4 CLAIMED Aug 24 2026: FOG BADGE (Morty, Ecruteak).** Route:
+Goldenrod errands (R36 Floria → Flower Shop Squirtbottle → Sudowoodo
+(35,9) — Moss intends to CATCH it) → R36 → Ecruteak → Burned Tower
+(rival row-9 sight line, B1F beasts scene at (10,6), Eusine) → Morty.
+Per oxa-johto: fight() cannot drive Morty's battle — poll enemy HP>0
+through intro scroll, detect the 2x2 battle menu via wTilemap pattern,
+manual driver. Ledger continues `omp_saves/moss-ledger.md`.
 
 ## session claude-wren pt3 — PLAIN BADGE (DONE, Aug 24 2026)
 **3/8 badges.** Azalea→Ilex (Farfetch'd herding solved by reading the position

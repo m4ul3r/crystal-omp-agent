@@ -45,6 +45,61 @@ def _badges(byte, names):
     return [n for i, n in enumerate(names) if byte & (1 << i)]
 
 
+# -- live overworld sprites (wObjectStructs) ---------------------------------
+# Struct layout per constants/map_object_constants.asm (OBJECT_* offsets),
+# cross-checked against the sym's field labels: wObject1Struct -
+# wObjectStructs == 0x28 (OBJECT_LENGTH), wPlayerMovementType == +3,
+# wPlayerMapX/Y == +0x10/+0x11. OBJECT_MAP_X/Y are the standing-tile map
+# coords (walk cell + 4); mid-step they already hold the tile being stepped
+# INTO -- the tile that collides. wMapObjects is the STATIC map definitions
+# and never moves (journaled confusion: pushed boulders "reset" in the npcs
+# list); live positions live here.
+OBJECT_LENGTH = 0x28
+NUM_OBJECT_STRUCTS = 13          # player slot 0 + 12 NPC slots
+_OBJ_SPRITE = 0x00               # OBJECT_SPRITE; 0 = empty slot
+_OBJ_MOVEMENT_TYPE = 0x03        # OBJECT_MOVEMENT_TYPE (SPRITEMOVEDATA_*)
+_OBJ_MAP_X = 0x10                # OBJECT_MAP_X
+_OBJ_MAP_Y = 0x11                # OBJECT_MAP_Y
+
+# SPRITEMOVEDATA_* movement types whose owner vacates its tile on its own
+# (wander/spin/pace): worth WAITING for. Everything else stands still until
+# scripted -- waiting on those is pure frame burn.
+SPRITE_WANDERERS = frozenset((
+    0x02,   # SPRITEMOVEDATA_WANDER
+    0x03,   # SPRITEMOVEDATA_SPINRANDOM_SLOW
+    0x04,   # SPRITEMOVEDATA_WALK_UP_DOWN
+    0x05,   # SPRITEMOVEDATA_WALK_LEFT_RIGHT
+    0x0A,   # SPRITEMOVEDATA_SPINRANDOM_FAST
+    0x1E,   # SPRITEMOVEDATA_SPINCOUNTERCLOCKWISE
+    0x1F,   # SPRITEMOVEDATA_SPINCLOCKWISE
+    0x24,   # SPRITEMOVEDATA_SWIM_WANDER
+))
+
+
+def decode_object_structs(buf):
+    """wObjectStructs bytes -> [{slot, map_x, map_y, movement}] for every
+    LIVE slot (OBJECT_SPRITE != 0), player included as slot 0. Coords are
+    walk-cell coords (the struct stores cell + 4)."""
+    sprites = []
+    for slot in range(NUM_OBJECT_STRUCTS):
+        b = buf[slot * OBJECT_LENGTH:(slot + 1) * OBJECT_LENGTH]
+        if len(b) < OBJECT_LENGTH or not b[_OBJ_SPRITE]:
+            continue
+        sprites.append({
+            "slot": slot,
+            "map_x": b[_OBJ_MAP_X] - 4,
+            "map_y": b[_OBJ_MAP_Y] - 4,
+            "movement": b[_OBJ_MOVEMENT_TYPE],
+        })
+    return sprites
+
+
+def live_sprites(emu):
+    """Live sprite positions read straight from wObjectStructs."""
+    return decode_object_structs(
+        emu.read("wObjectStructs", NUM_OBJECT_STRUCTS * OBJECT_LENGTH))
+
+
 def game_state(emu, names, include_screen=False):
     sym = emu.sym
     s = {}

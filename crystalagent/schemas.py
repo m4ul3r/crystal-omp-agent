@@ -111,6 +111,15 @@ class UIState(_Strict):
     battle: bool
 
 
+class SpriteObs(_Strict):
+    """A live wObjectStructs slot: walk-cell coords, SPRITEMOVEDATA_*
+    movement type. Slot 0 is the player."""
+    slot: int
+    map_x: int
+    map_y: int
+    movement: int
+
+
 class ObserveOut(_Strict):
     map: str
     group: int
@@ -124,6 +133,7 @@ class ObserveOut(_Strict):
     badges: list[str]
     flags: dict[str, bool]
     npcs: list[list[int]]
+    sprites: list[SpriteObs] = []   # live positions incl. player (slot 0)
     ui: UIState
     enemy: Optional[EnemyObs] = None   # present only while battling
     frame: int

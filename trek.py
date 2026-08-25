@@ -11,6 +11,7 @@ import logging
 import re
 import sys
 from collections import deque
+from io import BytesIO
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from crystalagent import paths
@@ -24,7 +25,8 @@ from crystalagent.nav import MapData, STEP, WARPS, WALKABLE, HOPS, CONN_NAME, IC
 from crystalagent.nav import WATER as _NAV_WATER
 from crystalagent.nav import ICE as _NAV_ICE
 from crystalagent.schemas import validate_observe, validate_route
-from crystalagent.state import game_state, status_line
+from crystalagent.state import (game_state, status_line, live_sprites,
+                                SPRITE_WANDERERS)
 from crystalagent.symfile import Symbols
 
 log = logging.getLogger("trek")
@@ -90,6 +92,37 @@ _SIDE_WALL_BLOCKED = {
     0xB6: {"D", "L"},      # COLL_UP_RIGHT_WALL
     0xB7: {"D", "R"},      # COLL_UP_LEFT_WALL
 }
+
+
+def _tile_kind(b):
+    """Terrain word for a collision byte (observe()'s tiles{}). Field
+    obstacles ($24 whirlpool, $33 waterfall, $27/$c0-$c7 buoys) and the
+    $b0-$b7 side walls get their own words instead of generic 'blocked'
+    so the deciding loop knows a bump there is clearable/directional."""
+    if b in (0x14, 0x18):
+        return "grass"
+    if b == 0x00:
+        return "floor"
+    if b == 0x24:                       # COLL_WHIRLPOOL
+        return "whirlpool"
+    if b == 0x33:                       # COLL_WATERFALL
+        return "waterfall"
+    if b == 0x27 or 0xC0 <= b <= 0xC7:  # COLL_BUOY + water side walls
+        return "buoy"
+    if b in _NAV_WATER:
+        return "water"
+    if b in WARPS:
+        return "warp"
+    if b in HOPS:
+        return "ledge-" + HOPS[b].lower()
+    if b in ICE:
+        return "ice"
+    if b == COLL_PIT:
+        return "pit"
+    if b in _SIDE_WALL_BLOCKED:
+        return "sidewall-" + "".join(
+            d for d in "UDLR" if d in _SIDE_WALL_BLOCKED[b]).lower()
+    return "blocked"
 
 
 class TrekNav(MapData):
@@ -546,6 +579,31 @@ def _item_row_matches(row_text, want_norm):
         want_norm.startswith(row)
 
 
+# Pack pocket banners, data/items/pocket_names.asm (DrawPocketName paints
+# one on every pocket screen).
+_POCKET_BANNERS = ("ITEM POCKET", "BALL POCKET", "KEY POCKET", "TM POCKET")
+
+# The pack's quantity column: '...  ×  4' (charmap ×), tolerating a plain
+# 'x'/'X' decode and a scroll-arrow tile at the box edge.
+_PACK_QTY_RE = re.compile(r"×\s*\d+|(?:^|\s)[xX]\s+\d+\s*[▼▲]?\s*$")
+
+
+def _pack_pocket_banner(rows):
+    """Which pocket banner the pack is drawing, or None."""
+    for r in rows:
+        up = r.upper()
+        for name in _POCKET_BANNERS:
+            if name in up:
+                return name
+    return None
+
+
+def _pack_quantity_rows(rows):
+    """True when any drawn row carries the pack's 'x N' quantity column
+    -- no other field UI prints one."""
+    return any(_PACK_QTY_RE.search(r) for r in rows)
+
+
 
 class Driver:
     def __init__(self, state_path=None):
@@ -682,17 +740,67 @@ class Driver:
     def status(self):
         return status_line(game_state(self.emu, self.names))
 
+    # -- live sprites ------------------------------------------------------
+    # Patience budget for an NPC squatting the only path: wanderers step
+    # off on their own, so waiting beats storming 20 replans. Stationary
+    # types never move -- those fail loudly instead of burning the window.
+    WANDER_WAIT_CHUNK = 150      # frames between re-checks
+    WANDER_WAIT_FRAMES = 600     # total patience per blocker cell
+
+    def sprites(self):
+        """LIVE overworld sprites from wObjectStructs (slot 0 = player).
+        wMapObjects holds the map's STATIC definitions and never moves --
+        reading it made pushed boulders look like they had reset."""
+        return live_sprites(self.emu)
+
     def npc_cells(self):
-        """Live NPC positions (walk-cell coords) from the object structs.
-        Struct map coords are player coords + 4; slot 0 is the player."""
-        bank, base = self.emu.sym["wObjectStructs"]
-        stride = self.emu.sym.addr("wObject1Struct") - base
-        cells = set()
-        for i in range(1, 13):
-            b = self.emu.read((bank, base + i * stride), 18)
-            if b[0]:
-                cells.add((b[16] - 4, b[17] - 4))
-        return cells
+        """Cells occupied by live NPCs (walk-cell coords, player excluded).
+        Degrades to empty when the struct table cannot be read, so nav
+        keeps working on reduced fakes/odd states."""
+        try:
+            return {(s["map_x"], s["map_y"])
+                    for s in self.sprites() if s["slot"]}
+        except Exception:
+            return set()
+
+    def _blocker_kind(self, cell):
+        """'wanderer' | 'stationary' | None for the sprite standing on
+        `cell`. None means "cannot tell" (unreadable table, or nothing
+        there any more) -- callers fall back to legacy handling."""
+        try:
+            live = self.sprites()
+        except Exception:
+            return None
+        for s in live:
+            if s["slot"] and (s["map_x"], s["map_y"]) == cell:
+                return ("wanderer" if s["movement"] in SPRITE_WANDERERS
+                        else "stationary")
+        return None
+
+    def _wait_out_wanderer(self, cell):
+        """Idle in WANDER_WAIT_CHUNK slices until the sprite on `cell`
+        steps off, up to WANDER_WAIT_FRAMES. True = cell is free (or no
+        longer knowable, so the walk may as well try)."""
+        waited = 0
+        while waited < self.WANDER_WAIT_FRAMES:
+            self.press(f".:{self.WANDER_WAIT_CHUNK}")
+            waited += self.WANDER_WAIT_CHUNK
+            try:
+                busy = any(s["slot"] and (s["map_x"], s["map_y"]) == cell
+                           for s in self.sprites())
+            except Exception:
+                return True
+            if not busy:
+                log.info(f"  wanderer left {cell} after {waited}f")
+                return True
+        return False
+
+    def _sprites_obs(self):
+        """observe()'s sprite list; empty when the table is unreadable."""
+        try:
+            return self.sprites()
+        except Exception:
+            return []
 
     def _event_flag(self, name):
         """True if event flag EVENT_<name> (or bare <name>) is set, read
@@ -784,22 +892,7 @@ class Driver:
             g = self.nav.grid(self.map_name())
             cx, cy = self.pos()[2:]
 
-            def kind(b):
-                if b in (0x14, 0x18):
-                    return "grass"
-                if b == 0x00:
-                    return "floor"
-                if b in _NAV_WATER:
-                    return "water"
-                if b in WARPS:
-                    return "warp"
-                if b in HOPS:
-                    return "ledge-" + HOPS[b].lower()
-                if b in ICE:
-                    return "ice"
-                if b == COLL_PIT:
-                    return "pit"
-                return "blocked"
+            kind = _tile_kind
 
             tiles["here"] = kind(g[cy][cx])
             for dd, (dx, dy) in STEP.items():
@@ -819,6 +912,7 @@ class Driver:
             "badges": s["player"]["johto_badges"] + s["player"]["kanto_badges"],
             "flags": flags,
             "npcs": sorted([list(c) for c in self.npc_cells()]),
+            "sprites": self._sprites_obs(),
             "ui": {"textbox": self.textbox(),
                    "battle": bool(s["battle"])},
             "frame": s["frame"],
@@ -891,7 +985,17 @@ class Driver:
     def _mount_surf(self, mv):
         """Face the water and start surfing: walking into water does NOT
         prompt in GSC -- you must face it and press A ('The water is
-        calm... SURF?' -> YES). Ends riding ON the water cell."""
+        calm... SURF?' -> YES). Ends riding ON the water cell.
+
+        Verified by EITHER wPlayerState==PLAYER_SURF or the avatar having
+        actually moved onto the target cell: at a map-edge seam (New Bark
+        -> Route 27) the mount slid us onto the water and still reported
+        'blocked' off the state byte alone, so callers hand-rolled raw
+        presses to cross."""
+        before = self.pos()
+        x, y = before[2:]
+        dx, dy = STEP[mv]
+        target = (x + dx, y + dy)
         self.step_dir(mv)              # blocked step = turn toward water
         for _ in range(10):
             s = "".join(self.emu.screen_text()).upper()
@@ -902,8 +1006,12 @@ class Driver:
             return "blocked"
         self.press("A:5 .:40")         # YES
         self.settle(max_frames=600)    # mount animation slides onto water
-        return ("moved" if self.emu.read_u8("wPlayerState") == 4
-                else "blocked")
+        now = self.pos()
+        if now[:2] != before[:2]:
+            return "warp"              # seam crossing rode us to the next map
+        if self.emu.read_u8("wPlayerState") == 4 or now[2:] == target:
+            return "moved"
+        return "blocked"
 
     def _step(self, mv):
         """step_dir, but switch to a held step when the target cell is a
@@ -1017,6 +1125,99 @@ class Driver:
             if now != before:
                 return "moved"
         return "blocked"
+
+    def _script_or_text(self):
+        """Obstacle-prompt detector: wScriptMode != 0 OR a textbox. The
+        whirlpool/waterfall/surf ask-menu raises wScriptMode==2 for ~60
+        frames with textbox()==False and BLANK glyph text, so scene_busy's
+        menu-cursor scrape never sees it."""
+        try:
+            if self.emu.read_u8("wScriptMode"):
+                return True
+        except Exception:
+            pass
+        return bool(self.textbox())
+
+    def move_settled(self, mv, hold=40, max_frames=600):
+        """One directional move sampled SAFELY: press `mv` held `hold`
+        frames, then poll pos() until it reads identical 3 times in a
+        row -- a single read mid-slide/mid-walk reports the tile being
+        crossed, so sampling right after the press lies. Battles are
+        played out (self.fight) and textboxes paged (A) en route.
+        Returns 'moved' | 'blocked' | 'warp'."""
+        before = self.pos()
+        self.press(f"{mv}:{hold}")
+        last, stable = None, 0
+        f0 = self.emu.frame
+        while self.emu.frame - f0 < max_frames:
+            if self.battle():
+                self.fight()
+                self.emu.tick(2)     # guarantee frame progress
+                last, stable = None, 0
+                continue
+            if self.textbox():
+                self.press("A:8 .:40")
+                last, stable = None, 0
+                continue
+            cur = self.pos()
+            if cur == last:
+                stable += 1
+                if stable >= 3:
+                    break
+            else:
+                last, stable = cur, 1
+            self.press(".:10")
+        now = self.pos()
+        if now[:2] != before[:2]:
+            return "warp"
+        return "moved" if now != before else "blocked"
+
+    def clear_obstacle(self, direction, tries=6):
+        """Clear a prompt-gated field obstacle one step in `direction`:
+        whirlpools ($24), waterfalls ($33), and the surf-mount ask when
+        stepping from land onto water. Live evidence (wren pt6): bumping
+        one raises wScriptMode==2 for ~60 frames with textbox()==False
+        and the YES/NO ask-menu drawn in BLANK glyphs -- real but
+        invisible. A pause->A->pause cadence answers it; a fuzzer found
+        sequences like '.:40 A:8 .:30' / 'U:40 .:40' work where tight
+        mash loops always fail, so A presses keep >=40-frame gaps.
+        Returns 'moved' (position or map changed), 'cleared-not-moved'
+        (a prompt was answered but the follow-up step didn't take --
+        retry a plain move), or 'failed' (no prompt ever appeared:
+        plain wall)."""
+        prompted = False
+        for _attempt in range(tries):
+            before = self.pos()
+            self.press(f"{direction}:20 .:10")   # face + bump
+            poked = False
+            f0 = self.emu.frame
+            while self.emu.frame - f0 < 90:
+                if self.battle():
+                    self.fight()
+                    self.emu.tick(2)
+                    continue
+                if self._script_or_text():
+                    prompted = True
+                    self.press("A:8 .:48")       # answer; >=40f gap
+                    continue
+                if not poked:
+                    # facing-tile poke: the surf-mount ask ('The water
+                    # is calm... SURF?') only appears on an explicit A
+                    # while facing water -- bumping alone never asks.
+                    self.press("A:8 .:40")
+                    poked = True
+                    continue
+                self.press(".:10")
+            for _ in range(8):                   # drain prompt chains
+                if not self._script_or_text():
+                    break
+                prompted = True
+                self.press("A:8 .:48")
+            if self.pos() != before:             # the prompt itself moved
+                return "moved"                   # us (surf mount)
+            if self.move_settled(direction, hold=40) in ("moved", "warp"):
+                return "moved"
+        return "cleared-not-moved" if prompted else "failed"
 
     def keyboard_open(self):
         s = self.emu.screen_text()
@@ -2632,6 +2833,31 @@ class Driver:
             self.press("D:6 .:6" if cur < slot else "U:6 .:6")
         return False
 
+    def _items_pocket_by_screen(self):
+        """Fallback pack detection when goto_pocket's wJumptableIndex gate
+        fails (wren pt6: field context can leave a non-pocket value there
+        while the pack is plainly drawn). Steers by the drawn pocket
+        banner: the pockets cycle ITEM <- BALL <- KEY <- TM on L, so at
+        most 3 presses reach ITEM POCKET. A pack screen with an unreadable
+        banner but visible 'x N' quantity rows counts as open --
+        _pocket_select's row verification is the safety net for a wrong
+        pocket. Returns True when the ITEMS pocket is (best-evidence) up."""
+        for _ in range(4):
+            rows = self.emu.screen_text()
+            banner = _pack_pocket_banner(rows)
+            if banner == "ITEM POCKET":
+                log.info("  pack open on screen despite jumptable "
+                         "mismatch; proceeding")
+                return True
+            if banner is None:
+                if _pack_quantity_rows(rows):
+                    log.info("  pack quantity rows on screen despite "
+                             "jumptable mismatch; proceeding")
+                    return True
+                return False        # nothing pack-like drawn: real miss
+            self.press("L:4 .:12")  # cycle pockets toward ITEM POCKET
+        return False
+
     def use_item(self, item_name, target_slot=0, field=True):
         """Use an item from the pack outside battle (heals/status on party
         member `target_slot`). Returns True if the item was confirmed."""
@@ -2660,7 +2886,14 @@ class Driver:
             self.press("B:4 .:10")
             log.info("  could not open PACK")
             return False
-        if not goto_pocket(self.menu, "items"):
+        if not goto_pocket(self.menu, "items") and \
+                not self._items_pocket_by_screen():
+            # wren pt6: mid-gym, 4 POTIONs in the bag, use_item returned
+            # False before ever moving a cursor -- goto_pocket's
+            # wJumptableIndex gate read a non-pocket value in field
+            # context while the pack was plainly drawn. The screen is the
+            # fallback truth (banner / quantity rows, above); only when
+            # BOTH say "no pack" do we bail.
             cancel_pack(self.menu)
             return False
         before = bag_quantity(e, self.names, item_name)
@@ -2863,19 +3096,44 @@ class Driver:
                 path = self.nav.find_path(cur_map, cur, goal, avoid)
                 if not path:
                     # distinguish "NPC in the way" from "statically
-                    # unreachable": relaxed (ignore-NPC) routes let
-                    # step_dir handle the bumps -- waiting never moves
-                    # trainers.
+                    # unreachable": a relaxed (ignore-NPC) route means
+                    # some sprite squats a cell we must step through.
                     path = self.nav.find_path(cur_map, cur, goal)
                     if not path:
                         return self._goto_fail(
                             f"unreachable: no path from {cur} to {goal} "
                             f"on {cur_map}", strict, f"{cur_map} {cur}")
+                    # which cells on the relaxed walk are squatted?
+                    cx, cy = cur
+                    squatted = []
+                    for mv in path:
+                        dx, dy = STEP[mv]
+                        cx, cy = cx + dx, cy + dy
+                        if (cx, cy) in avoid:
+                            squatted.append((cx, cy))
+                    waited_out = False
+                    for cell in squatted:
+                        kind = self._blocker_kind(cell)
+                        if kind == "stationary":
+                            return self._goto_fail(
+                                f"blocked-by-stationary-npc: {cell} on "
+                                f"{cur_map} severs the only path to "
+                                f"{goal} -- talk_to/face it, or route "
+                                f"around", strict, f"{cur_map} {cur}")
+                        if kind == "wanderer":
+                            if self._wait_out_wanderer(cell):
+                                waited_out = True
+                                break
+                            return self._goto_fail(
+                                f"waited-for-wanderer: still blocked at "
+                                f"{cell} on {cur_map} after "
+                                f"{self.WANDER_WAIT_FRAMES}f", strict,
+                                f"{cur_map} {cur}")
+                    if waited_out:
+                        continue        # replan against fresh sprites
                     if goal in avoid:
-                        # a static route exists but an NPC is STANDING on
-                        # the goal cell: walking there can only bump. Give
-                        # a wanderer a few passes to step off, then fail
-                        # naming the real problem instead of storming.
+                        # unclassifiable blocker parked on the goal cell:
+                        # walking there can only bump. Legacy diagnosis.
                         occupied += 1
                         if occupied >= 3:
                             return self._goto_fail(
@@ -3400,6 +3658,112 @@ class Driver:
                 steps = steps[:i + 1] + self.route(dest)
             i += 1
         return steps
+
+    # -- savestate breadth-first exploration --------------------------------
+
+    def _explore_snap(self):
+        """Current emulation as an in-memory savestate blob."""
+        buf = BytesIO()
+        self.emu.py.save_state(buf)
+        return buf.getvalue()
+
+    def _explore_restore(self, blob):
+        self.emu.py.load_state(BytesIO(blob))
+        self.emu.tick(5)            # let the restored frame re-latch
+
+    def _explore_settled_move(self, mv, on_battle, max_frames=1200):
+        """One directional move driven to a SETTLED end state for
+        explore_bfs: ice slides and warp glides keep the avatar moving
+        with no input, forced signs pop textboxes mid-move, and wilds/
+        trainers intercept. Polls pos() until stable, answers textboxes
+        with A at 40+ frame gaps, and resolves battles per `on_battle`
+        ('fight' | 'skip'). Returns 'moved' | 'blocked' | 'skip'
+        (skip = dead branch: battle declined or lost)."""
+        before = self.pos()
+        self.step_dir(mv)
+        last, quiet = None, 0
+        f0 = self.emu.frame
+        while self.emu.frame - f0 < max_frames:
+            if self.battle():
+                if on_battle != "fight":
+                    return "skip"
+                self.fight()
+                if getattr(self, "_whiteout_pending", False):
+                    self._whiteout_pending = False   # the BRANCH died
+                    return "skip"
+                last, quiet = None, 0
+                continue
+            if self.textbox():
+                self.press("A:4 .:40")   # 40+ frame gap between answers
+                last, quiet = None, 0
+                continue
+            cur = self.pos()
+            if cur == last:
+                quiet += 1
+                if quiet >= 3:
+                    break
+            else:
+                last, quiet = cur, 0
+            self.emu.tick(20)
+        return "moved" if self.pos() != before else "blocked"
+
+    def explore_bfs(self, goal, max_moves=600, dirs="URDL", forbid_maps=(),
+                    on_battle="fight", max_nodes=400):
+        """Savestate breadth-first exploration (wren pt6: hand-rolled 10+
+        times this run for ice slides, the Rocket base, Tohjo Falls).
+        BFS over settled directional moves from the CURRENT state, with
+        in-memory savestates as nodes and the frontier keyed by
+        (map, x, y). `goal` is a callable(driver) -> bool evaluated
+        after EVERY settled move -- a mid-move map change is an
+        evaluation point too. States on `forbid_maps` (map names) are
+        goal-checked but never expanded. on_battle='fight' plays
+        intercepts out with fight(); 'skip' abandons that branch.
+        Budgets: `max_moves` settled moves, `max_nodes` distinct
+        (map, x, y) states -- snapshots live in memory only, keep the
+        cap modest.
+
+        Returns {'found': bool, 'state': bytes|None, 'steps': int,
+        'visited': int}. On found, the winning savestate IS the loaded
+        emulation state (the returned blob is a keepsake); on not-found
+        the starting state is reloaded."""
+        forbid = set(forbid_maps)
+        self.settle()
+        if goal(self):
+            return {"found": True, "state": self._explore_snap(),
+                    "steps": 0, "visited": 1}
+        root = self._explore_snap()
+        seen = {(self.map_name(),) + self.pos()[2:]}
+        q = deque([(root, 0)])
+        moves = 0
+        while q and moves < max_moves and len(seen) < max_nodes:
+            blob, depth = q.popleft()
+            for mv in dirs:
+                if moves >= max_moves or len(seen) >= max_nodes:
+                    break
+                self._explore_restore(blob)
+                moves += 1
+                out = self._explore_settled_move(mv, on_battle)
+                if out == "skip":
+                    continue              # dead branch; state is junk
+                if goal(self):
+                    state = self._explore_snap()
+                    log.info(f"  explore_bfs: goal at {self.map_name()} "
+                             f"{self.pos()[2:]} after {depth + 1} steps "
+                             f"({moves} moves, {len(seen)} states)")
+                    return {"found": True, "state": state,
+                            "steps": depth + 1, "visited": len(seen)}
+                if out == "blocked":
+                    continue
+                key = (self.map_name(),) + self.pos()[2:]
+                if key in seen or key[0] in forbid:
+                    continue
+                seen.add(key)
+                q.append((self._explore_snap(), depth + 1))
+        self._explore_restore(root)
+        log.info(f"  explore_bfs: no goal within budget "
+                 f"({moves} moves, {len(seen)} states)")
+        return {"found": False, "state": None, "steps": 0,
+                "visited": len(seen)}
 
 
     def _standable(self, name, c):
