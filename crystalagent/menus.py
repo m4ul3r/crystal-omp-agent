@@ -21,6 +21,14 @@ def _cursor_x(row):
     return min((row.find(c) for c in CURSORS if c in row), default=-1)
 
 
+def _cursor_xs(row):
+    """EVERY cursor-glyph position in a decoded row, left to right.
+    Nested battle menus paint two at once -- the battle party list keeps
+    its own ▷ while the SWITCH/STATS/CANCEL box draws ▶ over it (AGENTS.md
+    gotcha 1) -- so a leftmost-only read reports the wrong list."""
+    return [i for i, ch in enumerate(row) if ch in CURSORS]
+
+
 class Menus:
     def __init__(self, emu):
         self.emu = emu

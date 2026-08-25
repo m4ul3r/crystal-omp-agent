@@ -1,4 +1,107 @@
+## session claude-wren pt8 - DRAGONITE for the E4 (Aug 25 2026)
+
+**Where the run stands:** 8/8 badges, VICTORY_ROAD (13,10), party healed.
+Milestone `claude_saves/wren-dragonite.state`.
+
+| mon | | level | moves |
+|---|---|---|---|
+| BROOK | **DRAGONITE** | **55** | WING ATTACK / DRAGONBREATH / THUNDER WAVE / IRON TAIL |
+| GATOR | Feraligatr | 78 | CUT / STRENGTH / HYDRO PUMP / SURF |
+| RIPTIDE | Gyarados | 48 | SURF / WHIRLPOOL / DRAGON RAGE / WATERFALL |
+| SNAG | Sudowoodo | 45 | FAINT ATTACK / MIMIC / FLAIL / DYNAMICPUNCH |
+| REED | Pidgeot | 41 | WING ATTACK / WHIRLWIND / GUST / QUICK ATTACK |
+| PEBBLE | Togetic | 39 | SAFEGUARD / DOUBLE-EDGE / METRONOME / SHADOW BALL |
+
+BROOK went L26 -> L48 -> **L55** (Dratini -> Dragonair@30 -> Dragonite@55) in ~470
+Victory Road fights. What made it cheap: BROOK leads to bank half-share exp, then a
+guard (RIPTIDE/SNAG) kills; the incoming mon eats the switch turn, so BROOK usually
+takes zero damage. Soloing at L40 was tried and is strictly worse - it dies (2 fights).
+Never chip Victory Road Gravelers: they EXPLODE (measured, enemy 94->0 and RIPTIDE
+58->0 in one turn). Guards must one-shot, not soften.
+
+### The bug that ate ~9 minutes: a REFUSED switch wedges the battle
+
+Signature: `fight()` logs `frozen screen` 20-30x with an IDENTICAL me/enemy line and
+returns `'timeout'` with the battle STILL LIVE, so the next `pace()` walks back into
+the same battle. 60 "fights" / 535s / zero exp.
+
+Root cause, confirmed by dumping the screen instead of trusting the diagnostic: the foe
+(ONIX) had BOUND our mon, the policy asked for `('switch', idx)`, the harness drove the
+party menu + SWITCH submenu, and the engine refused with `RIPTIDE can't be recalled!`.
+Nobody handled the refusal, so the party menu stayed open with both cursor glyphs on
+screen at once (U+25B7 party list, U+25B6 submenu) and nothing ever changed again.
+`battle_frame()`'s `can_switch` was lying: it lists party indexes without asking whether
+switching is legal at all.
+
+Session workaround (outer loop, no trek.py edits): `fight_guarded(policy)` re-fights with
+an attack-only policy after clearing menus if `observe()['ui']['battle']` is still true.
+That took the same grind to 25 fights per 35 s block. `LockedTurnFixer` owns the real fix.
+
+### learn_policy auto-trades are actively harmful
+
+The default accepted every level-up move: RIPTIDE lost **HYDRO PUMP for RAIN DANCE**,
+BROOK lost AGILITY for SAFEGUARD. Armed `wren_learn`: never trade a damaging move for a
+status move; otherwise replace the weakest move only if the new one is stronger. It then
+correctly took WING ATTACK over SAFEGUARD at L55.
+
+### TM teaching: `teach_tm()` returns 'cursor-miss', drive the pocket by screen
+
+`teach_tm()` failed on TM23/TM24. The pocket list SCROLLS and re-indexes as items are
+consumed, so the item must be found by reading the live cursor row, never by index -
+my first blind DOWN-scan landed on TM45 and started teaching ATTRACT to the Dragonite
+(caught it at the "Delete an older move?" prompt; B backs out, then YES to
+"Stop learning X?"). Working sequence: START -> PACK -> R until `wCurPocket == 3` ->
+verify a pocket row is visible (`H1 CUT` / `H3 SURF`) -> DOWN until the label is on the
+U+25B6 row -> A -> USE -> walk the party cursor to the mon by name -> A -> advance to
+"Which move should be forgotten?" -> DOWN to the victim -> A.
+Taught: TM24 DRAGONBREATH and TM23 IRON TAIL to BROOK, HM03 SURF to RIPTIDE (repairing
+the Rain Dance trade).
+
+### [fix] LockedTurnFixer (Aug 25, verified live by Main)
+
+Disassembly-confirmed root cause, same as the screen dump above:
+`engine/battle/core.asm TryPlayerSwitch .check_trapped` -- a confirmed SWITCH with
+`wPlayerWrapCount != 0` (BIND/WRAP/FIRE SPIN/CLAMP/WHIRLPOOL) or
+`wEnemySubStatus5 & (1<<SUBSTATUS_CANT_RUN)` (MEAN LOOK/SPIDER WEB) prints
+`BattleText_MonCantBeRecalled` and `jp BattleMenuPKMN_Loop` -- back into the still-open
+party list, switch un-done, no turn consumed. Same shape for RUN (`.cant_escape` falls
+through to `jp BattleMenu`).
+
+What landed: `battle.trapped()` is tri-state off wPlayerWrapCount + CANT_RUN;
+`switch_blocked_reason()` (WRAM truth + a latch for the observed refusal text);
+`switch_to()` drives PKMN -> bidirectional party-row select -> SWITCH submenu -> refusal
+check -> dismiss + exit, never leaving a menu open; `menus._cursor_xs()` sees EVERY cursor
+glyph (the old leftmost-only reader could not see the submenu's U+25B6 next to the party
+list's U+25B7); forced turns (recharge/rampage/rollout/Encore/Bide) are waited out, never
+re-sent; an unchanged-screen breaker substitutes after 2 no-ops and returns the new
+outcome `'stalled'`; `decide.battle_frame`'s `can_switch` is EMPTY while switching is
+illegal (it was lying); `fight()` now reports UNRESOLVED instead of a bare 'timeout' and
+caps the diagnostic at 3 dumps/battle. 408 unit tests + full suite green.
+
+**Live proof, same policy that wedged, no outer guard: 20 fights in 29 s, 20/20 resolved,
+0 wedges** (before: 60 "fights", 535 s, zero exp). The breaker fired once, out loud:
+`[battle] ('attack', 0) changed nothing for 2 turns: substituting ('attack', 2)`.
+BROOK L55 -> **L56** during the proof run.
+
+Unrelated gotcha re-learned the hard way: `d.save(force=True)` while the START menu is
+open persists the open menu, and gotcha 7 then eats every movement input after the
+reload -- `move_settled` returned `blocked` on four floor tiles. Close menus before
+forcing a save.
+
+**Next:** run the E4 from Will with GATOR L78 + BROOK (Dragonite) L56 as the spine;
+milestone to resume from is `claude_saves/wren-dragonite.state`.
+
 ## session claude-wren pt7 - decision-first harness + team leveling (Aug 25 2026)
+
+**[fix] The 60-"fights"/535s/zero-exp wedge was a REFUSED SWITCH.** ONIX BOUND
+the active mon (`wPlayerWrapCount`), `TryPlayerSwitch .check_trapped` answered
+the confirmed SWITCH with `BattleText_MonCantBeRecalled` and `jp
+BattleMenuPKMN_Loop`, and the harness sat on the still-open party menu until
+`fight()` timed out with the battle live. `switch_to` now drives the nested
+BattleMonMenu (two cursor glyphs, `wMenuCursorY` 1/2/3), absorbs the refusal,
+and `battle_frame`'s `can_switch` is EMPTY while trapped; unchanged screens
+recover to the action menu instead of re-sending, bail as 'stalled', and say
+when the battle is still live. Diagnostic capped at 3 dumps per battle.
 
 **Where the run stands:** 8/8 badges, standing in INDIGO_PLATEAU_POKECENTER_1F.
 Milestone `claude_saves/wren-team-leveled.state`. Money ¥13,519 (two whiteouts).

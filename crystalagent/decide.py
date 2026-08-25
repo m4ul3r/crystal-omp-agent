@@ -296,6 +296,15 @@ def battle_frame(emu_or_battle, names=None, bdata=None, party=None, *,
     can_switch = [mon["index"] for mon in roster
                   if not mon["fainted"] and not mon["egg"]
                   and mon["index"] != active]
+    # A trapped mon cannot be recalled AT ALL: TryPlayerSwitch answers a
+    # confirmed SWITCH with BattleText_MonCantBeRecalled and drops back
+    # into the party list with the switch un-done (the live Victory Road
+    # wedge). 'can_switch' promises LEGAL targets, so a partial trap
+    # (wPlayerWrapCount) or MEAN LOOK (wEnemySubStatus5 SUBSTATUS_CANT_RUN)
+    # empties it and no policy can even propose the illegal action.
+    blocked = getattr(b, "switch_blocked_reason", None)
+    if callable(blocked) and blocked() is not None:
+        can_switch = []
 
     try:
         wild = emu.read_u8("wBattleMode") == 1

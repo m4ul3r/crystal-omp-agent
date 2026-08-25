@@ -2190,6 +2190,42 @@ class Driver:
                         f"a free hit -- turn record on d.last_battle")
         return free, ceded
 
+    FIGHT_DIAG_CAP = 3   # unresolved-battle dumps per battle (live: 20+)
+
+    def _fight_diag(self, b, outcome):
+        """Dump the unresolved battle's screen and both mons' vitals.
+
+        Capped at FIGHT_DIAG_CAP dumps for as long as the SAME battle
+        keeps coming back: a caller that retries fight() on a wedged
+        battle re-entered this path every time and printed 20+ identical
+        dumps per battle in the Victory Road grind. fight() clears the
+        counter the moment wBattleMode goes quiet, so the next battle
+        starts with a full budget."""
+        printed = getattr(self, "_fight_diag_prints", 0)
+        if printed >= self.FIGHT_DIAG_CAP:
+            return
+        self._fight_diag_prints = printed + 1
+        try:
+            me, enemy = b.me(), b.enemy()
+            log.warning(f"  [fight diagnostic] frozen screen ({outcome}):")
+            for r in self.emu.screen_text():
+                if r.strip():
+                    log.info(f"    | {r}")
+            mv = [(self.names.moves.get(m, f"?id{m}"), p)
+                  for m, p in me["moves"]]
+            log.warning(f"  [fight diagnostic] me={me['name']} L{me['level']} "
+                  f"{me['hp']}/{me['max_hp']} moves={mv}")
+            log.warning(f"  [fight diagnostic] enemy={enemy['name']} "
+                  f"L{enemy['level']} {enemy['hp']}/{enemy['max_hp']}",
+                  )
+        except Exception as diag_err:
+            log.warning(f"  [fight diagnostic] unavailable: {diag_err}",
+                  )
+        if self._fight_diag_prints >= self.FIGHT_DIAG_CAP:
+            log.warning(f"  [fight diagnostic] cap reached "
+                        f"({self.FIGHT_DIAG_CAP} dumps): suppressing "
+                        f"further dumps for this battle")
+
     def fight(self, max_frames=90000, policy=None, require_decision=False,
               consult_encounter=True):
         """Play a battle out with real move selection (best expected
@@ -2284,26 +2320,23 @@ class Driver:
             # of-identical-lines spam from wren pt3.
             log.warning(f"  [fight] battle wedged (see battle.py "
                         f"diagnostic above)")
-        elif outcome in ("timeout", "stuck"):
+        elif outcome in ("timeout", "stuck", "stalled"):
             # Burn ZERO blind retries: dump the frozen battle so the wedge
             # is diagnosable (the historic Bridget/Jigglypuff freeze cost
             # ~10 retries before anyone looked at the screen).
-            try:
-                me, enemy = b.me(), b.enemy()
-                log.warning("  [fight diagnostic] frozen screen:")
-                for r in self.emu.screen_text():
-                    if r.strip():
-                        log.info(f"    | {r}")
-                mv = [(self.names.moves.get(m, f"?id{m}"), p)
-                      for m, p in me["moves"]]
-                log.warning(f"  [fight diagnostic] me={me['name']} L{me['level']} "
-                      f"{me['hp']}/{me['max_hp']} moves={mv}")
-                log.warning(f"  [fight diagnostic] enemy={enemy['name']} "
-                      f"L{enemy['level']} {enemy['hp']}/{enemy['max_hp']}",
-                      )
-            except Exception as diag_err:
-                log.warning(f"  [fight diagnostic] unavailable: {diag_err}",
-                      )
+            self._fight_diag(b, outcome)
+        still_live = bool(self.battle())
+        if still_live and outcome in ("timeout", "stuck", "stalled",
+                                      "wedged"):
+            # NEVER report an unresolved fight as if it were over: the
+            # caller's next pace()/goto walks straight back into the same
+            # live battle (60 'fights', 535s, zero exp on Victory Road).
+            log.warning(f"  [fight] UNRESOLVED ({outcome}) and the battle "
+                        f"is STILL LIVE -- the next step will re-enter it; "
+                        f"drive it manually or change the policy")
+        if not still_live:
+            # battle over: the next one gets a fresh diagnostic budget
+            self._fight_diag_prints = 0
         # Scratch sidecar, NOT the working state: a snapshot taken during
         # battle resolution must never become a resumable fork if the leg
         # crashes before the next real save. watch.py can still open
@@ -2328,6 +2361,7 @@ class Driver:
                 "turns": state["turns"], "free_hits": free_hits,
                 "ceded_turns": ceded,
                 "decided": state["turns"] - state["autos"],
+                "battle_live": still_live,
             })
         return lead
 
