@@ -16,6 +16,12 @@ empty/blank pre-battle trainer textboxes as choice menus (repeated
 "GAVE UP (blocked by choice menu...)" at Slowpoke Well and Azalea Gym where
 the box contained no text and A safely started the trainer battle). Guard
 should require an actual cursor glyph ($ec/$ed) before claiming 'menu'.
+[fix] LegTwoFixer (Aug 24): landed in trek.py — _drain_scene now claims
+'menu' ONLY on an actual cursor glyph ($ec/$ed); blank still-rendering boxes
+get a bounded wait then A. use_item steers the persisted items-pocket cursor
+via WRAM both ways, screen-verifies the row, and gates success on a bag
+quantity read-back; heal_pokecenter steps south off the counter after a
+confirmed heal (no re-armed nurse prompt). tests/unit/test_wren_frictions.py.
 
 ## session claude-wren — fresh boot → ZEPHYR BADGE (DONE, Aug 24 2026)
 

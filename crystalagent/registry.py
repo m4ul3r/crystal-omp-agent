@@ -42,6 +42,7 @@ ACTIONS = {
         Action("use_item", required=("item_name",),
                optional=("target_slot", "field"), need_battle=False),
         Action("settle", optional=("quiet", "spacing", "max_frames")),
+        Action("drain_scene", optional=("max_frames",)),
         Action("route", required=("dest_map",), optional=("max_cost",),
                need_battle=False),
         Action("travel", required=("dest_map",), optional=("label",),

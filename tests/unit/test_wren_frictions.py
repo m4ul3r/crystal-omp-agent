@@ -63,17 +63,85 @@ def test_drain_scene_pages_until_script_clears(monkeypatch):
     assert any(not p.startswith("A") for p in presses)  # waited, no mash
 
 
-def test_drain_scene_aborts_on_choice_menu(monkeypatch):
-    """A cursor outside the box (gotcha 13) stops the drain cold: 'menu',
-    zero presses -- mashing would pick something."""
+def test_drain_scene_aborts_on_real_choice_cursor():
+    """A real YES/NO box -- an actual cursor glyph ($ec/$ed) drawn --
+    stops the drain cold: 'menu', zero presses (gotcha 13)."""
+    for glyph in "▶▷":
+        d = bare_driver()
+        d.battle = lambda: 0
+        d.textbox = lambda: True
+        d.emu.rows[7] = f"         {glyph}YES       "
+        d.emu.rows[8] = "          NO        "
+        presses = []
+        d.press = lambda seq: presses.append(seq)
+        assert d._drain_scene() == "menu"
+        assert presses == []
+
+
+def test_drain_scene_blank_textbox_waits_then_pages():
+    """A drawn-but-EMPTY pre-battle textbox (no text, no cursor) is a
+    still-rendering page, NOT a choice menu: bounded wait, then A
+    (leg-2: 8 false 'blocked by choice menu' aborts)."""
+    d = bare_driver()
+    d.battle = lambda: 0
+    state = {"pages": 1}
+    d.textbox = lambda: state["pages"] > 0
+    presses = []
+
+    def press(seq):
+        presses.append(seq)
+        d.emu.tick(10)
+        if seq.startswith("A"):
+            state["pages"] -= 1
+
+    d.press = press                       # screen stays blank forever
+    assert d._drain_scene() == "done"     # never 'menu'
+    assert [p for p in presses if p.startswith("A")] == ["A:2 .:8"]
+    assert any(p.startswith(".") for p in presses)   # waited first
+
+
+def test_drain_scene_blank_box_pages_once_text_renders():
+    """The wait is re-checked: the moment the page's text lands, A goes
+    out without burning the rest of the wait budget."""
+    d = bare_driver()
+    d.battle = lambda: 0
+    state = {"pages": 1}
+    d.textbox = lambda: state["pages"] > 0
+    presses = []
+
+    def press(seq):
+        presses.append(seq)
+        d.emu.tick(10)
+        if seq.startswith("."):
+            if sum(1 for p in presses if p.startswith(".")) == 2:
+                d.emu.rows[14] = " BUG CATCHER WADE   "
+        elif seq.startswith("A"):
+            state["pages"] -= 1
+            d.emu.rows[14] = " " * 20
+
+    d.press = press
+    assert d._drain_scene() == "done"
+    assert [p for p in presses if p.startswith("A")] == ["A:2 .:8"]
+    assert sum(1 for p in presses if p.startswith(".")) == 2
+
+
+def test_drain_scene_blank_box_menu_when_cursor_appears():
+    """If the 'blank box' resolves into a choice (cursor materializes
+    during the wait), the drain still aborts with 'menu' -- no A."""
     d = bare_driver()
     d.battle = lambda: 0
     d.textbox = lambda: True
     presses = []
-    d.press = lambda seq: presses.append(seq)
-    monkeypatch.setattr(trek, "dialog_press_safe", lambda rows: False)
+
+    def press(seq):
+        presses.append(seq)
+        d.emu.tick(10)
+        if seq.startswith("."):
+            d.emu.rows[7] = "         ▶YES       "
+
+    d.press = press
     assert d._drain_scene() == "menu"
-    assert presses == []
+    assert not any(p.startswith("A") for p in presses)
 
 
 def test_drain_scene_reports_battle(monkeypatch):
@@ -112,6 +180,11 @@ class FakeNav:
 
     def find_path(self, m, cur, goal, avoid=()):
         return ["R"] * (goal[0] - cur[0])
+
+    def grid(self, m):
+        # goto's out-of-bounds guard: 32x18 plane accepts the old
+        # fixtures' in-range goals
+        return [[0] * 32 for _ in range(18)]
 
 
 def goto_driver(step_results):
@@ -233,6 +306,136 @@ def test_use_item_start_gate_passes_on_retry(monkeypatch):
     assert d.menu.calls == ["PACK"]       # gate passed on the retry
 
 
+# -- items-pocket cursor persistence (leg 2: 'no potion visible' w/ 2 held) --
+
+def pocket_driver(start, items, row_text=None):
+    """Driver + fake scrolling pocket whose WRAM cursor starts at `start`
+    (the pack persists wItemsPocketCursor between opens)."""
+    d = bare_driver()
+    state = {"cur": start, "confirmed": [], "ups": 0, "downs": 0}
+
+    class M:
+        def scroll_abs(self):
+            return state["cur"]
+
+        def cursor_row(self):
+            text = row_text or (items[state["cur"]] + "        ×  2")
+            return (2, text)
+
+    d.menu = M()
+
+    def press(seq):
+        d.emu.tick(5)
+        if seq.startswith("U"):
+            state["ups"] += 1
+            state["cur"] = max(0, state["cur"] - 1)
+        elif seq.startswith("D"):
+            state["downs"] += 1
+            state["cur"] = min(len(items) - 1, state["cur"] + 1)
+        elif seq.startswith("A"):
+            state["confirmed"].append(state["cur"])
+
+    d.press = press
+    return d, state
+
+
+POCKET = ["POTION", "ANTIDOTE", "PARLYZ HEAL", "POKE BALL"]
+
+
+def test_pocket_select_climbs_up_from_persisted_cursor():
+    """Cursor left mid-list by a previous pack open: selection walks UP
+    on the live WRAM index (DOWN-only scrapes could never reach row 0)."""
+    d, state = pocket_driver(start=3, items=POCKET)
+    assert d._pocket_select(0, "POTION") is True
+    assert state["ups"] == 3 and state["downs"] == 0
+    assert state["confirmed"] == [0]      # A only once, on the right row
+
+
+def test_pocket_select_refuses_wram_screen_mismatch():
+    """WRAM says the right index but the highlighted TEXT is a different
+    item: never blind-A."""
+    d, state = pocket_driver(start=0, items=POCKET, row_text="ANTIDOTE  ×  1")
+    assert d._pocket_select(0, "POTION") is False
+    assert state["confirmed"] == []
+
+
+def test_pocket_select_bails_when_cursor_pinned():
+    """A cursor that stops responding (wrong menu, list edge) fails fast
+    instead of mashing to the step cap."""
+    d, state = pocket_driver(start=2, items=POCKET)
+    d.press = lambda seq: d.emu.tick(5)   # presses move nothing
+    assert d._pocket_select(0, "POTION") is False
+    assert state["confirmed"] == []
+
+
+def use_item_world(d, monkeypatch, start_cursor=3, consume_on_use=True):
+    """Wire use_item's collaborators: START menu paints, pack opens, the
+    pocket cursor starts mid-list, USE consumes (or not)."""
+    items = POCKET
+    world = {"cur": start_cursor, "qty": 2, "ups": 0}
+    monkeypatch.setattr(trek, "bag_item_index", lambda *a, **k: 0)
+    monkeypatch.setattr(trek, "bag_quantity", lambda *a, **k: world["qty"])
+    monkeypatch.setattr(trek, "goto_pocket", lambda menu, pocket: True)
+    monkeypatch.setattr(trek, "cancel_pack", lambda menu: None)
+
+    class M:
+        def select_label(self, label, max_presses=14):
+            if label == "USE" and consume_on_use:
+                world["qty"] -= 1         # engine consumes the item
+            return True
+
+        def wait_for_label(self, label, timeout_frames=300):
+            return True
+
+        def wait_for(self, pred, timeout_frames=600):
+            return True                   # target party list appeared
+
+        def scroll_abs(self):
+            return world["cur"]
+
+        def cursor_row(self):
+            return (2, items[world["cur"]] + "     ×  2")
+
+    d.menu = M()
+
+    def press(seq):
+        d.emu.tick(5)
+        if seq.startswith("START"):
+            d.emu.rows[5] = "  ▶PACK".ljust(20)
+        elif seq.startswith("U"):
+            world["ups"] += 1
+            world["cur"] = max(0, world["cur"] - 1)
+        elif seq.startswith("D"):
+            world["cur"] = min(len(items) - 1, world["cur"] + 1)
+        elif seq.startswith("B"):
+            d.emu.rows[5] = " " * 20      # pack closes
+
+    d.press = press
+    return world
+
+
+def test_use_item_finds_potion_from_mid_list_cursor(monkeypatch):
+    d = bare_driver()
+    d.names = None
+    d.textbox = lambda: False
+    d.flush_dialog = lambda *a, **k: "done"
+    world = use_item_world(d, monkeypatch, start_cursor=3)
+    assert d.use_item("POTION") is True
+    assert world["ups"] == 3              # climbed back up to row 0
+    assert world["qty"] == 1              # confirmed via bag read-back
+
+
+def test_use_item_false_when_bag_never_decrements(monkeypatch):
+    """Menus can flow perfectly while a swallowed A used nothing: the
+    bag read-back is the success gate."""
+    d = bare_driver()
+    d.names = None
+    d.textbox = lambda: False
+    d.flush_dialog = lambda *a, **k: "done"
+    use_item_world(d, monkeypatch, start_cursor=0, consume_on_use=False)
+    assert d.use_item("POTION") is False
+
+
 class FakeHealDriver:
     """Duck-typed d for heal_pokecenter: heals on the Nth nurse visit."""
 
@@ -240,22 +443,42 @@ class FakeHealDriver:
         self.heal_on = heal_on_visit
         self.gotos = 0
         self.healed = False
-        self.emu = self.names = None
+        self.on_counter = False
+        self.steps = []
+        self.emu = FakeEmu()
+        self.names = None
+
+        class M:
+            def wait_for(self, pred, timeout_frames=600):
+                return False              # no YES/NO box in the fake flow
+
+            def select_label(self, label, **kw):
+                return True
+
+        self.menu = M()
 
     def map_name(self):
         return "VIOLET_POKECENTER_1F"
 
+    def textbox(self):
+        return False
+
     def goto(self, x, y, label=""):
         self.gotos += 1
+        self.on_counter = True            # standing at the nurse counter
         if self.gotos >= self.heal_on:
             self.healed = True
         return True
 
     def step_dir(self, mv):
-        return "blocked"
+        self.steps.append(mv)
+        if mv == "D":
+            self.on_counter = False       # stepped off the counter tile
+            return "moved"
+        return "blocked"                  # facing turn only
 
     def press(self, seq):
-        pass
+        self.emu.tick(5)
 
     def flush_dialog(self, *a, **k):
         return "done"
@@ -288,6 +511,28 @@ def test_heal_pokecenter_raises_after_single_retry(monkeypatch):
     assert d.gotos == 2                   # retried once, not forever
 
 
+def test_heal_pokecenter_success_steps_off_counter(monkeypatch):
+    """After a confirmed heal the player steps south off the counter tile
+    so no residual nurse prompt is armed (two leg-2 wedges)."""
+    d = FakeHealDriver(heal_on_visit=1)
+    monkeypatch.setattr(trek, "game_state",
+                        lambda emu, names: {"party": d.party()})
+    trek.heal_pokecenter(d)
+    assert d.steps and d.steps[-1] == "D"
+    assert d.steps.count("D") == 1        # one step away, not a walk
+    assert d.on_counter is False          # prompt can't re-arm
+
+
+def test_heal_pokecenter_failure_never_steps_away(monkeypatch):
+    """Failure paths unchanged: no step-away when the heal didn't land."""
+    d = FakeHealDriver(heal_on_visit=99)
+    monkeypatch.setattr(trek, "game_state",
+                        lambda emu, names: {"party": d.party()})
+    with pytest.raises(RuntimeError, match="not fully healed"):
+        trek.heal_pokecenter(d)
+    assert "D" not in d.steps
+
+
 def test_mart_buy_retalks_once_when_shop_never_opens():
     d = bare_driver()                     # blank screen: no ¥ ever
     d.names = None
@@ -296,8 +541,9 @@ def test_mart_buy_retalks_once_when_shop_never_opens():
     d.press = lambda seq: d.emu.tick(5)
     talks = []
     d.talk_to = lambda x, y, label="": talks.append((x, y)) or "talked"
-    assert d.mart_buy(1, 3, "POTION") is False
-    assert len(talks) == 2                # first call + exactly one retry
+    with pytest.raises(RuntimeError, match="shop menu did not open"):
+        d.mart_buy(1, 3, "POTION")    # registry actions fail LOUDLY now
+    assert len(talks) == 2            # first call + exactly one retry
 
 
 # -- multi-warp door-row held entry (gotcha 12) -------------------------------

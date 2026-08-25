@@ -13,11 +13,11 @@ from collections import deque
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from crystalagent import paths
-from crystalagent.battle import Battle, BattleData, bag_item_index, cancel_pack, goto_pocket, _norm_item
+from crystalagent.battle import Battle, BattleData, bag_item_index, bag_quantity, cancel_pack, goto_pocket, _norm_item
 from crystalagent.charmap import Charmap
 from crystalagent.emu import Crystal, parse_sequence, InputError
 from crystalagent import hookevents
-from crystalagent.menus import Menus, battle_menu_up, dialog_press_safe
+from crystalagent.menus import Menus, battle_menu_up, dialog_press_safe, CURSORS
 from crystalagent.names import Names
 from crystalagent.nav import MapData, STEP, WARPS, WALKABLE, HOPS, CONN_NAME, ICE, COLL_PIT
 from crystalagent.nav import WATER as _NAV_WATER
@@ -585,6 +585,18 @@ class Driver:
         return bool(self.textbox()) or \
             any("▶" in r or "▷" in r for r in self.emu.screen_text())
 
+    def scene_busy(self):
+        """True while any scene owns the world: a script is running
+        (wScriptMode != 0), a box/textbox is up, or a naming screen is
+        open. wScriptMode alone LIES -- it reads 0 during naming screens
+        and lags through chains (omp-fresh addendum #3); gate drains on
+        this, not on sm == 0."""
+        try:
+            sm = self.emu.read_u8("wScriptMode")
+        except Exception:
+            sm = 0
+        return bool(sm) or self.menu_open() or self.keyboard_open()
+
     def _screen_blank(self):
         """Menu open/close transitions render a frame or two of nothing;
         judging menu state on one is a lie (the menu redraws right after)."""
@@ -1088,17 +1100,33 @@ class Driver:
         0, so the blocked step can be retried instead of replan-storming
         (the top friction of the claude-wren run). Movement phases
         between pages (applymovement) are waited out, never pressed
-        into. Never mashes a choice menu -- a cursor outside the box
-        aborts (gotcha 13). Returns 'done' | 'battle' | 'menu' |
-        'timeout'."""
+        into. Never mashes a choice menu -- but only an ACTUAL cursor
+        glyph ($ec '▷' / $ed '▶') on screen is a menu (gotcha 13); a
+        drawn-but-EMPTY textbox is a still-rendering page (leg-2: 8
+        false 'blocked by choice menu' aborts on blank pre-battle
+        trainer boxes), so wait briefly and page it. Returns
+        'done' | 'battle' | 'menu' | 'timeout'."""
         pages = 0
         f0 = self.emu.frame
         while pages < max_pages and self.emu.frame - f0 < max_frames:
             if self.battle():
                 return "battle"
             if self.textbox():
-                if not dialog_press_safe(self.emu.screen_text()):
-                    return "menu"       # choice open: never blind-pick
+                rows = self.emu.screen_text()
+                if not dialog_press_safe(rows):
+                    # dialog_press_safe fails on TWO very different
+                    # screens: a real choice box (cursor glyph drawn)
+                    # and a textbox whose text hasn't rendered yet --
+                    # trainer boxes draw the frame a beat before the
+                    # text. Only a cursor is a menu; a blank box just
+                    # needs a short bounded wait, then A is safe.
+                    for i in range(7):
+                        if any(c in r for r in rows for c in CURSORS):
+                            return "menu"   # true choice: never blind-pick
+                        if dialog_press_safe(rows) or i == 6:
+                            break
+                        self.press(".:10")  # let the page render
+                        rows = self.emu.screen_text()
                 self.press("A:2 .:8")
                 pages += 1
                 continue
@@ -1114,6 +1142,19 @@ class Driver:
             if not self.textbox():
                 return "done"
         return "timeout"
+
+    def drain_scene(self, max_frames=6000):
+        """Public scene-exit primitive (registry 'drain_scene'): page a
+        scripted scene until interactive, then B once if a residual box
+        ignores A -- some scene-enders are A-deaf (omp-fresh's Elm call
+        needed one B after 40 A presses). Choice boxes still surface as
+        'menu' (gotcha 13): answer them deliberately."""
+        r = self._drain_scene(max_frames=max_frames)
+        if r in ("done", "timeout") and \
+                (self.textbox() or self.menu_open()):
+            self.press("B:4 .:16")
+            r = self._drain_scene(max_frames=min(max_frames, 2000))
+        return r
 
     def fight(self, max_frames=90000, policy=None):
         """Play a battle out with real move selection (best expected
@@ -1465,7 +1506,9 @@ class Driver:
             self.fight(policy=policy)
             battles += 1
             dry = 0
-            log.info(f"  train: battle {battles}/{max_battles}")
+            snap = [(m["species"], m["level"], m["hp"], m["max_hp"])
+                    for _, m in members]
+            log.info(f"  train: battle {battles}/{max_battles} {snap}")
             if battles % 10 == 0:
                 self.save()
         final = [m["level"] for m in self.observe()["party"]
@@ -1808,6 +1851,36 @@ class Driver:
             n += 10
         return False
 
+    def _pocket_select(self, idx, item_name, max_steps=40):
+        """Steer the items-pocket cursor to absolute index `idx` and
+        confirm with A. The pocket REMEMBERS its cursor between opens
+        (pack.asm restores wItemsPocketCursor/wItemsPocketScrollPosition
+        into the scrolling menu), so a fresh open can start mid-list:
+        top-of-list screen scrapes miss and DOWN-only walks can never
+        climb back up (leg-2 'no potion visible' with 2 in the bag).
+        Navigate on the live WRAM index (wMenuScrollPosition +
+        wMenuCursorY) in BOTH directions, then verify the highlighted
+        row's TEXT really is the item before pressing A."""
+        want = _norm_item(item_name)
+        last, stuck = None, 0
+        for _ in range(max_steps):
+            cur = self.menu.scroll_abs()
+            if cur == idx:
+                break
+            stuck = stuck + 1 if cur == last else 0
+            if stuck >= 3:
+                return False    # cursor pinned: list edge or wrong menu
+            last = cur
+            self.press("D:6 .:4" if cur < idx else "U:6 .:4")
+        else:
+            return False
+        self.press(".:10")      # let the row repaint before scraping
+        got = self.menu.cursor_row()
+        if not got or not _norm_item(got[1]).startswith(want):
+            return False        # WRAM/screen disagree: never blind-A
+        self.press("A:6 .:18")
+        return True
+
     def use_item(self, item_name, target_slot=0, field=True):
         """Use an item from the pack outside battle (heals/status on party
         member `target_slot`). Returns True if the item was confirmed."""
@@ -1839,8 +1912,10 @@ class Driver:
         if not goto_pocket(self.menu, "items"):
             cancel_pack(self.menu)
             return False
-        if not self.menu.select_abs(idx):
+        before = bag_quantity(e, self.names, item_name)
+        if not self._pocket_select(idx, item_name):
             cancel_pack(self.menu)
+            log.info(f"  could not put the pocket cursor on {item_name}")
             return False
         # item submenu (USE/GIVE/TOSS/QUIT) pops up after a beat
         if not self.menu.wait_for_label("USE", 300) or \
@@ -1848,7 +1923,9 @@ class Driver:
             cancel_pack(self.menu)
             log.info(f"  no USE option for {item_name}")
             return False
-        used = True
+        # consumption is the only truth: the menus can flow perfectly
+        # while a swallowed A used nothing (bag read-back below)
+        used = False
         # healing/status items ask for a target ("Use on which PM?");
         # the party menu swallows the first A during setup, so press
         # until it actually closes
@@ -1866,8 +1943,16 @@ class Driver:
                     return False   # menu refuses to close: something's off
                 self.press("A:6 .:18")
             self.flush_dialog(3000)
-        else:
-            used = False   # submenu confirmed but nothing happened
+            # confirmed only when the bag actually shrank (quantity
+            # dropped, or the last one vanished from the pocket)
+            f0 = self.emu.frame
+            while self.emu.frame - f0 < 1500:
+                after = bag_quantity(e, self.names, item_name)
+                if after is None or (before is not None and after < before):
+                    used = True
+                    break
+                self.press(".:20")
+        # else: submenu confirmed but no target list -- nothing happened
         # close any leftover UI (pack, stat screens) until the field is back
         def _field_clear(rows):
             bad = ("▶", "▷", "CANCEL", "QUIT", "EXIT", "USE", "TOSS")
@@ -1942,6 +2027,15 @@ class Driver:
         # routing here just bounces in and out forever.
         exit_warp_goal = (map_name is None and goal_map == self.map_name()
                           and self._is_warp_cell(x, y))
+        if goal_map == self.map_name():
+            grid = self.nav.grid(goal_map)
+            if not (0 <= x < len(grid[0]) and 0 <= y < len(grid)):
+                self.last_goto_reason = (
+                    f"target ({x},{y}) outside {goal_map} bounds "
+                    f"{len(grid[0])}x{len(grid)} -- pass map_name or use "
+                    f"travel for cross-map goals")
+                log.warning(f"  GAVE UP ({self.last_goto_reason})")
+                return False
         entry_map = self.map_name()
         replans = idle = passes = drains = 0
         edge_counts = {}    # (from_map, to_map): crossings this one call
@@ -2115,6 +2209,9 @@ class Driver:
             reason = "pass-cap"
         if last_block:
             reason += f"; last-block={last_block}"
+        if "script-scene-active" in reason:
+            reason += ("; if crossing the scene cell is talk-only-safe, "
+                       "set d.trip_scenes=True for this one goto")
         self.last_goto_reason = reason
         log.warning(f"  GAVE UP ({reason}) at {self.map_name()} "
               f"{self.pos()[2:]} -> {goal_map} {goal}")
@@ -2685,9 +2782,11 @@ class Driver:
                 if self.talk_to(x, y, label or "clerk") != "talked":
                     break
             if not opened:
-                log.warning("  shop menu did not open")
                 self.press("B:4 .:10 .:20")
-                return False
+                raise RuntimeError(
+                    f"mart_buy: shop menu did not open at ({x},{y}) -- "
+                    f"clerk talk failed twice (registry actions must not "
+                    f"fail as a silent log line)")
         for _ in range(40):                       # bounded item search
             rows = self.emu.screen_text()
             cur = self._shop_cursor_row(rows)
@@ -2709,12 +2808,23 @@ class Driver:
                                 return None
                     return None
 
+                # qty keys are RIGHT=+10 / LEFT=-10 / UP=+1 / DOWN=-1
+                # and presses get swallowed unpredictably -- verify the
+                # ×NN glyph after EVERY press or overshoot (omp-fresh hit
+                # x51 once on UP-only blind presses).
                 tries = 0
-                while tries < 20:                # UP adds one; presses can
-                    if picker_qty() in (qty, None):  # be swallowed early
-                        break
-                    self.press("U:4 .:14")
+                while picker_qty() != qty and tries < 40:
+                    v = picker_qty()
+                    if v is None:
+                        self.press(".:10")
+                    else:
+                        step = ("R" if v + 10 <= qty else
+                                "L" if v - 10 >= qty else
+                                "U" if v < qty else "D")
+                        self.press(f"{step}:4 .:14")
                     tries += 1
+                if picker_qty() != qty:
+                    break
                 self.press(".:10")
                 self.press("A:6 .:30")
                 self.flush_dialog(3000)
@@ -2735,7 +2845,11 @@ class Driver:
         ok = bought and after >= before + qty
         log.info(f"  mart_buy {item_name} x{qty}: "
               f"{'ok' if ok else 'FAILED'} ({before} -> {after})")
-        return ok
+        if not ok:
+            raise RuntimeError(
+                f"mart_buy: {item_name} x{qty} failed "
+                f"(bag {before} -> {after}, bought={bought})")
+        return True
 
 
 # -- legs -------------------------------------------------------------------
@@ -2806,6 +2920,13 @@ def heal_pokecenter(d):
         raise RuntimeError(
             f"heal_pokecenter: party not fully healed "
             f"({[(m['species'], m['hp'], m['max_hp']) for m in hurt]})")
+    # success: the player is still ON the counter tile facing the nurse;
+    # the next A-bearing routine re-opens her prompt (two leg-2 wedges).
+    # Step off south -- every center's counter row is y=3 with open
+    # floor below -- and settle so no residual prompt stays armed.
+    if d.step_dir("D") != "moved":
+        d.step_dir("D")            # first press may only turn in place
+    d.settle()
 
 
 def leg_to_violet(d):
