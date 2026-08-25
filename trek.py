@@ -958,6 +958,14 @@ class Driver:
     # -- actions -----------------------------------------------------------
 
     def press(self, seq):
+        # naming-screen freeze (moss-run postmortem): while a keyboard is
+        # up, ONLY explicit type_name/dismiss_keyboard may type -- any
+        # other A/B/START press would insert chars or commit garbage.
+        if self.keyboard_open() and not getattr(self, "_naming_busy", False):
+            seq = ",".join(t for t in seq.split()
+                           if t.upper().startswith((".:", "D:")))
+            if not seq:
+                return
         self.emu.run_sequence(parse_sequence(seq))
 
     def step_dir(self, mv, max_frames=40):
@@ -1085,13 +1093,13 @@ class Driver:
                 "note": "send the top healthy ranked mon in via "
                         "fight(policy=('switch', slot))"}
 
-    def gym_scout(self, map_name):
+    def gym_scout(self, map):
         """Read the repo's ground truth for a gym BEFORE entering:
         parse maps/<Map>.asm trainer references + data/trainers/parties.asm
         into [{trainer, group, mons: [{species, level, moves}]}] so roster
         evolution is planned, not discovered by wiping (repo-is-the-map).
-        map_name: CONST ('VIOLET_GYM') or CamelCase."""
-        const = self._resolve_map(map_name)
+        map: CONST ('VIOLET_GYM') or CamelCase."""
+        const = self._resolve_map(map)
         path = paths.REPO_ROOT / "maps" / f"{const.title().replace('_', '')}.asm"
         if not path.exists():
             raise ValueError(f"gym_scout: no map source at {path}")
@@ -1115,15 +1123,32 @@ class Driver:
                 out.append({"trainer": template, "group": group,
                             "mons": [], "error": "group not in parties.asm"})
                 continue
-            tmatch = re.search(
-                rf'db "{re.escape(template.rstrip("0123456789"))}@".*?\n'
-                rf"((?:\s+db .*\n)+?)\s+db -1", gsec.group(1))
+            base = re.sub(r"\d+$", "", template)
+
+            def _norm(s):
+                # 'AMYANDMAY1' vs parties 'AMY & MAY@': drop non-letters,
+                # then the literal AND, from BOTH sides
+                return re.sub(r"[^A-Z]", "", s.upper()).replace("AND", "")
+
+            variants = {_norm(base), _norm(base.split("_")[-1])}
+
+            def _is_template(line_name):
+                cand = _norm(line_name)
+                return any(cand == v for v in variants)
+
+            tmatch = None
+            for m in re.finditer(
+                    r'db "([^"]+)@".*?\n((?:\s+db .*\n)+?)\s+db -1',
+                    gsec.group(1)):
+                if _is_template(m.group(1)):
+                    tmatch = m
+                    break
             if not tmatch:
-                out.append({"trainer": template, "group": group,
+                out.append({"trainer": base, "group": group,
                             "mons": [], "error": "template not found"})
                 continue
             mons = []
-            for line in tmatch.group(1).splitlines():
+            for line in tmatch.group(2).splitlines():
                 fields = [f.strip() for f in line.strip().removeprefix("db").split(",")]
                 if len(fields) < 2 or not fields[0].isdigit():
                     continue
@@ -1132,9 +1157,9 @@ class Driver:
                     mon["moves"] = [f for f in fields[2:]
                                     if f and f != "NO_MOVE"]
                 mons.append(mon)
-            base = re.sub(r"\d+$", "", template)
             out.append({"trainer": base, "group": group, "mons": mons})
         return out
+
     def _naming_sig(self):
         """WRAM signature of naming-screen state; NamingScreen writes
         these BEFORE rendering (engine/menus/naming_screen.asm), so a
@@ -1165,26 +1190,31 @@ class Driver:
 
     def dismiss_keyboard(self, name=None):
         """Confirm a naming screen. With a name, actually type it; without,
-        confirm with the minimal name (fast path)."""
-        if name:
-            log.info(f"  naming keyboard: typing {name!r}")
-            for _ in range(12):       # B = backspace: clear stray chars
+        confirm with the minimal name (fast path). Runs with the naming
+        freeze lifted -- this is the ONLY sanctioned typer."""
+        was = getattr(self, "_naming_busy", False)
+        self._naming_busy = True
+        try:
+            if name:
+                log.info(f"  naming keyboard: typing {name!r}")
+                for _ in range(12):   # B = backspace: clear stray chars
+                    self.press("B:3 .:10")
+                self.type_name(name)
+                return
+            log.info("  naming keyboard: confirming")
+            for _ in range(12):       # clear strays so decline is clean
                 self.press("B:3 .:10")
-            self.type_name(name)
-            return
-        log.info("  naming keyboard: confirming")
-        for _ in range(12):           # clear strays so decline is clean
-            self.press("B:3 .:10")
-        self.press("START:4 .:20 A:4 .:30")          # jump to END, confirm
-        if self.keyboard_open():                      # empty name refused:
-            self.press("A:2 .:10 START:4 .:20 A:4 .:30")  # type one letter
+            self.press("START:4 .:20 A:4 .:30")          # END + confirm
+            if self.keyboard_open():                  # empty refused:
+                self.press("A:2 .:10 START:4 .:20 A:4 .:30")  # 1 letter
+        finally:
+            self._naming_busy = was
 
     def type_name(self, name, max_len=10):
         """Type `name` on the naming keyboard (uppercase only -- the game
-        renders names in caps anyway). The grid is deterministic
-        (data/text/name_input_chars.asm); every move/press is verified
-        against WRAM (cursor struct + name length), since input on this
-        screen drops presses that land mid-animation."""
+        renders names in caps anyway). Runs with the freeze lifted."""
+        was = getattr(self, "_naming_busy", False)
+        self._naming_busy = True
         global NAME_GRIDS
         if NAME_GRIDS is None:
             NAME_GRIDS = _parse_name_grid(paths.REPO_ROOT)
@@ -1230,6 +1260,7 @@ class Driver:
                 if name_len() > before or name_len() >= max_len:
                     break
         self.press("START:6 .:20 A:10 .:40")     # snap to END, confirm
+        self._naming_busy = was
 
     def _flush_dialog_hooks(self, max_frames, quiet_frames=40):
         """Event-driven advance: A only while the engine reports a page
@@ -1838,7 +1869,11 @@ class Driver:
                           + abs(c[1] - cy))[:8]
             for tx, ty in near:
                 try:
-                    self.goto(tx, ty, "into the grass")
+                    saved_af, self.auto_fight = self.auto_fight, True
+                    try:
+                        self.goto(tx, ty, "into the grass")
+                    finally:
+                        self.auto_fight = saved_af
                     break
                 except Exception:
                     continue
@@ -1886,7 +1921,18 @@ class Driver:
     def _train_heal(self):
         """Mid-training nurse trip: route to whichever Pokécenter actually
         routes shortest, heal, route back. Raises when nothing routes --
-        silent 'kept training hurt' would be worse."""
+        silent 'kept training hurt' would be worse. Transit forces
+        auto_fight: manual mode means the DECIDER owns battles at the
+        train()/catch_up() call level, not every wild on the nurse rail
+        (moss-run [W]: sticky flag starved the heal rail mid-leg)."""
+        saved = self.auto_fight
+        self.auto_fight = True
+        try:
+            self._train_heal_inner()
+        finally:
+            self.auto_fight = saved
+
+    def _train_heal_inner(self):
         here = self.map_name()
         best, best_len = None, None
         for cand in self._HEAL_CENTERS:
@@ -1971,7 +2017,11 @@ class Driver:
                               + abs(c[1] - cy))[:8]
                 for tx, ty in near:
                     try:
-                        self.goto(tx, ty, "into the grass")
+                        saved_af, self.auto_fight = self.auto_fight, True
+                        try:
+                            self.goto(tx, ty, "into the grass")
+                        finally:
+                            self.auto_fight = saved_af
                         break
                     except Exception:
                         continue
