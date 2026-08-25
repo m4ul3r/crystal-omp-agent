@@ -1,5 +1,15 @@
 # PROGRESS — Pokémon Crystal run
 
+## Full-repo code review done — CODE_REVIEW_PLAN.md (Aug 24 2026, session ox-alpha)
+
+Six parallel review agents covered trek.py, battle/nav/menus, serve/autopilot/
+watch/core, scripts/tests/hygiene. Findings + prioritized fix plan live in
+**CODE_REVIEW_PLAN.md** (P0-P10). Nothing fixed yet; next engineering session
+should start at that file's Work Plan. Top items: battle.py type-ID off-by-9 +
+accuracy misread (move ranking wrong today), mart_buy money-leak bugs,
+watch.py select/snapshot race + SSE duplicate history, autopilot stuck-digest
+missing bag/money.
+
 ## session claude-wren pt2 — HIVE BADGE (DONE, Aug 24 2026)
 
 Model-driven navigation this leg (decision-boundary doctrine): waypoints chosen
@@ -117,23 +127,34 @@ power-on — omp_saves/omp-fresh-zephyr.state frame 385988, QUILAVA L15,
 Togepi egg secured post-badge (omp-fresh-egg-in-party.state), zero
 saves/ contact. ~386k frames / ~1h45m play over ~2h wall incl. 3 burned
 naming forks. Postmortem: omp_saves/omp-fresh-postmortem.md.
-PRIORITIZED BACKLOG (from omp-fresh + claude-wren field data; needs
-live repro sessions):
-1. heal_pokecenter still races despite drain+retry-once (3x this run:
-   "party not fully healed ([(155,12,30)])"); suspect nurse YES/NO
-   choice menu interacting with dialog_press_safe. Repro on zephyr
-   save. Repro hint (agent sign-off): fires on EVERY first
-   heal_pokecenter call after a dialog-heavy scene — start repro there.
-2. mart_buy: shop-not-open is a silent log line from a registry action;
-   must raise/return False loudly; qty helper verifying xNN glyph per
-   press (RIGHT=+10/LEFT=-10/UP=+1/DOWN=-1).
-3. goto no-op True/None-with-unchanged-pos: instrument arrival
-   proximity + exit_warp_goal paths with movement counters.
-4. GAVE UP text should mention d.trip_scenes when script-scene-active.
-5. observe().party 'nick' vs game_state 'nickname' unify; curated flag
-   list expansion (ELMS_AIDE_IN_VIOLET_POKEMON_CENTER not observable).
-6. train() map hint arg; Sprout Tower mapgraph stairs wrong both ways
-   (wren; nav.py work in progress by another session may cover it).
+IMPLEMENTATION ROUND 2 (Aug 24, post-signoff feedback pass; commits
+1de2dcd + 49135ae on top of the clean baseline):
+- heal race ROOT-CAUSED live (zephyr repro): _nurse discarded
+  flush_dialog's 'menu' at the YES/NO box -> nobody answered YES ->
+  stale pre-jingle HP raise. Fixed: deliberate YES via menu primitive +
+  HP-keyed jingle settle. Also _flush_dialog_hooks now falls back to
+  glyph-gated paging when a drained page_wait goes unactionable with a
+  box visibly up. Verified live: raised before patch, HEAL OK 46/46
+  after, second call clean.
+- mart_buy raises loudly (shop-not-open, bag shortfall); qty picker
+  verifies the xNN glyph per press (RIGHT/LEFT/UP/DOWN semantics).
+- registry action `drain_scene` exposed (+ A-deaf B fallback);
+  Driver.scene_busy() helper (sm==0 alone lies).
+- goto: same-map out-of-bounds target fails fast with a wrong-map
+  reason; GAVE UP hints d.trip_scenes on script-scene-active.
+- train(): per-battle log now carries the party snapshot.
+STILL OPEN (needs own sessions):
+1. fight() outcome enum + auto-drain of victory chains (API change —
+   callers + registry contract must move together).
+2. map_view vs _grass_cells glyph mismatch on ROUTE_31 (data dig into
+   collision bytes vs glyph table).
+3. observe(): npc identity (sprite id/object_const) + player facing;
+   nick vs nickname key unify; curated flag-list expansion.
+4. ui.textbox dual-signal for non-$79 border renders — deliberately
+   deferred: flush fallback covers the practical case; a loose glyph
+   OR risks A-mashing inside shop/pack menus (gotcha 13).
+(step_dir warp-hold from the addendum is already covered by
+_held_warp_entry/_step_warp_tap in the committed nav work.)
 
 ## session omp-fresh owns fresh-boot run to Zephyr Badge, working state omp_saves/omp-fresh.state
 
