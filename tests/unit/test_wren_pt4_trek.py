@@ -144,7 +144,6 @@ def use_item_world(d, monkeypatch, consumed):
     monkeypatch.setattr(trek, "bag_item_index", fake_index)
     monkeypatch.setattr(trek, "bag_quantity", fake_qty)
     monkeypatch.setattr(trek, "goto_pocket", lambda menu, pocket: True)
-    monkeypatch.setattr(trek, "cancel_pack", lambda menu: None)
 
     class M:
         def select_label(self, label, max_presses=14):

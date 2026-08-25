@@ -95,7 +95,8 @@ from the leg's own arguments.
 | Audit a battle afterwards | `d.last_battle` (`.rows()`, `.summary()`, `.free_hits()`) — free hits are the switch-in/item turns that wiped the party at Koga |
 | Mid-battle actions | policy returns `('attack', slot)`, `('switch', party_idx)`, `('item','SUPER POTION')`, `('ball','GREAT BALL')`, or `'flee'` |
 | Name a caught Pokémon | `d.catch(nickname="BUBBLES")` (str, species-keyed dict, or callable) or `trek catch NICKNAME` — types it on the naming keyboard; without a name the prompt is declined |
-| Use items out of battle | `Driver.use_item('POTION', target_slot=0)` (falls back to screen-based pack detection when the WRAM gate misreads) |
+| Use items out of battle | `Driver.use_item('POTION', target_slot=0)` or `use_item('FULL RESTORE', mon='BROOK')` (nickname; exclusive with `target_slot`). True only on a bag decrement; `d.last_item_reason` says why not (`'no-effect'` = the engine's own "It won't have any effect", not a failure) |
+| Heal the whole party from the bag | `Driver.heal_party()` → `{'BROOK': 'FULL RESTORE', 'GATOR': 'already full', 'REED': 'no item'}` — cheapest sufficient item per mon, prices/heal amounts read from the ROM's own tables; `items=[...]` whitelists what it may spend |
 | Grind without surrendering control | `d.pace(steps, box=(x_lo,x_hi,y_lo,y_hi))` — random walk clamped to a box (keeps you out of stairwells), stops with `stopped='battle'` and the battle STILL UP |
 | Walk where the map data lies | `d.reach(x, y)` — `goto` first, then a savestate search (`d.explore_bfs`) when a floor's decoded grid is wrong (Victory Road, Rocket base, Ice Path) |
 | Menus anywhere | `d.menu.select_label('SAVE')` (instance method, cursor-glyph driven), `select_abs(i)` (scrolling lists), `wait_for_label('USE')`; open YES/NO box → `resolve_choice('YES')` |

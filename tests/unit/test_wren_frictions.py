@@ -379,7 +379,6 @@ def use_item_world(d, monkeypatch, start_cursor=3, consume_on_use=True):
     monkeypatch.setattr(trek, "bag_item_index", lambda *a, **k: 0)
     monkeypatch.setattr(trek, "bag_quantity", lambda *a, **k: world["qty"])
     monkeypatch.setattr(trek, "goto_pocket", lambda menu, pocket: True)
-    monkeypatch.setattr(trek, "cancel_pack", lambda menu: None)
 
     class M:
         def select_label(self, label, max_presses=14):
@@ -799,7 +798,6 @@ def revive_world(d, monkeypatch, start_row=3):
     monkeypatch.setattr(trek, "bag_item_index", lambda *a, **k: 0)
     monkeypatch.setattr(trek, "bag_quantity", lambda *a, **k: world["qty"])
     monkeypatch.setattr(trek, "goto_pocket", lambda menu, pocket: True)
-    monkeypatch.setattr(trek, "cancel_pack", lambda menu: None)
     d.emu.u8["wMenuCursorY"] = start_row + 1   # persisted, NOT row 0
 
     class M:

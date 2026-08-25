@@ -17,7 +17,7 @@ from io import BytesIO
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from crystalagent import paths
-from crystalagent.battle import Battle, BattleData, bag_item_index, bag_quantity, cancel_pack, goto_pocket, _norm_item
+from crystalagent.battle import Battle, BattleData, bag_item_index, bag_quantity, goto_pocket, _norm_item
 from crystalagent.charmap import Charmap
 from crystalagent.emu import Crystal, parse_sequence, InputError
 from crystalagent import hookevents
@@ -679,6 +679,121 @@ def _pack_quantity_rows(rows):
     return any(_PACK_QTY_RE.search(r) for r in rows)
 
 
+# The pack's "Use on which PM?" target list prints 'hp/max' fractions; the
+# item pocket's own column is '× n', so this never confuses the two.
+_HP_FRACTION_RE = re.compile(r"\d\s*/\s*\d+")
+
+
+def _party_target_list(rows):
+    """True only when the pack's "Use on which PM?" party list is really
+    drawn. "a CANCEL row is on screen" is NOT enough: the item pocket
+    draws its own CANCEL row once scrolled to the bottom of the list, and
+    accepting that as the target list let the party steering run while
+    the POCKET's cursor was still live in wMenuCursorY (the party list is
+    a 2D menu; wMenuScrollPosition there still holds the pocket's
+    offset) -- an A fired at the wrong screen. Same predicate battle.py
+    uses for the in-battle target list."""
+    joined = "".join(rows).upper()
+    if "USE ON WHICH" in joined:
+        return True
+    return any("CANCEL" in r for r in rows) and \
+        any(_HP_FRACTION_RE.search(r) for r in rows)
+
+
+def _no_effect_message(rows):
+    """_ItemWontHaveEffectText ("It won't have any" / "effect.",
+    data/text/common_3.asm) -- the engine refusing a LEGITIMATE no-op: a
+    full-HP unstatused target, an ANTIDOTE on a clean mon, a POTION on a
+    fainted one. Nothing is consumed and nothing ever will be, so this
+    must be reported as its own outcome, never mashed through as if the
+    A had been swallowed."""
+    joined = "".join(rows).upper()
+    return "HAVE ANY" in joined and "EFFECT" in joined
+
+
+def _field_clear(rows):
+    """No modal field UI left on screen -- no menu cursor, no pack /
+    party-list / START-menu row. The postcondition every field-item flow
+    has to restore: a stray START menu silently eats all movement input
+    (gotcha 7)."""
+    bad = ("▶", "▷", "CANCEL", "QUIT", "EXIT", "USE", "TOSS")
+    return not any(b in r for r in rows for b in bad)
+
+
+def _norm_name(text):
+    """Canonical mon-nickname key: uppercase alphanumerics only, so
+    'Brook', 'BROOK' and ' brook ' all address the same party member.
+    (norm_item is the ITEM key -- it also rewrites '#' to POKE, which has
+    no business happening to a nickname.)"""
+    return re.sub(r"[^A-Z0-9]", "", str(text).upper())
+
+
+_UNSET = object()       # use_item(target_slot=...) "argument not given"
+
+# constants/item_data_constants.asm: ITEMATTR_STRUCT_LENGTH, with
+# ITEMATTR_PRICE the first (little-endian) word of each entry.
+_ITEMATTR_LENGTH = 7
+# engine/items/item_effects.asm: the ItemEffects jumptable is
+# `assert_table_length ITEM_B3` ("The items past ITEM_B3 do not have
+# effect entries"). Every curative item sits well inside it.
+_ITEM_EFFECTS_ENTRIES = 0xB3
+
+_field_heal_table = None    # lazily read {norm item: heal/cure/price}
+
+
+def _load_heal_table(rom_path, sym, names):
+    """Every curative pack item, read out of the ROM's OWN tables so no
+    game data is hardcoded here (AGENTS.md: "the repo is the map"):
+
+      * HealingHPAmounts   (data/items/heal_hp.asm)     -- HP restored
+      * StatusHealingActions (data/items/heal_status.asm) -- cured bits
+      * the ItemEffects jumptable's ReviveEffect entries -- revives
+      * ItemAttributes     (data/items/attributes.asm)  -- shop price
+
+    Returns {normalized name: {'name', 'hp', 'cures', 'revives',
+    'price'}}; 'cures' is a wPartyMon*Status bit mask, 'hp' 0 for items
+    that restore none."""
+    with open(rom_path, "rb") as f:
+        rom = f.read()
+
+    def off(label):
+        bank, base = sym[label]
+        return base if base < 0x4000 else bank * 0x4000 + (base - 0x4000)
+
+    attrs = off("ItemAttributes")
+    table = {}
+
+    def row(item_id):
+        name = names.items.get(item_id)
+        if not name:
+            return None
+        base = attrs + (item_id - 1) * _ITEMATTR_LENGTH
+        return table.setdefault(_norm_item(name), {
+            "name": name, "hp": 0, "cures": 0, "revives": False,
+            "price": int.from_bytes(rom[base:base + 2], "little")})
+
+    p = off("HealingHPAmounts")          # dbw item, hp restored
+    while rom[p] != 0xFF:
+        got = row(rom[p])
+        if got is not None:
+            got["hp"] = int.from_bytes(rom[p + 1:p + 3], "little")
+        p += 3
+    p = off("StatusHealingActions")      # db item, menu text, status mask
+    while rom[p] != 0xFF:
+        got = row(rom[p])
+        if got is not None:
+            got["cures"] = rom[p + 2]
+        p += 3
+    jump, revive = off("ItemEffects"), sym["ReviveEffect"][1]
+    for item_id in range(1, _ITEM_EFFECTS_ENTRIES + 1):
+        p = jump + (item_id - 1) * 2
+        if int.from_bytes(rom[p:p + 2], "little") == revive:
+            got = row(item_id)
+            if got is not None:
+                got["revives"] = True
+    return table
+
+
 
 class Driver:
     def __init__(self, state_path=None):
@@ -745,6 +860,11 @@ class Driver:
     # decide_all: True means every battle needs an explicit decision --
     # refuse to auto-pilot rather than silently pick for the model.
     decide_all = False
+    # last_item_reason: machine-readable diagnosis of the most recent
+    # use_item call ('used' | 'no-effect' | 'not-in-bag' | 'no-pack' |
+    # 'pocket-miss' | 'no-use-option' | 'target-miss' | 'not-consumed').
+    # 'no-effect' is the engine's own legitimate no-op, NOT a failure.
+    last_item_reason = None
 
     # -- observations ------------------------------------------------------
 
@@ -3483,12 +3603,27 @@ class Driver:
         return False        # WRAM/screen disagree: never blind-A
 
     def _party_target(self, slot, max_steps=12):
-        """Steer the party-menu cursor to row `slot` (0-based; eggs count
-        as rows) on the live WRAM cursor (wMenuCursorY, 1-based -- the
-        same source battle.py steers its in-battle party menu with) and
-        confirm with A. The menu persists its cursor between opens and
-        REVIVE's fainted-target flow opens on the first ABLE mon, so
-        blind press counts from an assumed top row are never safe."""
+        """Steer the field party menu to row `slot` (0-based; eggs count
+        as rows) and confirm with A.
+
+        Same discipline as battle.py's _party_row_select, and
+        BIDIRECTIONAL for the same reason: InitPartyMenuWithCancel
+        restores wPartyMenuCursor into wMenuCursorY
+        (engine/pokemon/party_menu.asm:624), so a fresh open starts on
+        whatever row was picked LAST -- a DOWN-only walk can never climb
+        back to slot 0 -- and REVIVE's fainted-target flow opens on the
+        first ABLE mon.
+
+        Position is wMenuCursorY (1-based), the row PartyMenuSelect
+        itself branches on. The party list is a 2D menu
+        (PartyMenu2DMenuData through Load2DMenuData), so
+        wMenuScrollPosition is NOT its position here -- it still holds
+        the item pocket's scroll offset, which is why scroll_abs must
+        never be used for this list."""
+        # gotcha 2: the frame the list is drawn its input loop is not
+        # running yet, so the first D/U (or a same-row A) is swallowed --
+        # live evidence: a D press left wMenuCursorY unchanged at 1.
+        self.press(".:16")
         last, stuck = None, 0
         for _ in range(max_steps):
             cur = self.emu.read_u8("wMenuCursorY") - 1
@@ -3527,107 +3662,324 @@ class Driver:
             self.press("L:4 .:12")  # cycle pockets toward ITEM POCKET
         return False
 
-    def use_item(self, item_name, target_slot=0, field=True):
-        """Use an item from the pack outside battle (heals/status on party
-        member `target_slot`). Returns True if the item was confirmed."""
+    def _start_menu_pack_row(self):
+        """Get the START menu open with its PACK row drawn, and say so.
+        Idempotent: a START menu left open by an earlier failure counts as
+        already there (pressing START again would only close it)."""
+        def _pack_row(s):
+            return "PACK" in s
+        if _pack_row("".join(self.emu.screen_text()).upper()):
+            return True
+        if self.menu_open():
+            self.close_menus()      # a stray menu would eat the START press
+        self.press("START:4 .:25")
+        if self._wait_screen(_pack_row, 120):
+            return True
+        # Post-warp the START press sometimes lands during the fade;
+        # blind D/A presses here WALK THE PLAYER (once onto a ladder).
+        # Gotcha 2: the menu input loop isn't running the frame the menu
+        # is drawn -- settle, drain stragglers, retry ONCE.
+        log.info("  START menu slow to open; settling and retrying")
+        self.settle()
+        if self.textbox():
+            self.flush_dialog()
+        self.press("START:4 .:25")
+        return self._wait_screen(_pack_row, 120)
+
+    # pack.asm jumptable states for the four pockets (goto_pocket's gate)
+    _PACK_STATES = (2, 4, 6, 8)
+
+    def _open_pack(self, max_confirms=3):
+        """START -> PACK -> items pocket, with the pack open PROVED.
+
+        This is the root cause of the pt10 field-item failures
+        (`use_item` returning False with the bag untouched while the same
+        items worked through the battle pack). Menus.select_label
+        confirms a row with a 2-frame A and reports success from the
+        CURSOR GLYPH alone -- it never looks at whether the pack opened.
+        On the frames right after the START menu is drawn its input loop
+        is not running yet (gotcha 2), so that A is swallowed on some
+        frame parities and not others; live proof: two calls made from
+        byte-identical savestates, one opened the pack and one left the
+        START menu sitting there. goto_pocket then burned its whole
+        budget on wJumptableIndex 128 (the START menu), the screen
+        fallback saw no pocket banner and no quantity rows, and use_item
+        returned False with NO log line at all -- leaving the START menu
+        OPEN, which silently eats the caller's next input (gotcha 7), so
+        the next call's START press merely closed it. That is the
+        alternating success/failure the live log shows for identical
+        calls.
+
+        The fix is to retry the CONFIRM until the pack is verifiably up
+        (jumptable pocket state, or the drawn pocket banner / quantity
+        column when field context leaves the jumptable stale -- wren
+        pt6). Re-pressing A on an already-open pack only re-opens the
+        item submenu, which _pocket_select re-drives, so it is safe."""
+        if not self._start_menu_pack_row():
+            log.warning("  START menu did not open")
+            return False
+        self.press(".:20")          # gotcha 2: let the input loop start
+        if not self.menu.select_label("PACK", max_presses=8):
+            log.info("  no PACK row to confirm")
+            return False
+        for _ in range(max_confirms):
+            if goto_pocket(self.menu, "items") or \
+                    self._items_pocket_by_screen():
+                return True
+            self.press("A:8 .:24")      # swallowed confirm: press again
+        return False
+
+    def _field_ui_clear(self):
+        """Nothing modal is left on screen AND the pack's own jumptable is
+        out of its pocket states (cancel_pack's gate, read directly so
+        this needs no Menus)."""
+        if self.emu.read_u8("wJumptableIndex") in self._PACK_STATES:
+            return False
+        return _field_clear(self.emu.screen_text())
+
+    def _exit_field_ui(self, max_frames=1800):
+        """B out of every field UI layer -- item message, party target
+        list, pack, START menu -- until the overworld is interactive.
+
+        Every use_item exit runs this. The old failure paths did
+        `cancel_pack(); return False`, which is jumptable-gated and so
+        left a stray START menu open on exactly the swallowed-A failure
+        it was reporting; that menu then ate the caller's movement input
+        (gotcha 7). B is also the safe key after a success: the item's
+        "recovered NN HP!" prompt takes A or B, and an A drops straight
+        back onto the target list where it would spend a SECOND item.
+
+        Ends on a settling pause: without it the overworld has not
+        re-latched input when the caller (or the next use_item) presses
+        START, which is eaten and costs a whole retry cycle."""
+        f0 = self.emu.frame
+        while self.emu.frame - f0 < max_frames and not self._field_ui_clear():
+            self.press("B:6 .:14")
+        clear = self._field_ui_clear()
+        self.press(".:30")
+        return clear
+
+    def _item_fail(self, reason, message, exit_ui=True):
+        """The one exit for every use_item failure: log it, record the
+        machine-readable reason on self.last_item_reason, and put the
+        field back."""
+        self.last_item_reason = reason
+        log.info(f"  {message}")
+        if exit_ui:
+            self._exit_field_ui()
+        return False
+
+    def _party_slot(self, mon):
+        """0-based party row of the member NICKNAMED `mon`, so callers
+        stop hand-counting slots (and stop miscounting them after a
+        party_swap). Comparison is case/space-blind; eggs are addressable
+        because they occupy a row. Raises ValueError on an unknown name --
+        silently healing the wrong mon is worse than stopping."""
+        want = _norm_name(mon)
+        party = game_state(self.emu, self.names)["party"]
+        for slot, m in enumerate(party):
+            if _norm_name(m.get("nickname") or "") == want:
+                return slot
+        raise ValueError(
+            f"use_item: no party member named {mon!r} "
+            f"(party: {[m.get('nickname') for m in party]})")
+
+    def use_item(self, item_name, target_slot=_UNSET, field=True, *,
+                 mon=None):
+        """Use an item from the pack outside battle on party member
+        `target_slot` (0-based) -- or on the member NICKNAMED `mon`,
+        resolved against the live party. `target_slot` and `mon` are
+        mutually exclusive (ValueError if both are given).
+
+        True ONLY on a bag decrement: the menus can flow perfectly while
+        a swallowed A used nothing. Every outcome also lands a
+        machine-readable diagnosis on self.last_item_reason:
+
+          'used'           the item was consumed
+          'no-effect'      the ENGINE refused it (_ItemWontHaveEffectText:
+                           full-HP unstatused target, POTION on a fainted
+                           mon) -- a legitimate no-op that consumed
+                           nothing, never a mechanical failure
+          'not-in-bag' | 'no-pack' | 'pocket-miss' | 'no-use-option' |
+          'target-miss' | 'not-consumed'   mechanical failures
+        """
+        if mon is not None:
+            if target_slot is not _UNSET:
+                raise ValueError(
+                    "use_item: pass target_slot OR mon, not both")
+            target_slot = self._party_slot(mon)
+        elif target_slot is _UNSET:
+            target_slot = 0
         e = self.emu
+        self.last_item_reason = None
         idx = bag_item_index(e, self.names, item_name, "items")
         if idx is None:
-            log.info(f"  no {item_name} in bag")
-            return False
-        def _start_menu_up(s):
-            return "PACK" in s   # START menu row; paints a beat late
-        self.press("START:4 .:25")               # open START menu
-        if not self._wait_screen(_start_menu_up, 90):
-            # Post-warp the START press sometimes lands during the fade;
-            # blind D/A presses here WALK THE PLAYER (once onto a ladder).
-            # Gotcha 2: the menu input loop isn't running the frame the
-            # menu is drawn -- settle, drain stragglers, retry ONCE.
-            log.info("  START menu slow to open; settling and retrying")
-            self.settle()
-            if self.textbox():
-                self.flush_dialog()
-            self.press("START:4 .:25")
-            if not self._wait_screen(_start_menu_up, 90):
-                log.warning("  START menu did not open")
-                return False
-        if not self.menu.select_label("PACK", max_presses=8):
-            self.press("B:4 .:10")
-            log.info("  could not open PACK")
-            return False
-        if not goto_pocket(self.menu, "items") and \
-                not self._items_pocket_by_screen():
-            # wren pt6: mid-gym, 4 POTIONs in the bag, use_item returned
-            # False before ever moving a cursor -- goto_pocket's
-            # wJumptableIndex gate read a non-pocket value in field
-            # context while the pack was plainly drawn. The screen is the
-            # fallback truth (banner / quantity rows, above); only when
-            # BOTH say "no pack" do we bail.
-            cancel_pack(self.menu)
-            return False
+            return self._item_fail("not-in-bag", f"no {item_name} in bag",
+                                   exit_ui=False)
+        if not self._open_pack():
+            return self._item_fail(
+                "no-pack", f"could not open the pack for {item_name}")
         before = bag_quantity(e, self.names, item_name)
         if not self._pocket_select(idx, item_name):
-            cancel_pack(self.menu)
-            log.info(f"  could not put the pocket cursor on {item_name}")
-            return False
+            return self._item_fail(
+                "pocket-miss",
+                f"could not put the pocket cursor on {item_name}")
         # item submenu (USE/GIVE/TOSS/QUIT) pops up after a beat
         if not self.menu.wait_for_label("USE", 300) or \
                 not self.menu.select_label("USE", max_presses=4):
-            cancel_pack(self.menu)
-            log.info(f"  no USE option for {item_name}")
-            return False
-        # consumption is the only truth: the menus can flow perfectly
-        # while a swallowed A used nothing (bag read-back below)
-        used = False
-        # healing/status items ask for a target party list. Two traps
-        # (wren pt3 REVIVE repro: returned False, bag never decremented,
-        # while a manual pack drive worked):
-        #   * the cursor does NOT start on row 0 -- wPartyMenuCursor
-        #     persists between opens, and fainted-target flows (REVIVE)
-        #     open on the first ABLE mon -- so blind D-press counts pick
-        #     the wrong target ("won't have any effect", nothing used);
-        #     steer on the live WRAM row instead;
-        #   * the revive jingle + "... came to!" message pace slowly over
-        #     a party menu that keeps CANCEL drawn -- gate on the bag
-        #     read-back, never on the menu closing.
-        have_target = self.menu.wait_for(
-            lambda r: any("CANCEL" in x for x in r), timeout_frames=400)
-        if have_target:
-            if not self._party_target(target_slot):
-                log.info(f"  could not put the party cursor on "
-                         f"slot {target_slot}")
-            else:
-                confirms = 0
-                f0 = last_a = self.emu.frame
-                while self.emu.frame - f0 < 4500:
-                    after = bag_quantity(e, self.names, item_name)
-                    if after is None or (before is not None
-                                         and after < before):
-                        used = True
-                        break
-                    if self.textbox():
-                        self.press("A:6 .:18")   # page the item message
-                    elif confirms < 3 and self.emu.frame - last_a > 400 \
-                            and any("CANCEL" in r
-                                    for r in self.emu.screen_text()):
-                        # party menus swallow the confirm A during setup
-                        # (gotcha 2); an unchanged bag proves nothing was
-                        # used yet, so a re-press can't double-consume
-                        self.press("A:6 .:18")
-                        confirms += 1
-                        last_a = self.emu.frame
-                    else:
-                        self.press(".:20")       # jingle: input is deaf
-                if used:
-                    self.flush_dialog(3000)
-        # close any leftover UI (pack, stat screens) until the field is back
-        def _field_clear(rows):
-            bad = ("▶", "▷", "CANCEL", "QUIT", "EXIT", "USE", "TOSS")
-            return not any(b in r for r in rows for b in bad)
-        f0 = self.emu.frame
-        while self.emu.frame - f0 < 900 and not _field_clear(self.emu.screen_text()):
-            self.press("B:6 .:14")
+            return self._item_fail("no-use-option",
+                                   f"no USE option for {item_name}")
+        used, reason = self._confirm_field_item(item_name, target_slot,
+                                                before)
+        self._exit_field_ui()
+        self.last_item_reason = reason
+        if not used:
+            log.info(f"  {item_name} not used on slot {target_slot}: "
+                     f"{reason}")
         return used
+
+    def _confirm_field_item(self, item_name, target_slot, before,
+                            max_frames=4500, max_confirms=3):
+        """Drive the pack's post-USE pages and report (used, reason).
+
+        Healing/status items ask for a target party list; repels/ropes
+        just run, and those are polled for consumption too. Two traps
+        (wren pt3 REVIVE repro: returned False, bag never decremented,
+        while a manual pack drive worked):
+          * the target cursor does NOT start on row 0 -- see
+            _party_target -- so blind press counts pick the wrong mon;
+          * the revive jingle + "... came to!" message pace slowly over a
+            party menu that keeps CANCEL drawn, so success gates on the
+            bag read-back, never on the menu closing."""
+        e = self.emu
+        targeted = self.menu.wait_for(_party_target_list, timeout_frames=400)
+        if targeted and not self._party_target(target_slot):
+            return False, "target-miss"
+        confirms = 0
+        f0 = last_a = e.frame
+        while e.frame - f0 < max_frames:
+            after = bag_quantity(e, self.names, item_name)
+            if after is None or (before is not None and after < before):
+                return True, "used"
+            rows = e.screen_text()
+            if _no_effect_message(rows):
+                # The engine's own refusal: nothing was consumed and
+                # nothing will be. Stop here -- another A would drop back
+                # onto the target list and spend the item on someone else.
+                return False, "no-effect"
+            if self.textbox():
+                self.press("A:6 .:18")       # page the item message
+            elif targeted and confirms < max_confirms and \
+                    e.frame - last_a > 400 and _party_target_list(rows):
+                # party menus swallow the confirm A during setup
+                # (gotcha 2); an unchanged bag proves nothing was used
+                # yet, so a re-press can't double-consume
+                self.press("A:6 .:18")
+                confirms += 1
+                last_a = e.frame
+            else:
+                self.press(".:20")           # jingle: input is deaf
+        return False, "not-consumed"
+
+    def _heal_items(self):
+        """{normalized name: curative properties} for this ROM, cached."""
+        global _field_heal_table
+        if _field_heal_table is None:
+            _field_heal_table = _load_heal_table(paths.ROM, self.emu.sym,
+                                                 self.names)
+        return _field_heal_table
+
+    @staticmethod
+    def _cheapest_heal(table, bag, allow, need_hp, status, fainted):
+        """Cheapest item IN THE BAG that helps this mon, or None.
+
+        Order of business, which is what keeps a 3000¥ FULL RESTORE off a
+        mon a 300¥ POTION would fix: a fainted mon needs a revive and
+        nothing else can touch it; a status is cleared by the cheapest
+        item whose cure mask COVERS it (an ANTIDOTE, not a FULL HEAL);
+        HP is topped up by the cheapest item that covers the WHOLE
+        shortfall. Only when nothing in the bag covers it does the
+        biggest heal on offer get used, and the caller loops on that.
+        A status with no cure in the bag still gets its HP topped up
+        instead of the mon being written off."""
+        def stocked(pred):
+            return [it for key, it in table.items()
+                    if bag.get(key) and (allow is None or key in allow)
+                    and pred(it)]
+
+        if fainted:
+            picks = stocked(lambda it: it["revives"])
+        else:
+            picks = stocked(lambda it: status
+                            and it["cures"] & status == status)
+            if not picks and need_hp:
+                picks = stocked(lambda it: it["hp"] >= need_hp)
+            if not picks and need_hp:
+                best = max((it["hp"] for it in stocked(
+                    lambda it: it["hp"] > 0)), default=0)
+                picks = stocked(lambda it: it["hp"] == best) if best else []
+        if not picks:
+            return None
+        return min(picks, key=lambda it: (it["price"], it["name"]))["name"]
+
+    def heal_party(self, items=None, max_items_per_mon=6):
+        """Top every damaged/statused party member back up out of the bag,
+        cheapest sufficient item first. Returns {mon label: outcome}:
+
+            {'BROOK': 'FULL RESTORE', 'SNAG': 'already full',
+             'REED': 'no item'}
+
+        The outcome is the item (or ', '-joined items) actually consumed,
+        'already full' for a mon that needed nothing, 'no item' when the
+        bag holds nothing that would help, or use_item's failure reason.
+        Healthy mons are never touched, and the run stops per mon as soon
+        as the relevant items run out.
+
+        `items`: optional whitelist of item names heal_party may spend.
+        Heal amounts, cure masks and prices all come from the ROM's own
+        tables (_load_heal_table), so 'cheapest sufficient' is the game's
+        arithmetic, not a guess."""
+        table = self._heal_items()
+        allow = None if items is None else {_norm_item(n) for n in items}
+        out = {}
+        count = len(game_state(self.emu, self.names)["party"])
+        for slot in range(count):
+            spent = []
+            label = None
+            for _ in range(max_items_per_mon):
+                mon = game_state(self.emu, self.names)["party"][slot]
+                label = mon.get("nickname") or mon.get("name") or f"slot{slot}"
+                if mon.get("egg"):
+                    break
+                status = self._status_byte(slot)
+                need_hp = max(0, mon["max_hp"] - mon["hp"])
+                if not need_hp and not status:
+                    out[label] = ", ".join(spent) if spent else "already full"
+                    break
+                pick = self._cheapest_heal(table, self._bag(), allow, need_hp,
+                                           status, mon["hp"] == 0)
+                if pick is None:
+                    out[label] = ", ".join(spent) + " (still hurt)" \
+                        if spent else "no item"
+                    break
+                if not self.use_item(pick, target_slot=slot):
+                    out[label] = ", ".join(spent + [
+                        f"{pick}: {self.last_item_reason}"])
+                    break
+                spent.append(pick)
+            else:
+                out[label] = ", ".join(spent) + " (still hurt)"
+        return out
+
+    def _status_byte(self, slot):
+        """Raw wPartyMon<slot>Status byte (the mask StatusHealingActions
+        entries are tested against). game_state decodes it to names, but
+        'which item cures this' needs the bits."""
+        sym = self.emu.sym
+        bank, base = sym["wPartyMon1"]
+        base += slot * sym.offset("wPartyMon2", "wPartyMon1") + \
+            sym.offset("wPartyMon1Status", "wPartyMon1")
+        return self.emu.read((bank, base), 1)[0]
 
     def walk(self, path, label=""):
         """Walk a path like 'L*12 U*3 D'. Handles battles, NPC dialogs, and

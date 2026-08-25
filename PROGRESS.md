@@ -1,3 +1,76 @@
+## session claude-wren pt11 - items fixed, BATTLE.md, second model-driven E4 (Aug 25 2026)
+
+Cleared the Elite Four again with **GATOR benched** and every action chosen by
+the model, driving from the new `BATTLE.md`. Milestone
+`claude_saves/wren-e4b-clear.state`.
+
+| leader | pt10 turns | pt11 turns | note |
+|---|---|---|---|
+| WILL | 6 | 6 | BROOK untouched both runs |
+| KOGA | 15 | **10** | arrived clean; killed Muk before Minimize stacked |
+| BRUNO | 5 | 5 | arrived at 215/215 instead of 52/215 poisoned |
+| KAREN | 7 | 7 | no FULL RESTORE needed this time |
+| LANCE | 12 | 17 | Thunder Wave paralysed BOTH my mons; see below |
+
+45 turns pt10 -> 45 turns pt11, but far less damage taken: one faint (RIPTIDE,
+deliberate) and GATOR again ended **L78 293/293, never in a battle**.
+
+### [fix] out-of-battle `use_item` -- my hypothesis was WRONG
+
+I blamed a remembered party cursor that could not climb upward. ItemFixer
+disproved it live (`_party_target` was already bidirectional, and the field
+party list is a 2D menu with `_2DMENU_WRAP_UP_DOWN`,
+engine/pokemon/party_menu.asm:661). The real cause:
+`Menus.select_label('PACK')` returns True from the **cursor glyph alone** and
+never checks that the pack actually opened. On the frames right after the
+START menu is drawn its input loop is not running (gotcha 2), so that A is
+swallowed; `goto_pocket` then burned its budget on `wJumptableIndex` 128 (the
+START menu) and `use_item` returned False **with no log line**, leaving the
+START menu OPEN -- which then ate the next caller's input (gotcha 7). That is
+why identical calls alternated between working and failing.
+
+New API, all verified live this session:
+- `use_item(name, mon="BROOK")` -- nickname targeting; unknown name raises
+  ValueError listing the party.
+- `heal_party()` -> per-mon outcomes, cheapest sufficient item first.
+  Live: BROOK 173/215 PSN -> 215/215 clean using **ANTIDOTE + HYPER POTION**,
+  spending **zero** of the two FULL RESTOREs (which then paid for Lance).
+- A full-HP mon returns False with reason `no-effect`, consuming nothing.
+
+### New: BATTLE.md
+
+The mechanics distilled into a file I drive from: damage formula and where
+STAB/badge/variation apply, the per-TYPE physical/special split, real type
+ids, accuracy as a 0-255 byte, never-miss moves, fixed-damage effects, the
+move-choice rule, speed, switching (trapped / free-on-faint), status and buffs
+worth pre-empting, and the turn-loop recipe. Each claim cites the disassembly
+or a live measurement.
+
+### What the doctrine bought, and what it cost
+
+- **Koga 15 -> 10 turns.** Killed Muk before Minimize stacked instead of
+  whiffing into it; BROOK left the room UN-poisoned, so Bruno was fought at
+  full HP instead of 52/215.
+- **Onix**: Dragonbreath over Iron Tail -- both certainly KO, but Onix has
+  152 Defense vs 54 Sp.Def, so the special move is both reliable AND aimed at
+  the weak side.
+- **Aerodactyl**: took the 75% Iron Tail again (only one-shot available) and
+  it landed.
+- **Lance's Blizzard Dragonite**: paralysed and slower, "attack twice" was a
+  coin flip on BROOK's life, so I switched to RIPTIDE -- **ICE is 0.5x on
+  WATER/FLYING**, which turned a 119-140 hit into 38-45. It chipped with
+  DRAGON RAGE, fainted, and BROOK entered FREE and one-shot the remainder.
+- **New cost discovered**: Lance's L47 Dragonites carry THUNDER WAVE and
+  paralysed BOTH BROOK (148 -> 37 speed) and RIPTIDE (118 -> 29). Paralysis
+  cost two full turns to full-paralysis and flipped turn order for most of
+  the fight -- that is the whole 12 -> 17 turn difference. Curing it with the
+  cheap FULL HEAL during Charizard (its best hit is 28-34) bought back the
+  speed needed to out-run the L50 ace's Outrage.
+- **Accuracy-lowering moves matter too**: Karen's Umbreon SAND ATTACKed and my
+  "100%" WING ATTACK missed. BATTLE.md 5 covers evasion; accuracy-down
+  belongs in the same bucket.
+
+
 ## session claude-wren pt10 - E4 REMATCH, every turn decided by the model (Aug 25 2026)
 
 Re-ran the whole Elite Four with **GATOR (L78 Feraligatr) benched** and every
@@ -82,6 +155,16 @@ reliability (unmissable > listed 100% > bigger-but-chancier).
 - A stray A press near the League clerk bought an ULTRA BALL (money 1219 ->
   19). Gotcha 13 applies to `goto` too, not just flush_dialog.
 - Field poison ticks between rooms; BROOK walked into Bruno at 71/215.
+
+[fix] ItemFixer (Aug 25): field `use_item` root cause was NOT the party
+cursor -- `Menus.select_label('PACK')` confirms from the cursor GLYPH after a
+2-frame A, so on some frame parities the START menu swallowed it, the pack
+never opened, and use_item returned False *silently with the START menu still
+up* (gotcha 7), making the next call fail too. `_open_pack` now retries the
+confirm until the pack is verifiably open and every exit clears the field.
+Also: `use_item(item, mon='BROOK')` (nickname, exclusive with target_slot),
+`d.last_item_reason` ('used'/'no-effect'/...), and `d.heal_party()` ->
+{mon: item} spending the cheapest sufficient item (ROM heal/price tables).
 
 
 ## session claude-wren pt9 - CHAMPION (Aug 25 2026)
