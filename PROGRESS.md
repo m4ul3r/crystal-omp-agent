@@ -4,8 +4,10 @@
 
 Six parallel review agents covered trek.py, battle/nav/menus, serve/autopilot/
 watch/core, scripts/tests/hygiene. Findings + prioritized fix plan live in
-**CODE_REVIEW_PLAN.md** (P0-P10). Nothing fixed yet; next engineering session
-should start at that file's Work Plan. Top items: battle.py type-ID off-by-9 +
+**CODE_REVIEW_PLAN.md** (P0-P11). Nothing fixed yet; next engineering session
+should start at that file's Work Plan. P11 folds in the prior field reviews
+(backup/FABLE_FEEDBACK.md, fable_results.md, backup/DEEPSEEK_PROGRESS.md) with
+duplicates confirmed / new items added / already-fixed items recorded. Top items: battle.py type-ID off-by-9 +
 accuracy misread (move ranking wrong today), mart_buy money-leak bugs,
 watch.py select/snapshot race + SSE duplicate history, autopilot stuck-digest
 missing bag/money.
@@ -167,6 +169,14 @@ mechanism (next run's mandate), persona must be explicitly wired into
 the instruction chain (persona.md existed; nothing pointed at it).
 (step_dir warp-hold from the addendum is already covered by
 _held_warp_entry/_step_warp_tap in the committed nav work.)
+
+ROUND 4 LAUNCH (Aug 24): **moss-run** (same pane w19:p1F, fresh
+timeline) owns persona run MOSS → ZEPHYR then HIVE badge. Brief:
+OMP_BRIEF2.md + persona_moss.md — roster is a CLI-checkable contract,
+strengths/weaknesses ledger (`omp_saves/moss-ledger.md`) is an explicit
+operator mandate ([W] weak points are the product). All states
+moss-* under omp_saves/. Smoke-test throwaway state omp-smoke-catch.*
+may be gc'd by the moss session once intro lands.
 
 ## session omp-fresh owns fresh-boot run to Zephyr Badge, working state omp_saves/omp-fresh.state
 
