@@ -1,3 +1,43 @@
+## session claude-wren pt7 - decision-first harness + team leveling (Aug 25 2026)
+
+**Where the run stands:** 8/8 badges, standing in INDIGO_PLATEAU_POKECENTER_1F.
+Milestone `claude_saves/wren-team-leveled.state`. Money ¥13,519 (two whiteouts).
+E4: Will and Koga were beaten on an accidental entry, then a deliberate
+whiteout at Bruno got us out of the seal (the gauntlet resets, so it must be
+re-run from Will).
+
+**Team after this session's grind (Victory Road top floor, box-clamped pacing):**
+- GATOR  Feraligatr L71 - CUT / STRENGTH / HYDRO PUMP / SURF
+- RIPTIDE Gyarados  L42 - HYDRO PUMP / WHIRLPOOL / DRAGON RAGE / WATERFALL
+- REED   Pidgeot    L41 - WING ATTACK / WHIRLWIND / GUST / QUICK ATTACK
+- SNAG   Sudowoodo  L40 - FAINT ATTACK / MIMIC / FLAIL / DYNAMICPUNCH
+- PEBBLE Togetic    L39 - SAFEGUARD / DOUBLE-EDGE / METRONOME / SHADOW BALL
+- BROOK  Dratini    L26 - WRAP / DRAGON RAGE / THUNDER WAVE / TWISTER
+Deltas: RIPTIDE 30->42, REED 38->41, PEBBLE 37->39 (+TM30 SHADOW BALL, it had
+ZERO damaging moves before), SNAG 39->40, BROOK 12->26, GATOR 65->71.
+
+**Exp reality check (why the band is 39-42, not 71):** matching GATOR across
+five mons is ~1.3M exp; the L45 band is ~300k. Throughput measured in-cave:
+~1 fight/second, ~15-18 fights per heal cycle, ~2 levels per 20 fights early
+and slowing. BROOK is slow-growth AND frail (one hit per battle even when
+switching out immediately), so it gates on heal trips, not on exp.
+
+**New wedge to fix next (reproducible):** with BROOK out and GATOR fainted,
+battles freeze - repeating `[fight diagnostic] frozen screen` with
+me=DRATINI L26 37/69 vs ONIX L32 69/69, all four moves showing PP, ending in
+'timeout'. BROOK gained nothing in rounds 5-7 because of it. Suspect the
+executor cannot drive one of WRAP/DRAGON RAGE/THUNDER WAVE/TWISTER (fixed-
+damage/status moves have power 0/None, which my own policy filters out, so the
+fallback picks slot 0). Worth a fixer: policy-chosen action that produces no
+screen change must be detected and substituted after 2 tries, not spun on.
+
+**Navigation notes for next session:** Victory Road's Route-23 entrance
+(13,10) is a ONE-WAY drop - the pocket only connects downward; the exit is
+(13,6)->(13,5) reached from the middle band, and the (0,11)<->(0,27) /
+(13,17)<->(13,31) stair pairs need `_step_warp_tap` (held keys bounce). The
+Plateau PC's south door is (5,13)/(6,13); mapgraph keeps routing to (0,13),
+which is the 2F stairs. Nurse is at (3,7) (goto (3,8) storms; `reach` it).
+
 ## session claude-wren pt6 - GLACIER BADGE (DONE, Aug 25 2026)
 
 **7/8 badges** (milestone `claude_saves/wren-glacier-badge.state`; FERALIGATR L55,

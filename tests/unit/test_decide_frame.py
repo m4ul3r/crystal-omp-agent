@@ -495,3 +495,30 @@ def test_decision_required_carries_the_frame_and_the_options():
     assert err.options == ("ko", "catch", "flee")
     assert err.frame["enemy"]["species"] == "ONIX"
     assert "wild ONIX" in str(err)
+
+
+# -- pre-init frame: the encounter hook fires before the mon block loads -----
+
+def test_frame_stands_in_the_active_party_mon_before_battle_init():
+    """Live bug: the encounter hook ran at T0, the battle mon block still read
+    back L0 0/0, and a level-comparing disposition policy fled a winnable
+    L34 Graveler. The roster is always real -- stand in with its active mon."""
+    emu = make_emu()
+    # blank the battle mon block the way the engine leaves it pre-init
+    emu.poke("wBattleMonSpecies", 0)
+    emu.poke("wBattleMonLevel", 0)
+    emu.poke("wBattleMonHP", (0).to_bytes(2, "big"))
+    emu.poke("wBattleMonMaxHP", (0).to_bytes(2, "big"))
+    frame = battle_frame(emu, make_names(), make_bdata())
+    assert frame["me"]["level"] == 30          # BROOK from the roster, not 0
+    assert frame["me"]["nickname"] == "BROOK"
+    assert frame["me"]["max_hp"] == 80
+    # slot 1 is standing in, so it is not offered as a switch target
+    assert 1 not in frame["can_switch"]
+    assert 3 in frame["can_switch"]            # MOO still switchable
+
+
+def test_frame_leaves_a_populated_battle_mon_alone():
+    frame = make_frame(my_hp=44)
+    assert frame["me"]["hp"] == 44             # mid-battle HP, not roster HP
+    assert frame["me"]["level"] == 30

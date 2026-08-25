@@ -269,6 +269,30 @@ def battle_frame(emu_or_battle, names=None, bdata=None, party=None, *,
         roster = [_party_entry(mon, i) for i, mon in enumerate(party)]
 
     active = me["party_slot"]
+
+    # The encounter hook fires BEFORE the battle mon block is populated, so
+    # b.me() can read back as a blank L0 0/0 mon. A disposition policy that
+    # compares its own level against the enemy then flees a winnable fight
+    # (observed live: fled a L34 Graveler because 'me' read as L0). The
+    # roster from game_state is always real -- stand in with its active mon.
+    if not (me.get("level") or 0) and not (me.get("max_hp") or 0):
+        stand_in = next((m for m in roster
+                         if m["index"] == active and not m["fainted"]), None) \
+            or next((m for m in roster
+                     if not m["fainted"] and not m["egg"]), None)
+        if stand_in:
+            me = dict(me)
+            me.update({
+                "nickname": stand_in.get("nickname") or me.get("nickname"),
+                "name": stand_in.get("species") or me.get("name"),
+                "species": stand_in.get("species_id") or me.get("species"),
+                "level": stand_in.get("level") or 0,
+                "hp": stand_in.get("hp") or 0,
+                "max_hp": stand_in.get("max_hp") or 0,
+                "party_slot": stand_in["index"],
+            })
+            active = stand_in["index"]
+
     can_switch = [mon["index"] for mon in roster
                   if not mon["fainted"] and not mon["egg"]
                   and mon["index"] != active]
