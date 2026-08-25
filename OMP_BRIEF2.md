@@ -36,6 +36,10 @@ them; `catch_up` exists so catching is ONE call now:
 `resolve(d, "catch_up", {"nickname": "SPROUT"})` paces grass, engages,
 throws, returns {'caught': ...}. observe() carries 'enemy' during
 battles so target choice isn't blind.
+BALL TIMING (corrected per moss-run [W]): the lab row-8 aide hands
+POTION pre-egg but BALLS only AFTER egg delivery — so Moss starts the
+errand with zero balls by design. First catch_up window opens once the
+egg is back with Elm and the aide scene lands; buy nothing extra early.
 
 ## Strengths / weaknesses ledger (operator mandate)
 You are ALSO a harness sensor. Maintain `omp_saves/moss-ledger.md` with

@@ -530,6 +530,14 @@ class Driver:
         self._whiteout_pending = False   # set by fight() on a detected wipe
         self.whiteouts = 0
         self.whiteout_policy = "abort"   # 'abort' | 'continue' (old behavior)
+        # Battle policy used by every fight() the driver starts on the
+        # player's behalf (talk_to trainer intercepts, goto/travel/walk
+        # encounter intercepts, use_cut, registry 'fight') when no
+        # explicit policy is passed. Whitney lesson (wren pt3): talk_to
+        # auto-fought the gym leader with the DEFAULT policy before a
+        # custom one could attach -- set d.default_policy BEFORE the
+        # approach. Explicit fight(policy=...) args always win.
+        self.default_policy = None
         self.hooks = hookevents.install(self.emu)
 
     # -- observations ------------------------------------------------------
@@ -964,6 +972,26 @@ class Driver:
         return (e.read_u8("wNamingScreenType"),
                 e.read_u8("wNamingScreenDestinationPointer"))
 
+    @staticmethod
+    def _text_speed_byte(opts, mode):
+        """wOptions low TEXT_DELAY_MASK bits select render delay
+        (FAST=%001, MED=%011, SLOW=%101); upper option bits survive."""
+        delays = {"FAST": 0b001, "MED": 0b011, "SLOW": 0b101}
+        return (opts & ~0b111) | delays[mode]
+
+    def set_text_speed(self, mode="FAST"):
+        """Force fast text rendering: pages complete in fewer frames so
+        drains stop paying the per-press tax (moss-run [W]: Elm speech
+        cost 104 A presses on the default speed). Cheap + idempotent --
+        safe to call on every drain entry; new-game resets re-apply."""
+        try:
+            self.emu.write("wOptions",
+                           self._text_speed_byte(
+                               self.emu.read_u8("wOptions"), mode))
+            return True
+        except Exception:
+            return False
+
     def dismiss_keyboard(self, name=None):
         """Confirm a naming screen. With a name, actually type it; without,
         confirm with the minimal name (fast path)."""
@@ -1038,6 +1066,7 @@ class Driver:
         or battle-end event fires -- zero blind presses."""
         f0, quiet = self.emu.frame, 0
         sig0 = self._naming_sig()
+        self.set_text_speed()
         while self.emu.frame - f0 < max_frames:
             if self.battle():
                 return "battle"
@@ -1080,6 +1109,7 @@ class Driver:
         fade-in keyboard never eats A presses as keystrokes."""
         f0, quiet = self.emu.frame, 0
         sig0 = self._naming_sig()
+        self.set_text_speed()
         while self.emu.frame - f0 < max_frames:
             if self.battle():
                 return "battle"
@@ -1117,6 +1147,7 @@ class Driver:
         false 'blocked by choice menu' aborts on blank pre-battle
         trainer boxes), so wait briefly and page it. Returns
         'done' | 'battle' | 'menu' | 'timeout'."""
+        self.set_text_speed()
         pages = 0
         f0 = self.emu.frame
         while pages < max_pages and self.emu.frame - f0 < max_frames:
@@ -1171,7 +1202,12 @@ class Driver:
         """Play a battle out with real move selection (best expected
         damage, auto-POTION at low HP, flee hopeless wilds). Pauses at a
         naming keyboard (post-catch nickname prompt) to type
-        self._pending_nickname if one is set."""
+        self._pending_nickname if one is set. `policy=None` falls back
+        to self.default_policy (still None by default): scripted battles
+        the driver intercepts on its own (talk_to, goto, travel) obey a
+        pre-armed policy instead of silently fighting with the default."""
+        if policy is None:
+            policy = self.default_policy
         if not self.battle():
             return self.lead()
         self._resolve_learn_flow()   # repair a wedged mid-learn state
@@ -1210,6 +1246,13 @@ class Driver:
             log.warning(f"  [WHITEOUT] wiped -> {self.map_name()} "
                   f"{self.pos()[2:]}; auto-healed at last Pokécenter",
                   )
+        elif outcome == "wedged":
+            # battle.py already printed its own capped wedge diagnostic
+            # (frozen screen + vitals fingerprint); don't re-dump the
+            # screen here -- the duplicate dump is exactly the hundreds-
+            # of-identical-lines spam from wren pt3.
+            log.warning(f"  [fight] battle wedged (see battle.py "
+                        f"diagnostic above)")
         elif outcome in ("timeout", "stuck"):
             # Burn ZERO blind retries: dump the frozen battle so the wedge
             # is diagnosable (the historic Bridget/Jigglypuff freeze cost
@@ -1979,6 +2022,26 @@ class Driver:
         self.press("A:6 .:18")
         return True
 
+    def _party_target(self, slot, max_steps=12):
+        """Steer the party-menu cursor to row `slot` (0-based; eggs count
+        as rows) on the live WRAM cursor (wMenuCursorY, 1-based -- the
+        same source battle.py steers its in-battle party menu with) and
+        confirm with A. The menu persists its cursor between opens and
+        REVIVE's fainted-target flow opens on the first ABLE mon, so
+        blind press counts from an assumed top row are never safe."""
+        last, stuck = None, 0
+        for _ in range(max_steps):
+            cur = self.emu.read_u8("wMenuCursorY") - 1
+            if cur == slot:
+                self.press("A:6 .:18")
+                return True
+            stuck = stuck + 1 if cur == last else 0
+            if stuck >= 3:
+                return False    # cursor pinned: wrong menu / list edge
+            last = cur
+            self.press("D:6 .:6" if cur < slot else "U:6 .:6")
+        return False
+
     def use_item(self, item_name, target_slot=0, field=True):
         """Use an item from the pack outside battle (heals/status on party
         member `target_slot`). Returns True if the item was confirmed."""
@@ -2024,33 +2087,47 @@ class Driver:
         # consumption is the only truth: the menus can flow perfectly
         # while a swallowed A used nothing (bag read-back below)
         used = False
-        # healing/status items ask for a target ("Use on which PM?");
-        # the party menu swallows the first A during setup, so press
-        # until it actually closes
+        # healing/status items ask for a target party list. Two traps
+        # (wren pt3 REVIVE repro: returned False, bag never decremented,
+        # while a manual pack drive worked):
+        #   * the cursor does NOT start on row 0 -- wPartyMenuCursor
+        #     persists between opens, and fainted-target flows (REVIVE)
+        #     open on the first ABLE mon -- so blind D-press counts pick
+        #     the wrong target ("won't have any effect", nothing used);
+        #     steer on the live WRAM row instead;
+        #   * the revive jingle + "... came to!" message pace slowly over
+        #     a party menu that keeps CANCEL drawn -- gate on the bag
+        #     read-back, never on the menu closing.
         have_target = self.menu.wait_for(
             lambda r: any("CANCEL" in x for x in r), timeout_frames=400)
         if have_target:
-            steps = 0
-            while steps < target_slot and \
-                    any("CANCEL" in r for r in self.emu.screen_text()):
-                self.press("D:6 .:6")
-                steps += 1
-            f0 = self.emu.frame
-            while any("CANCEL" in r for r in self.emu.screen_text()):
-                if self.emu.frame - f0 > 1200:
-                    return False   # menu refuses to close: something's off
-                self.press("A:6 .:18")
-            self.flush_dialog(3000)
-            # confirmed only when the bag actually shrank (quantity
-            # dropped, or the last one vanished from the pocket)
-            f0 = self.emu.frame
-            while self.emu.frame - f0 < 1500:
-                after = bag_quantity(e, self.names, item_name)
-                if after is None or (before is not None and after < before):
-                    used = True
-                    break
-                self.press(".:20")
-        # else: submenu confirmed but no target list -- nothing happened
+            if not self._party_target(target_slot):
+                log.info(f"  could not put the party cursor on "
+                         f"slot {target_slot}")
+            else:
+                confirms = 0
+                f0 = last_a = self.emu.frame
+                while self.emu.frame - f0 < 4500:
+                    after = bag_quantity(e, self.names, item_name)
+                    if after is None or (before is not None
+                                         and after < before):
+                        used = True
+                        break
+                    if self.textbox():
+                        self.press("A:6 .:18")   # page the item message
+                    elif confirms < 3 and self.emu.frame - last_a > 400 \
+                            and any("CANCEL" in r
+                                    for r in self.emu.screen_text()):
+                        # party menus swallow the confirm A during setup
+                        # (gotcha 2); an unchanged bag proves nothing was
+                        # used yet, so a re-press can't double-consume
+                        self.press("A:6 .:18")
+                        confirms += 1
+                        last_a = self.emu.frame
+                    else:
+                        self.press(".:20")       # jingle: input is deaf
+                if used:
+                    self.flush_dialog(3000)
         # close any leftover UI (pack, stat screens) until the field is back
         def _field_clear(rows):
             bad = ("▶", "▷", "CANCEL", "QUIT", "EXIT", "USE", "TOSS")
@@ -2800,12 +2877,55 @@ class Driver:
         p = Path(name)
         return p if len(p.parts) > 1 else Path(paths.SAVES_DIR) / name
 
+    def _save_blockers(self):
+        """Names of everything that makes the CURRENT screen unsafe to
+        bake into a savestate: a live battle, a running script, a textbox,
+        or any menu cursor glyph ($ec '▷' / $ed '▶'). Empty list = clean
+        interactable overworld."""
+        blockers = []
+        if self.battle():
+            blockers.append("battle")
+        try:
+            sm = self.emu.read_u8("wScriptMode")
+        except Exception:
+            sm = 0
+        if sm:
+            blockers.append(f"running script (wScriptMode={sm})")
+        if self.textbox():
+            blockers.append("textbox")
+        if any(c in r for r in self.emu.screen_text() for c in CURSORS):
+            blockers.append("menu cursor")
+        return blockers
+
     def save(self, name=None, force=False):
         """Save the working state (plus a `name` milestone copy when given).
         Refuses to overwrite a file whose .meta frame count is NEWER than
         the running emulation unless force=True -- the accidental-rollback
         class (older checkpoint over post-badge progress) now fails loudly
-        inside the harness instead of silently regressing."""
+        inside the harness instead of silently regressing.
+
+        Also refuses to bake a DIRTY screen into the state (wren pt3: a
+        stuck pack layer saved into wren.state poisoned every fork made
+        from it): the game must be a clean interactable overworld --
+        wScriptMode 0, no textbox, no menu cursor, not in battle. Dirty
+        screens get a bounded B-press auto-recovery first; force=True
+        bypasses the check entirely."""
+        if not force:
+            # legit saves happen right AFTER dialogs: settle before the
+            # first check so a closing box isn't judged mid-fade
+            self.settle(max_frames=300)
+            blockers = self._save_blockers()
+            for _ in range(4):
+                if not blockers or "battle" in blockers:
+                    break                 # never B-mash inside a battle
+                self.press("B:4 .:20")    # bounded auto-recovery
+                self.settle(max_frames=300)
+                blockers = self._save_blockers()
+            if blockers:
+                raise RuntimeError(
+                    "refusing to save a dirty screen ("
+                    + ", ".join(blockers)
+                    + ") -- close it first or pass force=True")
         target = self._save_target(self.state_path, name)
         meta = Path(str(target) + ".meta")
         if meta.exists() and not force:

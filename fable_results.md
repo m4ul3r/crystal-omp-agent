@@ -112,3 +112,56 @@ Highlights:
 - New harness bug found (reported in PROGRESS.md): `_drain_scene`'s choice-menu
   guard misfires on BLANK pre-battle trainer textboxes — it should require a
   real cursor glyph before refusing to press A.
+
+## Leg 3 — Plain Badge (the Whitney wars)
+
+**3/8 badges.** Ilex Forest (Farfetch'd herding cracked by reading the
+`wFarfetchdPosition` state machine from the disassembly — approach-facing
+determines advance/regress), HM01 Cut, Togepi hatched (**PEBBLE**), REED
+evolved to **PIDGEOTTO**, GATOR to **CROCONAW L29** via `d.train()` (first
+use — excellent). SILVER rematch won clean with a fainted/egg-guarded
+switch policy.
+
+Whitney needed four attempts and taught the leg's big lessons:
+1. Default battle policy loses to Attract+Rollout+Milk Drink at even levels —
+   gym leaders need bespoke policies attached from turn 1.
+2. `talk_to` auto-fights with the DEFAULT policy — approach leaders manually
+   (goto+face+A), then call `fight(policy=...)` yourself.
+3. Setup moves that spend turns (Mud-Slap) actively feed Rollout's ramp.
+4. Levels are the boring, correct answer: L26→L29 turned a 3-loss matchup
+   into a first-try win with Water Gun + Super Potion at <40 HP.
+5. The crying scene: step onto the exit coord event so the lass intercepts,
+   THEN Whitney hands over the badge.
+
+Costs of the leg, honestly: two whiteouts (one SILVER, one Whitney), one
+ruined save (menu layer baked into wren.state — recovered from milestone),
+MUD-SLAP lost to a blind unwind that taught TM49 over it, and REED fainted
+once leading gym-level trainers. Team play improved dramatically though:
+REED banked exp all leg via lead-and-switch, evolved, and PEBBLE is aboard.
+
+## Leg 4 — Fog Badge (Surf changes everything)
+
+**4/8 badges.** Team: FERALIGATR L35 (Cut/Scary Face/Fury Cutter/**SURF**),
+PIDGEOTTO L19, TOGEPI L5, **SNAG** the Sudowoodo L20 (one ball). ¥11831.
+
+Story: SquirtBottle quest (three-step Floria chain read out of the map
+script), Sudowoodo caught, GATOR evolved to Feraligatr on Route 35, Burned
+Tower — SILVER beaten, floor collapse, the beast trio awakened — and Morty.
+
+Morty cost three whiteouts before the diagnosis, and the diagnosis was the
+lesson of the whole run: **verify the move you think you're pressing.**
+`train()`'s level-up flow had silently replaced Bite with Scary Face; my
+"Bite" policy spent three battles ordering a Feraligatr to make faces at
+ghosts. BattleGuard's new diagnostics (landed mid-leg) exposed it: the wedge
+cap caught a stalled in-battle item menu and printed the party state that
+showed the truth. The fix was the Kimono Girls' HM03 — Surf over Water Gun —
+after which Morty fell on the first attempt.
+
+Harness work this leg (2 subagents + live verification):
+- BattleGuard: policy-action validation (no more switch-to-fainted wedges),
+  frozen-screen wedge cap with structured 'wedged' outcome, capped diagnostics.
+- TrekGuard: save() dirty-screen guard (no more menu-baked saves),
+  Driver.default_policy plumbed through every internal fight intercept,
+  WRAM-driven revive targeting. Full suite 147 green.
+- Three new bugs found and journaled: in-battle item stall, two-word item
+  name resolution, silent move replacement in learn flows.

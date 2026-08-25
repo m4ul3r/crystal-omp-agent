@@ -12,10 +12,14 @@ Cursor positions are read from the engine's own variables:
 - wMenuScrollPosition  scrolling-list window offset
 """
 
+import logging
 import re
 from pathlib import Path
 
 from .menus import Menus, battle_menu_up, naming_keyboard_up, _cursor_x
+from .state import EGG
+
+log = logging.getLogger("trek")
 
 MOVE_LENGTH = 7  # animation, effect, power, type, accuracy, pp, effect chance
 
@@ -494,13 +498,96 @@ class Battle:
                 return True
         return False
 
+    # -- policy-action validation and freeze detection -----------------------
+
+    def _party_count(self):
+        return min(self.emu.read_u8("wPartyCount"), 6)
+
+    def _egg_slots(self):
+        """Party indexes holding an EGG (wPartySpecies sentinel; the mon
+        struct itself carries the hatched species, so HP reads look alive)."""
+        try:
+            slots = self.emu.read("wPartySpecies", self._party_count())
+            return {i for i, s in enumerate(slots) if s == EGG}
+        except Exception:
+            return set()
+
+    def _invalid_action_reason(self, act, me):
+        """Why a policy action cannot possibly work this turn (switch to a
+        fainted/EGG/out-of-range slot, item or ball not in the bag, attack
+        slot empty or dry). None when the action is at least executable.
+        Executing an impossible action wastes the turn AND re-arms forever:
+        the live GATOR wedge was ('switch', i)-to-a-fainted-mon retried
+        every turn until the frame cap."""
+        kind = act[0] if isinstance(act, tuple) else act
+        arg = act[1] if isinstance(act, tuple) and len(act) > 1 else None
+        if kind == "switch":
+            i = arg if arg is not None else 1
+            if not isinstance(i, int) or not 0 <= i < self._party_count():
+                return f"switch target {i!r} out of party range"
+            if i in self._egg_slots():
+                return f"switch target {i} is an EGG"
+            if i not in self._alive_slots():
+                return f"switch target {i} is fainted"
+        elif kind == "item":
+            name = arg or "POTION"
+            if self.bag_item_index(name) is None:
+                return f"item {name!r} not in bag"
+        elif kind == "ball":
+            name = arg or "POKE BALL"
+            if self.bag_item_index(name, pocket="balls") is None:
+                return f"ball {name!r} not in bag"
+        elif kind == "attack" and arg is not None:
+            moves = me["moves"]
+            if not isinstance(arg, int) or not 0 <= arg < len(moves):
+                return f"attack slot {arg!r} out of range"
+            if moves[arg][1] == 0:
+                return f"attack slot {arg} has no PP"
+        return None
+
+    WEDGE_REPS = 3              # identical snapshots before escalating
+    WEDGE_CONFIRM_FRAMES = 600  # a real freeze stays frozen this long
+
+    def _wedge_snapshot(self, rows):
+        """State fingerprint for freeze detection: the visible text plus
+        both combatants' vitals. Animations hold the text layer still for
+        dozens of frames but always move one of these soon after; a real
+        wedge changes none of them."""
+        try:
+            me, enemy = self.me(), self.enemy()
+            vitals = (me["species"], me["hp"], enemy["species"], enemy["hp"])
+        except Exception:
+            vitals = None
+        return (tuple(rows), battle_menu_up(rows), vitals)
+
+    def _log_wedge_diag(self, rows):
+        log.warning("[battle diagnostic] frozen screen (state unchanged):")
+        for r in rows:
+            if r.strip():
+                log.warning("  | %s", r)
+        try:
+            me, enemy = self.me(), self.enemy()
+            log.warning(
+                "[battle diagnostic] me=%s L%d %d/%d enemy=%s L%d %d/%d",
+                me["name"], me["level"], me["hp"], me["max_hp"],
+                enemy["name"], enemy["level"], enemy["hp"], enemy["max_hp"])
+        except Exception as err:
+            log.warning("[battle diagnostic] vitals unavailable: %s", err)
+
     def play(self, policy=None, max_frames=120000, potion_frac=0.3,
              want_nickname=False, text_handler=None):
         """Fight the whole battle. `policy(rows, me, enemy)` may return one
         of 'attack', ('attack', move_idx), 'flee', ('ball', name),
         ('item', name), ('switch', party_idx); defaults to smart damage +
-        auto-POTION + fleeing hopeless wild fights. Returns
-        'won' | 'fled' | 'caught' | 'wipe' | 'timeout' | 'naming'.
+        auto-POTION + fleeing hopeless wild fights. Returns 'won' | 'fled'
+        | 'caught' | 'wipe' | 'timeout' | 'naming' | 'stuck' | 'wedged'.
+        Policy actions that cannot work this turn (switch to a fainted/
+        EGG/missing slot, item or ball not in the bag, attack slot empty
+        or dry) are substituted with the default policy's pick after one
+        warning; each substitution feeds the wedge guard, so a policy that
+        keeps returning invalid actions degrades to plain attacks within
+        two turns. A screen+vitals fingerprint that stays frozen despite
+        recovery returns 'wedged' instead of looping to the frame cap.
         want_nickname: answer YES to the post-catch prompt and hand off to
         the caller at the keyboard instead of declining it.
         text_handler(rows): optional modal-text hook (e.g. the level-up
@@ -511,12 +598,52 @@ class Battle:
         caught = False
         was_menu = False
         fails = 0     # consecutive misfired actions (wedge guard)
+        warned_invalid = set()   # invalid policy actions already logged
+        wedge_snap = None        # freeze-detection fingerprint
+        wedge_reps = 0           # consecutive identical fingerprints
+        wedge_recovered = False  # re-sync already attempted on this freeze
+        diag_prints = 0          # frozen-screen diagnostics printed (cap 2)
         while self.active():
             if self.emu.frame - f0 > max_frames:
                 return "timeout"
             if "was caught" in "".join(self.emu.screen_text()):
                 caught = True
             rows = self.emu.screen_text()
+            snap = self._wedge_snapshot(rows)
+            if snap == wedge_snap:
+                wedge_reps += 1
+            else:
+                wedge_snap, wedge_reps, wedge_recovered = snap, 0, False
+            if wedge_reps >= self.WEDGE_REPS:
+                # Same text AND same vitals over several passes: either a
+                # long animation or a genuine freeze. Confirm before
+                # escalating -- an animation moves within the window.
+                if self.menu.wait_for(
+                        lambda r: self._wedge_snapshot(r) != wedge_snap,
+                        timeout_frames=self.WEDGE_CONFIRM_FRAMES):
+                    wedge_snap, wedge_reps = None, 0
+                    continue
+                if not wedge_recovered:
+                    # diagnostic capped at two prints total: the first
+                    # freeze dumps state, everything after is one line
+                    # (the live wedge printed 200+ identical dumps)
+                    if diag_prints == 0:
+                        self._log_wedge_diag(rows)
+                        diag_prints = 1
+                    elif diag_prints == 1:
+                        log.warning("[battle diagnostic] suppressing "
+                                    "further identical diagnostics")
+                        diag_prints = 2
+                    wedge_recovered = True
+                    self.menu.press("B:4 .:12")   # existing re-sync, once
+                    was_menu = False
+                    continue
+                # recovery didn't move the fingerprint: structured bail
+                if diag_prints == 1:
+                    log.warning("[battle diagnostic] suppressing further "
+                                "identical diagnostics")
+                    diag_prints = 2
+                return "wedged"
             if not battle_menu_up(rows):
                 was_menu = False
                 if naming_keyboard_up(rows):
@@ -552,6 +679,20 @@ class Battle:
                 continue
             me, enemy = self.me(), self.enemy()
             act = policy(rows, me, enemy) if policy else None
+            substituted = False
+            if act is not None:
+                why = self._invalid_action_reason(act, me)
+                if why is not None:
+                    # impossible action: burn zero turns on it. One warning
+                    # per distinct mistake, then substitute the default --
+                    # never re-ask the policy mid-turn.
+                    if why not in warned_invalid:
+                        warned_invalid.add(why)
+                        log.warning("[battle] policy action %r impossible "
+                                    "(%s): substituting default", act, why)
+                    fails += 1   # counts against the wedge guard below
+                    substituted = True
+                    act = None
             if act is None:
                 act = self._default_policy(me, enemy, potion_frac)
             if fails >= 2 and act != "flee":
@@ -582,7 +723,10 @@ class Battle:
                 self.menu.press("B:4 .:12")
                 was_menu = False
                 continue
-            fails = 0
+            if not substituted:
+                # a substituted turn keeps its fail count so a policy that
+                # stays invalid degrades to plain attacks within two turns
+                fails = 0
             last_action = kind
             # let the turn resolve back to the main menu (or the battle end)
             self.menu.wait_for(

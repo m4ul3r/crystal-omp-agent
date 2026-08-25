@@ -9,6 +9,12 @@ Scope reviewed: `trek.py`, `watch.py`, `autopilot.py`, `serve.py`,
 `crystalagent/*`, `scripts/*`, `tests/*`, top-level small scripts, hygiene.
 ~11k lines of first-party Python.
 
+P11 folds in three prior field-review docs (`backup/FABLE_FEEDBACK.md`,
+`fable_results.md`, `backup/DEEPSEEK_PROGRESS.md`) plus
+`backup/AUTONOMOUS_IMPROVEMENTS.md` (roadmap status): their findings were
+cross-checked against P0-P10 — live-confirmed duplicates noted, new items
+added, already-fixed items recorded so nobody re-files them.
+
 ---
 
 ## Work Plan (in priority order)
@@ -195,6 +201,107 @@ cached value:
 - menus.py: two border-glyph allowlists invite drift (132 vs 150); DOWN-only
   select_label times out on non-wrapping menus.
 - registry.check + autopilot do 3 full observes per decision where 1 would do.
+
+---
+
+## P11 — Folded field reviews (`backup/FABLE_FEEDBACK.md`, `fable_results.md`, `backup/DEEPSEEK_PROGRESS.md`, `backup/AUTONOMOUS_IMPROVEMENTS.md)
+
+Three prior agent sessions wrote post-mortem/review docs. Cross-checked each
+claim against current code and against this plan's P0-P10. Result: several
+findings are **live-confirmed duplicates** of existing plan items (strong
+evidence they're real), a handful are **new**, and several were **already
+fixed** by the post-run subagent batches recorded in `fable_results.md` and
+the git log.
+
+### 11a. Live-confirmed duplicates (raise confidence, no new work beyond existing items)
+
+| Existing item | Field confirmation |
+|---|---|
+| **P1 mart_buy `bought` NameError** | DEEPSEEK session hit it live ("harness mart_buy CRASHES on the shop-open path (UnboundLocalError 'bought') - buy manually"). Real money/time cost, not theoretical. |
+| **P5 battle.py:324 attack-rejection sniffing** | FABLE_FEEDBACK open gap #1 says the same thing with a better fix sketch: policies should track PP via `me['moves']` until play() verifies a turn actually elapsed (watch `wBattleTurnCounter` or enemy HP/PP deltas) instead of screen text alone. Use their approach for the P5 fix. |
+| **P6 ice modeling** | FABLE_FEEDBACK gap #4 confirms ice is only crossable via savestate BFS today ("a slide is a deterministic function of (grid, entry cell, direction) — cheap to precompute"); git log shows a precompute landed but the nav.py reviewer found BFS still can't route through ice floors. Close the loop end-to-end. |
+
+### 11b. NEW findings (not covered by P0-P10)
+
+- [ ] **fight()'s auto-save writes working state during battles**
+  (FABLE_FEEDBACK gap #6). `emu.save` mid-leg (for watch.py) combined with
+  crash-before-save patterns bakes mid-battle states into forks. Fix: save to
+  a scratch sidecar during legs, promote on leg completion — or suppress
+  auto-save while `wBattleMode != 0`.
+- [ ] **use_battle_item can consume/toss the WRONG item when select_abs
+  desyncs** (FABLE_FEEDBACK gap #2) — once burned ~9 potions in a wedge.
+  Verify the highlighted row text is the intended item before confirming,
+  and re-check bag counts after (same verify-after-act pattern as P1 shop
+  fixes).
+- [ ] **Unverified success claims: talk_to returns 'talked' when it faced an
+  empty tile** (FABLE_FEEDBACK failure pattern #2 — wandering NPCs like
+  Floria). General rule the repo keeps relearning: verify by reading WRAM
+  (event flags set, badge bits, bag delta, HP), never by "the flow
+  completed". Audit talk_to/catch/use_item return contracts for false
+  positives; note whiteout HEALS the party so `hp > 0` proves nothing about
+  winning.
+- [ ] **Assert-before-save rolls back timelines** (FABLE_FEEDBACK failure
+  pattern #1): scripts that assert between an achievement and `d.save()` lose
+  the achievement on crash (lighthouse climb lost twice, pharmacy trip).
+  Convention + lint-worthy rule: save immediately after every VERIFIED
+  transition; asserts go AFTER the save. Related: P4's CLI finding (save runs
+  unconditionally) is the mirror image — both need the same discipline:
+  persist first, validate second, report third.
+- [ ] **Driver.save lacks a state-poison guard** (FABLE_FEEDBACK failure
+  pattern #3): saving while `wBattleMode != 0` or mid-fade repaint poisons
+  the state file (two poisoned saves required milestone rollbacks;
+  close_menus' fade-awareness landed, but the save side has no guard). Add a
+  precondition check in save(): refuse/warn when battle mode or a fade is
+  active.
+- [ ] **use_item unsafe after warps** (FABLE_FEEDBACK gap #5): blind presses
+  WALKED the player onto a ladder mid-flow ("could not open PACK" then stray
+  inputs move the player). Needs the same wait-for-menu verification the
+  battle pack flow got — verify PACK actually opened before any further
+  presses, and abort without movement inputs otherwise.
+- [ ] **Nav grid staleness vs live ROM blocks** (DEEPSEEK, repeated):
+  repo `.blk` data can disagree with the game (Route 34 (9,29) wall-vs-floor,
+  Ilex BFS emitting tree cells as walkable). Precedent exists for overwriting
+  the per-map grid from `wMapBlocksPointer` + tileset collision. Add a
+  fallback path (and/or a validation warning) when static grid and live
+  blocks diverge; at minimum document which maps are known-stale.
+- [ ] **mapgraph surf/water edges + impossible border connections**
+  (FABLE_FEEDBACK gap #7, partially addressed by the region-aware MapgraphFixer):
+  verify the rebuilt mapgraph doesn't price decorative border cells
+  (Goldenrod→R35 "north edge", Route 37→Ecruteak only crosses at x=8) as
+  crossings, and decide whether SURF edges belong in the graph now that
+  enable_surf exists. Route-level knowledge still accrues only in
+  PROGRESS.md.
+- [ ] **Cianwood stuck-NPC workaround undocumented in code** (FABLE_FEEDBACK):
+  zeroing a `wObjectStructs` slot to unstick Lung is precedented-but-hacky;
+  either encode it as a documented `unstick_npc()` helper or leave a comment
+  where NPC-on-choke geometry bites, so the next session doesn't rediscover it.
+- [ ] **Persona gates as machine-checkable assertions** (fable_results
+  reflection): purchases verified by bag deltas, names read back after
+  keyboards, full-HP-before-landmark checks. The bag-delta and name-readback
+  halves overlap P1/P4 fixes; consider exposing them as reusable
+  postcondition helpers rather than per-script ad hoc checks.
+
+### 11c. Already fixed (verified — do NOT re-file)
+
+- Sprout Tower mapgraph wrong → MapgraphFixer region-aware graph
+  (per-map connected components, per-edge from/to regions); travel reaches
+  SPROUT_TOWER_3F end-to-end (fable_results post-run batch, suite green).
+- travel/goto replan-storms on scene textboxes → `_drain_scene` auto-drain;
+  its blank-textbox choice-menu misdetection was itself fixed later
+  (cursor-glyph requirement — see PROGRESS.md LegTwoFixer entry).
+- First-call races in use_item/heal_pokecenter/mart_buy → one
+  settle-drain-retry inside each (TrekFixer).
+- Tower double-door ping-pong → `_held_warp_entry`.
+- Dormant warp_events sealing corridors (Burned Tower B1F) → landed
+  (git: "dormant warp_events walkable").
+- Live collision divergence (changeblock doors/boulders) → `set_cell`/
+  `clear_overrides` patches landed; residual staleness handled in 11b above.
+- Nav side-wall directions inverted → caught and reverted by DEEPSEEK session;
+  matches home/map.asm today.
+- AUTONOMOUS_IMPROVEMENTS.md phases 1-4 (observe/serve, mapgraph+route,
+  autopilot decide-loop, rails) — all built; Phase 5 (skill library +
+  fork-verified promotion) remains unbuilt and is a design direction, not a
+  defect. Park it unless autonomous coverage growth becomes the goal.
 
 ---
 

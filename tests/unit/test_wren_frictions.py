@@ -2,6 +2,7 @@
 menu races in use_item/heal_pokecenter/mart_buy, and the multi-warp door-row
 ping-pong (Sprout Tower 1F) held-entry fallback."""
 from collections import deque
+from pathlib import Path
 
 import pytest
 
@@ -373,6 +374,7 @@ def use_item_world(d, monkeypatch, start_cursor=3, consume_on_use=True):
     pocket cursor starts mid-list, USE consumes (or not)."""
     items = POCKET
     world = {"cur": start_cursor, "qty": 2, "ups": 0}
+    d.emu.u8["wMenuCursorY"] = 1      # party-menu cursor on row 0
     monkeypatch.setattr(trek, "bag_item_index", lambda *a, **k: 0)
     monkeypatch.setattr(trek, "bag_quantity", lambda *a, **k: world["qty"])
     monkeypatch.setattr(trek, "goto_pocket", lambda menu, pocket: True)
@@ -634,3 +636,222 @@ def test_travel_pingpong_falls_back_to_held_entry():
     assert out == steps                   # arrived, no TravelError
     assert taps == ["L"]                  # real _held_warp_entry drove it
     assert world["map"] == "ROUTE_31"
+
+
+# -- save dirty-screen guard (wren pt3: stuck pack baked into wren.state) ----
+
+def save_driver(tmp_path):
+    d = bare_driver()
+    d.state_path = tmp_path / "work.state"
+    d.textbox = lambda: False
+    d.status = lambda: "ok"
+    d.saved = []
+    d.emu.save = lambda p: d.saved.append(Path(p))
+    return d
+
+
+def test_save_refuses_open_menu(tmp_path):
+    """A live menu cursor on screen (stuck pack layer) refuses the save
+    after a bounded B recovery -- baking it in poisons every fork."""
+    d = save_driver(tmp_path)
+    d.emu.rows[8] = " ▶USE".ljust(20)
+    presses = []
+    d.press = lambda seq: presses.append(seq) or d.emu.tick(5)
+    with pytest.raises(RuntimeError, match="menu cursor"):
+        d.save()
+    assert d.saved == []
+    assert sum(1 for p in presses if p.startswith("B")) == 4   # bounded
+
+
+def test_save_succeeds_after_recovery_cleanup(tmp_path):
+    """The bounded B recovery closes the stray layer: save proceeds."""
+    d = save_driver(tmp_path)
+    d.emu.rows[8] = " ▶USE".ljust(20)
+
+    def press(seq):
+        d.emu.tick(5)
+        if seq.startswith("B"):
+            d.emu.rows[8] = " " * 20     # the B closes the stray layer
+
+    d.press = press
+    d.save()
+    assert d.saved == [d.state_path]
+
+
+def test_save_force_bypasses_dirty_screen(tmp_path):
+    d = save_driver(tmp_path)
+    d.emu.rows[8] = " ▶USE".ljust(20)
+    presses = []
+    d.press = lambda seq: presses.append(seq)
+    d.save(force=True)
+    assert d.saved == [d.state_path]
+    assert presses == []                 # no recovery even attempted
+
+
+def test_save_refuses_mid_battle_without_b_mash(tmp_path):
+    d = save_driver(tmp_path)
+    d.emu.u8["wBattleMode"] = 1
+    presses = []
+    d.press = lambda seq: presses.append(seq)
+    with pytest.raises(RuntimeError, match="battle"):
+        d.save()
+    assert presses == []                 # never B-mash inside a battle
+
+
+# -- default battle policy plumbing (Whitney lesson, wren pt3) ----------------
+
+def fight_world(d, monkeypatch):
+    """Wire fight()'s collaborators so a REAL fight() run records the
+    policy handed to Battle.play."""
+    played = []
+
+    class FakeBattle:
+        def __init__(self, emu, names, bdata):
+            self.emu = emu
+
+        def enemy(self):
+            return {"name": "MILTANK"}
+
+        def play(self, policy=None, **kw):
+            played.append(policy)
+            self.emu.u8["wBattleMode"] = 0
+            return "win"
+
+    mon = {"name": "GATOR", "level": 29, "hp": 20, "max_hp": 40,
+           "egg": False}
+    monkeypatch.setattr(trek, "Battle", FakeBattle)
+    monkeypatch.setattr(trek, "game_state", lambda *a, **k: {
+        "player": {"money": 100}, "party": [mon]})
+    d.names = None
+    d.bdata = None
+    d.state_path = None
+    d.default_policy = None
+    d._pending_nickname = None
+    d._whiteout_pending = False
+    d.whiteouts = 0
+    d.whiteout_policy = "abort"
+    d._resolve_learn_flow = lambda *a, **k: None
+    d.flush_dialog = lambda *a, **k: "done"
+    d.press = lambda seq: d.emu.tick(5)
+    return played
+
+
+def test_talk_to_intercept_uses_default_policy(monkeypatch):
+    """A trainer battle triggered by talk_to (gym leaders!) obeys the
+    pre-armed default_policy instead of silently fighting default."""
+    d = bare_driver()
+    played = fight_world(d, monkeypatch)
+
+    def custom(rows, me, enemy):
+        return None
+
+    d.default_policy = custom
+    d._approach_cell = lambda x, y: (x - 1, y)
+    d.goto = lambda *a, **k: True
+    d.step_dir = lambda f: "moved"
+
+    def flush(*a, **k):
+        d.emu.u8["wBattleMode"] = 1      # trainer script starts the fight
+        return "done"
+
+    d.flush_dialog = flush
+    assert d.talk_to(5, 5) == "battle"
+    assert played == [custom]
+
+
+def test_explicit_fight_policy_overrides_default(monkeypatch):
+    d = bare_driver()
+    played = fight_world(d, monkeypatch)
+    d.default_policy = lambda rows, me, enemy: "flee"
+
+    def explicit(rows, me, enemy):
+        return None
+
+    d.emu.u8["wBattleMode"] = 1
+    d.fight(policy=explicit)
+    assert played == [explicit]
+
+
+def test_fight_no_policy_falls_back_to_default(monkeypatch):
+    d = bare_driver()
+    played = fight_world(d, monkeypatch)
+
+    def default(rows, me, enemy):
+        return None
+
+    d.default_policy = default
+    d.emu.u8["wBattleMode"] = 1
+    d.fight()
+    assert played == [default]
+
+
+# -- use_item REVIVE: fainted-target party menu (wren pt3 live repro) ---------
+
+def revive_world(d, monkeypatch, start_row=3):
+    """Bag holds 1 REVIVE at pocket index 0; the party menu opens with a
+    persisted mid-list cursor (wMenuCursorY row `start_row`); slot 1 is
+    fainted. Only an A on the fainted row consumes the item."""
+    world = {"qty": 1, "hp": [24, 0, 30], "cur": 0, "party_open": False,
+             "wrong": []}
+    monkeypatch.setattr(trek, "bag_item_index", lambda *a, **k: 0)
+    monkeypatch.setattr(trek, "bag_quantity", lambda *a, **k: world["qty"])
+    monkeypatch.setattr(trek, "goto_pocket", lambda menu, pocket: True)
+    monkeypatch.setattr(trek, "cancel_pack", lambda menu: None)
+    d.emu.u8["wMenuCursorY"] = start_row + 1   # persisted, NOT row 0
+
+    class M:
+        def select_label(self, label, max_presses=14):
+            if label == "USE":
+                world["party_open"] = True     # target list appears
+            return True
+
+        def wait_for_label(self, label, timeout_frames=300):
+            return True
+
+        def wait_for(self, pred, timeout_frames=600):
+            return True
+
+        def scroll_abs(self):
+            return world["cur"]
+
+        def cursor_row(self):
+            return (2, "REVIVE      ×  1")
+
+    d.menu = M()
+
+    def press(seq):
+        d.emu.tick(5)
+        if seq.startswith("START"):
+            d.emu.rows[5] = "  ▶PACK".ljust(20)   # START menu paints
+        elif seq.startswith("B"):
+            d.emu.rows[5] = " " * 20              # pack closes
+        elif seq.startswith("U"):
+            d.emu.u8["wMenuCursorY"] = max(1, d.emu.u8["wMenuCursorY"] - 1)
+        elif seq.startswith("D"):
+            d.emu.u8["wMenuCursorY"] = min(3, d.emu.u8["wMenuCursorY"] + 1)
+        elif seq.startswith("A") and world["party_open"]:
+            row = d.emu.u8["wMenuCursorY"] - 1
+            if row == 1 and world["hp"][1] == 0 and world["qty"]:
+                world["qty"] -= 1              # revive consumed
+                world["hp"][1] = 15            # target back above zero
+            elif row != 1:
+                world["wrong"].append(row)     # "won't have any effect"
+
+    d.press = press
+    return world
+
+
+def test_use_item_revive_fainted_slot1_mid_list_cursor(monkeypatch):
+    """REVIVE on fainted slot 1 with the party cursor persisted mid-list:
+    WRAM-steered targeting hits the right row (blind D-counts from an
+    assumed top row picked a healthy mon -- live repro: returned False,
+    bag never decremented)."""
+    d = bare_driver()
+    d.names = None
+    d.textbox = lambda: False
+    d.flush_dialog = lambda *a, **k: "done"
+    world = revive_world(d, monkeypatch, start_row=3)
+    assert d.use_item("REVIVE", target_slot=1) is True
+    assert world["qty"] == 0             # bag decremented
+    assert world["hp"][1] > 0            # target revived
+    assert world["wrong"] == []          # never A'd a healthy mon

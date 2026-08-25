@@ -1,5 +1,85 @@
 # PROGRESS — Pokémon Crystal run
 
+
+## session claude-wren pt4 — FOG BADGE (DONE, Aug 24 2026)
+
+**4/8 badges** (milestone claude_saves/wren-fog-badge.state; FERALIGATR L35,
+PIDGEOTTO L19, TOGEPI L5, SUDOWOODO **SNAG** L20 caught in one ball, ¥11831).
+Leg: SquirtBottle quest (full chain: meet Floria AT the tree, talk to her IN
+the shop, THEN teacher gives bottle — EVENT_TALKED_TO_FLORIA_AT_FLOWER_SHOP is
+the hidden middle step), Sudowoodo caught, Routes 35/36/37 (Route 36's south
+col into Route 35 lands in a fenced 5-cell pocket — dead end, go via the park),
+Ecruteak, Burned Tower (SILVER beaten but 3 faints, then fell through the
+floor, beast trio scene done, Eusine talked), GATOR **evolved FERALIGATR
+L30** on Route 35. Morty took 3 whiteouts before the root cause surfaced:
+train()'s learn flow had replaced BITE with SCARY FACE, so the "Bite" policy
+was pressing a no-damage move at slot 1 all three fights; also in-battle
+('item','SUPER POTION') opens the pack and stalls at the item description
+(BattleGuard's new wedge cap caught it — returned 'wedged' with capped
+diagnostics, exactly as designed). Fix was the Dance Theater: 5 Kimono Girls
+beaten → HM03, SURF taught over Water Gun → Morty first-try sweep.
+TrekGuard+BattleGuard batches verified live this leg: save() guard, policy
+validation warnings, wedge cap, default_policy attr all behaving. Full suite
+147 green (coord notified).
+NEW BUGS for next fixer batch: (1) battle.py in-battle item executor stalls
+on the pocket description page (repro: ('item','SUPER POTION') vs Morty);
+(2) use_item('SUPER POTION'/'SUPERPOTION') returns False out of battle —
+two-word item name resolution in _pocket_select; (3) fight()/train()
+move-learn flow can silently replace a policy-critical move (Bite->Scary
+Face) — surface move changes in the train/fight return value or log.
+
+
+## session moss-run owns persona timeline (Moss) to Zephyr + Hive Badge, working state omp_saves/moss-intro.state
+
+Claimed Aug 24 2026 per OMP_BRIEF2.md + persona_moss.md. Player **MOSS**
+(collector kid: catcher-first, 4+ nicknamed partners with plant names,
+talks to every NPC, fair-fight streak). Fresh raw-boot timeline; ALL
+states `omp_saves/moss-*`; never touches `saves/`. Rival to be **FERN**
+(plant-name culture). Roster contract: ≥3 all-nicknamed L8+ party before
+Falkner; ≥4 after Slowpoke Well; 15-ball budget for the Zephyr leg.
+Ledger: `omp_saves/moss-ledger.md` ([S]/[W] harness observations).
+## session claude-wren pt3 — PLAIN BADGE (DONE, Aug 24 2026)
+
+**3/8 badges.** Azalea→Ilex (Farfetch'd herding solved by reading the position
+state machine — wFarfetchdPosition + player-facing checks; stations 8/9 need
+DOWN/LEFT-facing talks), HM01 CUT (GATOR), Route 34, Goldenrod. Togepi EGG
+hatched → **PEBBLE**. REED evolved → **PIDGEOTTO L18**; GATOR CROCONAW L29
+via first-ever `d.train(29)` (works great: rotation + heal rail).
+Whitney took 4 attempts: (1) default policy lost to Attract+Rollout+Milk
+Drink; (2) Mud-Slap opener fed Rollout ramp — bad plan; (3) talk_to
+auto-fought with default policy before custom policy could attach (lesson:
+approach gym leaders manually, fight() with policy from turn 1); (4) L29 +
+Water Gun + Super Potion at <40HP = clean win. Crying scene: must step onto
+the (8,5) coord event (lass intercept) before she yields the badge.
+Also: SILVER rematch at Ilex gate won clean (split-exp policy with
+fainted/egg guards); one earlier whiteout to him from a policy that switched
+into fainted mons — reloaded per gotcha 9.
+LegTwoFixer fixes verified live: heal step-away works every time; cursor-glyph
+guard correctly identified real menus ~10 times. NEW BUGS for coord: d.save()
+while a pack/menu layer is open bakes the stuck menu into the state; fight()'s
+frozen-screen diagnostic spams hundreds of identical lines when a policy
+returns an impossible action (switch to fainted mon) — needs a wedge cap;
+TM49 got taught over MUD-SLAP during a stuck-menu unwind (A presses are never
+safe while any menu layer is live — check glyphs first).
+Milestones: wren-silver2-beaten, wren-goldenrod, wren-pre-whitney4,
+**wren-plain-badge** (CROCONAW L29, PIDGEOTTO L18, TOGEPI L5, ¥6074).
+
+[fix] battle.play now validates policy actions before executing (switch to
+fainted/EGG/out-of-range slot, item/ball not in bag, dry attack slot →
+one warning + default-action substitution feeding the fails guard: pure
+default within 2 turns) and caps the frozen-screen wedge: after 3 identical
+screen+vitals fingerprints it confirms (600f), re-syncs once, prints at most
+2 diagnostics, returns 'wedged'. tests/unit/test_battle_policy_guards.py.
+[fix] TrekGuard (Aug 24): d.save() now refuses to bake a dirty screen into a
+state (battle/script/textbox/menu-cursor check after settle, bounded B
+recovery, force=True bypass); fight(policy=None) falls back to new
+d.default_policy so talk_to/goto/travel intercepts obey a pre-armed policy
+(Whitney lesson — explicit fight(policy=) still wins); use_item targets the
+party menu on live WRAM (wMenuCursorY) with a bag-gated, jingle-tolerant
+confirm — REVIVE on a fainted mid-list slot works. 'wedged' outcome from
+battle.play logs one line, no screen re-dump. tests/unit/test_wren_frictions.py.
+
+
 ## Full-repo code review done — CODE_REVIEW_PLAN.md (Aug 24 2026, session ox-alpha)
 
 Six parallel review agents covered trek.py, battle/nav/menus, serve/autopilot/
