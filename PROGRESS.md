@@ -230,11 +230,15 @@ d. mart qty-box screen parsing is fragile; wrap single-unit cycles +
    bag-delta verification as fallback.
 e. hatch-naming: egg in party => poll keyboard_open during walking
    segments (freeze shipped; detection cadence is the open half).
-**LEG 3 CLAIMED Aug 24 2026: GOLDENROD + PLAIN BADGE (Whitney).**
-Resuming from `moss-hive.state`. Mission order: (1) Name Rater — rename
-TOGEPI "AAAAAAAAAA" → plant name; (2) Whitney with rotation roster
-intact. Route: Ilex Farfetch'd herd → HM01 → R34 → Goldenrod. Ledger
-continues in `omp_saves/moss-ledger.md`.
+**LEG 3 DONE Aug 24 2026: PLAIN BADGE** (`moss-plain.state`, CLI-verified
+badges [ZEPHYR, HIVE, PLAIN]): BAYLEEF **FROND** L29 40/87, PIDGEY
+**BRAMBLE** L17, SENTRET **THISTLE** L10, TOGEPI **BUD** L5 (renamed at
+Goldenrod Name Rater — AAAAAAAAAA fossil corrected), BELLSPROUT **SPROUT**
+L7, VENONAT **SPORE** L5. ₽6684. Ilex herd completed with facing-table
+method (VAR_FACING read live from wPlayerDirection d4de; talk_to corrupts
+facing on the bird — raw A only). Whitney: Reflect opener vs Miltank +
+Razor Leaf; crying-scene coord event (8,5) needed trip_scenes + a second
+talk to yield badge/TM45. Ledger: `omp_saves/moss-ledger.md`.
 
 ## session claude-wren pt3 — PLAIN BADGE (DONE, Aug 24 2026)
 **3/8 badges.** Azalea→Ilex (Farfetch'd herding solved by reading the position

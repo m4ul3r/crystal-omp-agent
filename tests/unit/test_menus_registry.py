@@ -115,6 +115,7 @@ REQUIRED_KWARGS = {
     "press": {"seq": "A:4"},
     "use_cut": {"tree_x": 4, "tree_y": 8},
     "gym_scout": {"map": "VIOLET_GYM"},
+    "name_prompt": {"name": "BUD"},
     "who_fights": {},
     "resolve_choice": {"choice": "YES"},
     "drain_scene": {},

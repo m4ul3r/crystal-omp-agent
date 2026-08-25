@@ -1,6 +1,8 @@
 """Choice-box label parsing + resolve_choice gating (gotcha-13 safe)."""
 import pytest
 
+import trek
+import trek
 from trek import Driver
 
 pytestmark = pytest.mark.unit
@@ -58,31 +60,44 @@ class _Emu:
     def tick(self, frames):
         self.frame += frames
 
+    def read_u8(self, sym):
+        return 0                      # naming sig 0 / options byte 0
 
-def _driver(flaky=False):
-    d = Driver.__new__(Driver)
-    d.press = lambda seq: None       # drains settle between attempts
-    d.emu = _Emu({"open": True})
-    d.menu = _Menu(d.emu.world, flaky=flaky)
-    return d
+    def write(self, name, value):
+        pass
+
+
+class _Driver(trek.Driver):
+    """Real Driver methods; only the touched surface is faked."""
+
+    def __init__(self, flaky=False):
+        self.hooks = None             # legacy drain path in tests
+        self.auto_fight = True
+        self.encounter_events = []
+        self.last_choice_options = []
+        self.press = lambda seq: None
+        self.textbox = lambda: True   # a dialog is up during the prompt
+        self.flush_dialog = lambda max_frames=3000: "menu"  # box already up
+        self.emu = _Emu({"open": True})
+        self.menu = _Menu(self.emu.world, flaky=flaky)
 
 
 def test_resolve_choice_answers_and_verifies_close():
-    d = _driver()
+    d = _Driver()
     out = d.resolve_choice("YES")
     assert out["answered"] is True and out["chose"] == "YES"
     assert d.menu.got == "YES"
 
 
 def test_resolve_choice_retries_when_box_stays_open():
-    d = _driver(flaky=True)
+    d = _Driver(flaky=True)
     out = d.resolve_choice("YES")
     assert out["answered"] is True
     assert d.menu.calls == 2            # one bounded retry happened
 
 
 def test_resolve_choice_refuses_invisible_label():
-    d = _driver()
+    d = _Driver()
     out = d.resolve_choice("QUIT")
     assert out["answered"] is False and out["chose"] is None
     assert d.menu.got is None            # never pressed a blind key
