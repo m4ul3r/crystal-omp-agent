@@ -1804,21 +1804,33 @@ class Driver:
             self.travel(here)
         log.info("  train: nurse heal done")
 
-    def train(self, target_level, max_battles=150):
+    def train(self, target_level, max_battles=150, targets=None):
         """Rotation-train every non-egg party member to >= target_level in
         the nearest grass patch on the current map; returns the min party
         level. Caller must stand on a map WITH grass (ValueError otherwise)
         -- explicit failure beats silently wandering in search of one.
+        `targets`: {nickname-or-species: level} per-mon goals; a mon at or
+        above ITS goal stops counting toward done, so a carry can't mask a
+        starving teammate (moss-run [W]: BRAMBLE sat L2 through 160
+        battles while the carry ate the budget). Mon not named uses
+        target_level. Biggest gap rotates in first.
         Level-up learns are accepted per _battle_text_handler's policy;
         any REPLACED move is logged (LEARN: ...) and appended to
         d.move_changes -- check it before reusing slot-based policies."""
         import random
+        targets = {k.upper(): v for k, v in (targets or {}).items()}
+
+        def _goal(m):
+            return targets.get((m.get("nick") or "").upper(),
+                               targets.get(m["species"].upper(),
+                                           target_level))
+
         grass = self._grass_cells()
         if not grass:
             raise ValueError(f"no grass on {self.map_name()} -- walk/travel "
                              "to a route with grass first")
-        log.info(f"[train] target L{target_level}, cap {max_battles} battles",
-              )
+        log.info(f"[train] target L{target_level}, cap {max_battles} battles"
+                 f"{', per-mon ' + str(targets) if targets else ''}",)
         battles = dry = 0
         changes0 = len(self.move_changes)
         while True:
@@ -1826,8 +1838,7 @@ class Driver:
             party = obs["party"]
             members = [(i, m) for i, m in enumerate(party)
                        if not m.get("egg")]
-            underleveled = any(m["level"] < target_level
-                               for _, m in members)
+            underleveled = any(m["level"] < _goal(m) for _, m in members)
             if not underleveled or battles >= max_battles:
                 break
             lead = party[0]
@@ -1839,8 +1850,9 @@ class Driver:
                 self._train_heal()
                 continue               # relocate grass from wherever we land
             elig = sorted((i for i, m in members
-                           if m["hp"] > 0 and m["level"] < target_level),
-                          key=lambda i: party[i]["level"])
+                           if m["hp"] > 0 and m["level"] < _goal(m)),
+                          key=lambda i: _goal(party[i]) - party[i]["level"],
+                          reverse=True)   # biggest gap rotates in first
             if not elig:
                 # everyone still under target is FAINTED: the rail above
                 # only fires on lead-HP/poison, so revive explicitly
