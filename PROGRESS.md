@@ -1,6 +1,32 @@
 # PROGRESS — Pokémon Crystal run
 
 
+## session claude-wren pt5c — grind campaign, whole team 37+ (Aug 24 2026)
+
+User-directed team leveling. Final: FERALIGATR L52, SUDOWOODO **L38**,
+TOGETIC L37 (**PEBBLE EVOLVED** via happiness mid-grind), PIDGEOT L37
+(**REED EVOLVED** L36). Milestone claude_saves/wren-all-37.state.
+Method (now a HANDBOOK recipe): solo-kill grinding on Route 38 Tauros/
+Miltank (best base-exp nearby), trainee leads + fights its own weight,
+GATOR anchor, chunked 18 fights -> heal rail -> save. Baseline ~23s/cycle;
+**set_text_speed('FAST') cut it to ~15s** — SNAG went 20->37 in 133s.
+PEBBLE (no damage moves) leveled by lead-and-switch banking instead.
+Slowness root causes found while doing it: (1) a DECLINE-mid-battle learn
+flow WEDGED at the forget menu (GATOR/SCREECH; learn_policy returned
+DECLINE but the flow reached 'Which move should be forgotten?' with the
+cursor parked on an HM) — my loop retried fight() ~150x with no circuit
+breaker; both sides fixed session-locally (screen-text learn resolver +
+wedge counter in the loop) but the trek DECLINE path needs a real fix;
+(2) policies matching me['name'] against SPECIES break silently on
+EVOLUTION (TOGEPI->TOGETIC left PEBBLE struggling to death 5 cycles) —
+match rosters by nickname/slot, or provide a stable identity in `me`;
+(3) learn_policy picked wrongly once (SNAG: forgot ROCK SLIDE for FAINT
+ATTACK when MIMIC was the obvious junk — suspect policy exception ->
+auto fallback; needs the warning line surfaced) — SNAG now has no rock
+STAB; (4) benign level-up stat pages still trip the frozen-screen
+diagnostic (spammy); whitelist 'grew to level' screens.
+
+
 ## session claude-wren pt5b — learn_policy + team training (Aug 24 2026)
 
 User-directed: move-learn decisions now belong to the MODEL. LearnPolicyFixer
@@ -115,16 +141,35 @@ states `omp_saves/moss-*`; never touches `saves/`. Rival to be **FERN**
 (plant-name culture). Roster contract: ≥3 all-nicknamed L8+ party before
 Falkner; ≥4 after Slowpoke Well; 15-ball budget for the Zephyr leg.
 Ledger: `omp_saves/moss-ledger.md` ([S]/[W] harness observations).
-**ZEPHYR DONE Aug 24 2026** (`moss-zephyr.state`, CLI-verified): roster
-BAYLEEF **FROND** L16 31/51, PIDGEY **BRAMBLE** L9, SENTRET **THISTLE**
-L9 — contract met (3 nicknamed, GRASS/FLYING/NORMAL, all ≥L8 pre-gym).
-Rival **FERN** named at lab cop scene. Catches: BRAMBLE+THISTLE via
-catch_up on R29 (3 balls); 7 bought, 10/15 budget used.
-Next: ≥4th nicknamed member before Slowpoke Well (persona wants
-BELLSPROUT→SPROUT on R32), then Union Cave → Azalea → Well → Bugsy.
-Ledger: `omp_saves/moss-ledger.md`.
-## session claude-wren pt3 — PLAIN BADGE (DONE, Aug 24 2026)
+**HIVE DONE Aug 24 2026 — OBJECTIVE COMPLETE** (`moss-hive.state`,
+CLI-verified badges [ZEPHYR, HIVE]): BAYLEEF **FROND** L21 64/64,
+PIDGEY **BRAMBLE** L12, SENTRET **THISTLE** L9, TOGEPI (hatched; name
+garbage "AAAAAAAAAA" — rename at Goldenrod Name Rater), BELLSPROUT
+**SPROUT** L7. ₽4939. Well cleared, Kurt finale auto-ran.
+Scyther wall fell to BRAMBLE (Gust STAB 2x vs Bug > Grass's 0.25x).
+Postmortem: `omp_saves/moss-postmortem.md`; ledger with all [S]/[W]:
+`omp_saves/moss-ledger.md`.
+COORD RUN-2 CLOSE-OUT (Aug 24): persona experiment validated end-to-end.
+Same harness, opposite revealed preference vs omp-fresh (optimizer:
+0 catches, solo carry; Moss: 4 catches, rotation, Scyther via
+matchup-driven switch). 12 coordinator commits this cycle; every [W]
+class moss-run surfaced got a same-session fix (naming freeze, stall
+guards, resolve_choice verify/retry, auto_fight scoping, per-mon train
+targets, gym_scout). Remaining gaps tracked below in OPEN BACKLOG.
+OPEN BACKLOG (post-run-2, ranked by moss-postmortem §remaining):
+a. resolve_choice yes/no variant silent-fail — watch regressions of the
+   verify/retry path on aide-style boxes.
+b. _event_flag vs party-truth disagreement post-egg (repro REFUTED on
+   omp-fresh-egg-in-party.state: flag reads True there) — needs a
+   failing state capture before code touch.
+c. slot-faint mystery (THISTLE 27/27 -> 0/27 with no battle event);
+   add all-slot hp asserts to pre-gym checks.
+d. mart qty-box screen parsing is fragile; wrap single-unit cycles +
+   bag-delta verification as fallback.
+e. hatch-naming: egg in party => poll keyboard_open during walking
+   segments (freeze shipped; detection cadence is the open half).
 
+## session claude-wren pt3 — PLAIN BADGE (DONE, Aug 24 2026)
 **3/8 badges.** Azalea→Ilex (Farfetch'd herding solved by reading the position
 state machine — wFarfetchdPosition + player-facing checks; stations 8/9 need
 DOWN/LEFT-facing talks), HM01 CUT (GATOR), Route 34, Goldenrod. Togepi EGG
