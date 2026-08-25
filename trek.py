@@ -1049,11 +1049,24 @@ class Driver:
         blind-mashing -- the gotcha-13 counterpart deciders were
         missing (R29 tutorial, nurse prompts, mom's day-picker).
         Returns {'answered': bool, 'chose': str|None, 'options': [...]}."""
+        # scenes open with STORY PAGES before the box (aide monologue):
+        # page them out glyph-gated first, then classify what's left.
+        fr = self.flush_dialog(max_frames=3000)
+        if fr == "battle":
+            return {"answered": False, "chose": None, "options": [],
+                    "note": "battle started"}
+        f0 = self.emu.frame
+        while self.emu.frame - f0 < 90:
+            rows = self.emu.screen_text()
+            if any(c in r for r in rows for c in CURSORS):
+                break
+            self.emu.tick(6)
         rows = self.emu.screen_text()
         opts = self._choice_labels(rows)
         if choice not in opts or \
                 not any(c in r for r in rows for c in CURSORS):
-            return {"answered": False, "chose": None, "options": opts}
+            return {"answered": False, "chose": None, "options": opts,
+                    "note": "no choice cursor settled on screen"}
         # gotcha-2 variant: the box may still be settling when labels
         # first decode -- confirm-then-verify, one bounded retry
         for _attempt in range(2):
