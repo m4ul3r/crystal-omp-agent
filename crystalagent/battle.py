@@ -81,7 +81,13 @@ class BattleData:
                 "effect": rec[1],
                 "power": rec[2],
                 "type": rec[3],
-                "accuracy": min(rec[4], 100),
+                # Accuracy is stored on a 0-255 scale: `percent` in
+                # macros/data.asm:23 is "* $ff / 100", so IRON TAIL's 75%
+                # is the byte 191. The old min(byte, 100) reported EVERY
+                # move above ~39% as a flat 100% -- which is why IRON TAIL
+                # (really 75) and DYNAMICPUNCH (really 50) looked perfectly
+                # reliable to move-choosing policies.
+                "accuracy": max(1, round(rec[4] * 100 / 255)),
             }
 
     def effectiveness(self, atk_type, def_types):

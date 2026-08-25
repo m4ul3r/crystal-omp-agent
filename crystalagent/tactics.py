@@ -72,6 +72,12 @@ RISKY = {
     "EFFECT_RAMPAGE": "locks in 2-3 turns, then confusion",
     "EFFECT_HYPER_BEAM": "recharge turn",
 }
+# Moves that ignore accuracy AND the target's evasion entirely.
+# EFFECT_ALWAYS_HIT (FAINT ATTACK, SWIFT) skips the accuracy check, which is
+# the only reliable answer to a MINIMIZE / DOUBLE TEAM stack -- live, Koga's
+# Muk and Crobat blanked two "100%" attacks in a row while a 15-18 damage
+# FAINT ATTACK finished each of them on demand.
+NEVER_MISS = ("EFFECT_ALWAYS_HIT",)
 
 
 def parse_effects(repo):
@@ -270,6 +276,12 @@ class Tactics:
         if eff in RISKY:
             view["note"] = (view["note"] + "; " if view["note"] else "") \
                            + RISKY[eff]
+        if eff in NEVER_MISS:
+            view["never_misses"] = True
+            view["note"] = (view["note"] + "; " if view["note"] else "") \
+                           + "never misses (ignores evasion)"
+        else:
+            view["never_misses"] = False
         return self._summarise(view, defender)
 
     @staticmethod
@@ -329,12 +341,22 @@ class Tactics:
 
     @staticmethod
     def _score(v):
+        """Expected damage, with a certain KO worth more than any amount of
+        overkill -- and among certain KOs, the RELIABLE one wins.
+
+        Live lesson (Will's Jynx, Bruno's Onix, Karen's Gengar): when two
+        moves both kill, the bigger number is worth nothing and the miss
+        chance is worth everything -- a whiff on Gengar hands it the turn it
+        needs to DESTINY BOND. `never_misses` beats even 100% listed
+        accuracy, because listed accuracy still loses to MINIMIZE."""
         if v.get("pp") == 0:          # None means "PP unknown", 0 means empty
             return -1
         if v["kind"] in ("immune", "status", "unknown"):
             return 0
-        expect = v["min"] * (v["accuracy"] / 100)
-        return (2_000 if v["ko_certain"] else 0) + expect
+        hit = 1.0 if v.get("never_misses") else v["accuracy"] / 100
+        if v["ko_certain"]:
+            return 2_000 + 100 * hit
+        return v["min"] * hit
 
     def read(self, emu, pp=None):
         """Live analysis of the current battle, or None before the battle
@@ -417,10 +439,16 @@ class Tactics:
         their = analysis["their_best"]
         kos = [m for m in live if m["ko_certain"]]
         if kos:
-            pick = max(kos, key=lambda m: (m["accuracy"], m["min"]))
+            # Reliability first: an unmissable kill beats a listed-100% kill
+            # (evasion still applies to the latter), which beats a bigger
+            # but chancier one.
+            pick = max(kos, key=lambda m: (bool(m.get("never_misses")),
+                                           m["accuracy"], m["min"]))
+            hits = ("unmissable" if pick.get("never_misses")
+                    else f"{pick['accuracy']}% acc")
             return ("attack", pick["slot"]), (
                 f"{pick['move']} KOs now ({pick['min']}-{pick['max']} vs "
-                f"{analysis['enemy']['hp']} HP, x{pick['mult']:g})")
+                f"{analysis['enemy']['hp']} HP, x{pick['mult']:g}, {hits})")
         lethal = bool(their and their["min"] >= me["hp"])
         hurt = me["hp"] <= heal_at * me["max_hp"]
         # The frame's bag is keyed by normalised names ('FULLRESTORE'), so

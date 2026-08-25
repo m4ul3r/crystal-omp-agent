@@ -1,3 +1,89 @@
+## session claude-wren pt10 - E4 REMATCH, every turn decided by the model (Aug 25 2026)
+
+Re-ran the whole Elite Four with **GATOR (L78 Feraligatr) benched** and every
+single action chosen by the model, one turn per tool call, via
+`d.decide_all = True` -> `trek.DecisionRequired` -> a one-shot action queue.
+No autonomous policy ran. Milestone `claude_saves/wren-rematch-clear.state`.
+
+| leader | turns | notes |
+|---|---|---|
+| WILL | 6 | BROOK solo, untouched 211/211, zero switches |
+| KOGA | 15 | Muk/Crobat MINIMIZE + TOXIC; two switches to SNAG |
+| BRUNO | 5 | BROOK solo at 52/215 poisoned, every kill a one-shot |
+| KAREN | 7 | in-battle FULL RESTORE, then BROOK solo |
+| LANCE | 12 | RIPTIDE sacrificed to chip the L50 ace into one-shot range |
+
+45 turns, one faint (RIPTIDE, deliberate). **GATOR ended L78 293/293 -- never
+gained a level, never lost a hit point, never entered a battle**, which is the
+verifiable form of the handicap.
+
+### Architecture: battles cannot be delegated to a subagent
+
+The live emulator lives in the coordinator's Python kernel. Subagents get
+INDEPENDENT kernels, so a battle subagent would have to boot its own Driver
+from a savestate -- impossible mid-battle. Turn-by-turn play must happen in
+the deciding context. Cost is context; the mechanism is
+`d.fight(policy=one_shot_queue, require_decision=True)` raising
+`DecisionRequired` each turn, which resumes cleanly on the next call.
+
+### [fix] EVERY move's accuracy read as 100%
+
+`BattleData` did `"accuracy": min(rec[4], 100)`, but the ROM stores accuracy
+on a 0-255 scale (`DEF percent EQUS "* $ff / 100"`, macros/data.asm:23), so
+IRON TAIL's 75% is the byte 191 -> reported 100. Every move above ~39% looked
+perfectly reliable. Now `round(rec[4] * 100 / 255)`: IRON TAIL 75,
+DYNAMICPUNCH 50, HYPER PUMP 80, BLIZZARD 70, WING ATTACK 100.
+This is why pt8's IRON TAIL kept missing Crobat "inexplicably".
+
+### New: never-miss moves are modelled
+
+FAINT ATTACK / SWIFT are `EFFECT_ALWAYS_HIT` (data/moves/moves.asm:201) --
+they ignore accuracy AND evasion. Koga's Muk and Crobat blanked two listed
+100% WING ATTACKs in a row behind MINIMIZE/DOUBLE TEAM while SNAG's 15-18
+damage FAINT ATTACK finished each on demand. `outlook()` now sets
+`never_misses`, `_score` rewards it, and `recommend()` breaks KO ties by
+reliability (unmissable > listed 100% > bigger-but-chancier).
+
+### Decisions that a "highest damage" picker gets wrong
+
+- **Jynx / Onix / Gengar**: two moves both one-shot -> the bigger number is
+  worth nothing and the miss chance is worth everything. Against Gengar a
+  whiff hands it the turn it needs for DESTINY BOND, so the 75% IRON TAIL is
+  strictly wrong even though it hits harder.
+- **Aerodactyl**: the INVERSE -- IRON TAIL x2 (297-350) was the ONLY
+  one-shot, so the 75% gamble was correct (expected damage taken ~18 vs ~55
+  for a guaranteed second turn of ROCK SLIDE). The principle is not "prefer
+  accuracy", it is "prefer accuracy only when the certain option also kills".
+- **Slowbro**: chose physical WING ATTACK over DRAGONBREATH because AMNESIA
+  was coming; it used it (spdef 81 -> 162, DRAGONBREATH 87-103 -> 45-54)
+  while WING ATTACK stayed 89-105.
+- **Lance's L50 ace**: RIPTIDE's SURF is resisted (0.5x, 20-24) so its best
+  move was DRAGON RAGE's flat 40 -- the fixed-damage move the old
+  power-based picker discarded. Two of them chipped 162 -> 82, RIPTIDE died,
+  BROOK entered FREE on the faint (no switch-in hit) and one-shot it.
+- **Hitmonchan**: ICE PUNCH is x4 on a Dragonite but its Sp.Atk is 45, so it
+  was only 30-36. 4x off a weak attacker < 1x off a strong one; read the
+  damage span, not the multiplier.
+
+### Corrections to my own reasoning, caught by the numbers
+
+- I expected ELECTRIC to be 2x on DRAGON/FLYING. **DRAGON RESISTS ELECTRIC
+  (0.5x)** in Gen 2, so THUNDER was x1. The harness was right, I was wrong.
+- I assumed FLYING was resisted by FLYING; it is neutral.
+- I assumed SURF was 4x on AERODACTYL/CHARIZARD; FLYING is neutral to WATER,
+  so it is 2x.
+
+### Still broken / notes
+
+- Out-of-battle `use_item` is unreliable: REVIVE and one HYPER POTION worked,
+  FULL RESTORE always returned False and later HYPER POTIONs too. The
+  IN-BATTLE item action works perfectly (`('item','FULL RESTORE')` cured
+  poison and healed 49 -> 202). Heal inside battle until this is fixed.
+- A stray A press near the League clerk bought an ULTRA BALL (money 1219 ->
+  19). Gotcha 13 applies to `goto` too, not just flush_dialog.
+- Field poison ticks between rooms; BROOK walked into Bruno at 71/215.
+
+
 ## session claude-wren pt9 - CHAMPION (Aug 25 2026)
 
 **Beat the Elite Four and Lance.** `BEAT_CHAMPION_LANCE=True`, Hall of Fame

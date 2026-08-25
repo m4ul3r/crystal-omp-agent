@@ -29,10 +29,12 @@ MOVES = {
     6: ("EFFECT_NORMAL_HIT", 95, "WATER", 100),     # SURF
     7: ("EFFECT_SELFDESTRUCT", 200, "NORMAL", 100),  # EXPLOSION
     8: ("EFFECT_NORMAL_HIT", 95, "ICE", 100),        # ICE BEAM
+    9: ("EFFECT_ALWAYS_HIT", 60, "DARK", 100),       # FAINT ATTACK
+    10: ("EFFECT_NORMAL_HIT", 60, "FLYING", 100),    # WING ATTACK
 }
 NAMES = {1: "IRON TAIL", 2: "DRAGONBREATH", 3: "DRAGON RAGE",
          4: "THUNDER WAVE", 5: "SEISMIC TOSS", 6: "SURF", 7: "EXPLOSION",
-         8: "ICE BEAM"}
+         8: "ICE BEAM", 9: "FAINT ATTACK", 10: "WING ATTACK"}
 
 
 def _bdata():
@@ -136,6 +138,55 @@ def test_stab_is_one_and_a_half_and_type_multiplier_stacks():
     doubled = damage_span(50, 100, 100, 100, stab=False, mult=2.0)
     assert stab[1] == plain[1] + plain[1] // 2
     assert doubled[1] == plain[1] * 2
+
+
+# -- accuracy is a 0-255 byte, not a percentage -------------------------
+
+def test_rom_accuracy_is_decoded_off_the_255_scale():
+    """`percent` is "* $ff / 100" (macros/data.asm:23), so IRON TAIL's 75%
+    is stored as 191. Reading it as min(byte, 100) reported EVERY move above
+    ~39% as a flat 100% -- which is how a 75% IRON TAIL and a 50%
+    DYNAMICPUNCH looked perfectly reliable while whiffing live."""
+    from crystalagent.battle import BattleData
+    from crystalagent.paths import ROM, SYM
+    from crystalagent.symfile import Symbols
+    bdata = BattleData(REPO_ROOT, Symbols(SYM), ROM)
+    acc = {}
+    for mid, rec in bdata.moves.items():
+        acc[mid] = rec["accuracy"]
+    # every accuracy must be a sane percentage
+    assert all(1 <= v <= 100 for v in acc.values())
+    # and they must not all be pinned at 100
+    assert len({v for v in acc.values()}) > 3
+
+
+def test_never_miss_moves_are_flagged_and_preferred():
+    """FAINT ATTACK is EFFECT_ALWAYS_HIT (data/moves/moves.asm:201): it
+    ignores accuracy AND evasion, the only answer to a MINIMIZE stack."""
+    t = _tactics()
+    me = _mon(moves=(9, 1))                 # FAINT ATTACK + IRON TAIL
+    foe = _mon(types=("NORMAL", "NORMAL"), hp=20, defense=60)
+    faint = t.outlook(9, me, foe)
+    iron = t.outlook(1, me, foe)
+    assert faint["never_misses"] is True
+    assert "never misses" in faint["note"]
+    assert iron["never_misses"] is False
+    # both kill; the unmissable one is chosen even though IRON TAIL is bigger
+    assert faint["ko_certain"] and iron["ko_certain"]
+    action, why = t.recommend(t_analysis(t, me, foe))
+    assert action == ("attack", 0), why
+    assert "unmissable" in why
+
+
+def test_a_listed_100_percent_kill_beats_a_75_percent_kill():
+    """Will's Jynx: WING ATTACK and IRON TAIL both one-shot, so the bigger
+    number is worth nothing and the 25% miss is worth everything."""
+    t = _tactics()
+    me = _mon(moves=(1, 10))                # IRON TAIL(75) + WING ATTACK(100)
+    foe = _mon(types=("NORMAL", "NORMAL"), hp=30, defense=60)
+    action, why = t.recommend(t_analysis(t, me, foe))
+    assert action == ("attack", 1), why     # the WING ATTACK slot
+    assert "100% acc" in why
 
 
 def test_spread_is_85_to_100_percent():
