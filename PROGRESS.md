@@ -1,6 +1,34 @@
 # PROGRESS — Pokémon Crystal run
 
 
+## session claude-wren pt5 — STORM BADGE (DONE, Aug 24 2026)
+
+**5/8 badges** (milestone claude_saves/wren-storm-badge.state; FERALIGATR L41
+144/144, PIDGEOTTO L19, TOGEPI L5, SUDOWOODO L20, ¥25382, TM01 DynamicPunch).
+Leg: Routes 38/39 → Olivine (SILVER gym-front scene), lighthouse climbed to 6F
+— the hole/ladder chain is: 4F row-3 tunnel UNDER Lass Connie(11,2) is FAKE
+(blocked live); real route = 4F row 2 → fall (9,3) → 3F center → (9,5) ladder
+→ 4F pocket → (9,7) → 5F center → (9,15) → 6F. Jasmine met; surfed Routes
+40/41 (enable_surf + goto works on water); Cianwood: SECRETPOTION bought,
+HM04 round-trip to Olivine café (STRENGTH taught — landed on GATOR over
+SLASH, acceptable). Cianwood Gym boulder puzzle solution (get it right first
+time, future sessions): push LEFT boulder (3,7) up once, RIGHT boulder (5,7)
+up once, then stand (5,7) and push MIDDLE boulder LEFT into the freed (3,7);
+corridor col 4 opens; row 4 west → row 3 west → row 2 → Chuck at (4,1).
+Pushing the middle boulder UP plugs row 5/4 fatally (needs map re-entry
+reset). Chuck first-try sweep with Surf/Strength split policy.
+Harness: BattleItemFixer (in-battle item executor rewrite, norm_item public,
+wedge-fingerprint reset) + TrekLearnFixer (pocket row matcher + LEARN
+transparency: Driver.move_changes + 'LEARN: X forgot A -> learned B' lines;
+learn flow documented — sacrifices FORGET_PRIORITY else slot 1) both landed;
+full suite 176 green. BattleGuard validation observed working live (Surf PP
+exhaustion mid-sea degraded gracefully, zero wedges).
+Agent-behavior notes: goto still silently no-ops on unreachable targets
+(returns without moving or raising — candidate fix); lighthouse mapgraph
+warp expectations wrong (travel unusable there); party-switch second cursor
+unreadable via screen glyphs (reorder flow needs WRAM like _party_target).
+
+
 ## session claude-wren pt4 — FOG BADGE (DONE, Aug 24 2026)
 
 **4/8 badges** (milestone claude_saves/wren-fog-badge.state; FERALIGATR L35,
@@ -27,6 +55,24 @@ on the pocket description page (repro: ('item','SUPER POTION') vs Morty);
 two-word item name resolution in _pocket_select; (3) fight()/train()
 move-learn flow can silently replace a policy-critical move (Bite->Scary
 Face) — surface move changes in the train/fight return value or log.
+[fix] BattleItemFixer (Aug 24): bug (1) — battle.py's item executor now
+steers the pocket/party cursors on live WRAM (battle-side _pocket_select /
+_party_target), state-verifies every description/USE/"Use on which PM?" page
+press, succeeds ONLY on a bag decrement, and on any stall Bs out to the
+battle menu + reports failure; play() resets the wedge fingerprint on failed
+actions so substitution (attack by turn 3) wins instead of 'wedged'. Bug (2)
+shared normalizer: `from crystalagent.battle import norm_item` (spaces/
+hyphens/case/é; _norm_item alias kept). tests/unit/test_battle_item_flow.py.
+[fix] TrekLearnFixer (Aug 24): bug (2) — _pocket_select's row verify now
+matches via _item_row_matches (both sides _norm_item'd: case/space/hyphen/
+POKe blind, quantity-digit + edge-clip tolerant) and rescans for the ACTIVE
+▶ row when a stale glyph shadows cursor_row; mismatches log want vs row.
+Bug (3) — fight()/_resolve_learn_flow diff party moves around every learn
+flow: each replaced slot logs "LEARN: GATOR forgot BITE -> learned SCARY
+FACE (slot 1)" and appends {'mon','forgot','learned','slot'} to
+d.move_changes (train warns when a run swapped slots); the accept/replace
+policy (first FORGET_PRIORITY hit, else the move under the cursor = slot 1)
+is now documented in _battle_text_handler. tests/unit/test_wren_pt4_trek.py.
 
 
 ## session moss-run owns persona timeline (Moss) to Zephyr + Hive Badge, working state omp_saves/moss-intro.state

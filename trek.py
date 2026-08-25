@@ -511,6 +511,26 @@ def _load_move_base_pps(rom_path, sym):
 
 _NUM_TMS, _NUM_HMS = 50, 7   # item_constants.asm DEF NUM_TMS / NUM_HMS
 
+def _item_row_matches(row_text, want_norm):
+    """True when a scraped pack-menu row names the wanted item (wren pt4:
+    use_item('SUPER POTION') False). Both sides go through _norm_item, so
+    the compare is blind to case, spaces, hyphens, and the POKe glyph.
+    The row may carry trailing junk (quantity digits, scroll-arrow tiles
+    at the box edge) -- covered by the prefix test -- and may lose
+    trailing tiles at the screen edge, so a near-complete row that is
+    itself a prefix of the wanted name (>= max(4, len-2) chars) also
+    matches. A different item can never pass: the row is anchored at the
+    cursor arrow, and prefix containment between distinct item names
+    ('POTION' in 'SUPER POTION') fails in both directions."""
+    row = _norm_item(row_text)
+    if not row or not want_norm:
+        return False
+    if row.startswith(want_norm):
+        return True
+    return len(row) >= max(4, len(want_norm) - 2) and \
+        want_norm.startswith(row)
+
+
 
 class Driver:
     def __init__(self, state_path=None):
@@ -527,6 +547,7 @@ class Driver:
         self.menu = Menus(self.emu)
         self.bdata = BattleData(paths.REPO_ROOT, sym, paths.ROM)
         self._pending_nickname = None
+        self.last_choice_options = []   # labels of the last refused box
         self._whiteout_pending = False   # set by fight() on a detected wipe
         self.whiteouts = 0
         self.whiteout_policy = "abort"   # 'abort' | 'continue' (old behavior)
@@ -538,6 +559,13 @@ class Driver:
         # custom one could attach -- set d.default_policy BEFORE the
         # approach. Explicit fight(policy=...) args always win.
         self.default_policy = None
+        # Level-up learn transparency (wren pt4: the learn flow replaced
+        # BITE with SCARY FACE and a slot-1 policy whiffed through three
+        # whiteouts): every resolved learn flow that REPLACES a move
+        # appends {'mon','forgot','learned','slot'} here and logs a
+        # LEARN line. Inspect after train()/fight() before trusting
+        # slot-based policies. Never cleared automatically.
+        self.move_changes = []
         self.hooks = hookevents.install(self.emu)
 
     # -- observations ------------------------------------------------------
@@ -964,6 +992,41 @@ class Driver:
         s = self.emu.screen_text()
         return any("DEL" in r for r in s) and any("END" in r for r in s)
 
+
+    @staticmethod
+    def _choice_labels(rows):
+        """Options of an open choice box: cursor-row text plus neighbor
+        rows inside the same frame ('│▶YES│'/'│ NO │' -> ['YES','NO']).
+        Empty when no cursor glyph is on screen."""
+        idx = next((i for i, r in enumerate(rows)
+                    if any(c in r for c in CURSORS)), None)
+        if idx is None:
+            return []
+        labels = []
+        for j in range(max(0, idx - 3), min(len(rows), idx + 4)):
+            t = rows[j]
+            for c in CURSORS:
+                t = t.replace(c, "")
+            t = t.strip().strip("│┃").strip()
+            if t and "─" not in t and "┌" not in t and "└" not in t:
+                labels.append(t)
+        return labels
+
+    def resolve_choice(self, choice="YES"):
+        """Deliberately answer an open choice box: verify `choice` is
+        visible on screen, navigate the cursor onto it, confirm. The
+        caller owns semantics; this executes precisely instead of
+        blind-mashing -- the gotcha-13 counterpart deciders were
+        missing (R29 tutorial, nurse prompts, mom's day-picker).
+        Returns {'answered': bool, 'chose': str|None, 'options': [...]}."""
+        rows = self.emu.screen_text()
+        opts = self._choice_labels(rows)
+        if choice not in opts or \
+                not any(c in r for r in rows for c in CURSORS):
+            return {"answered": False, "chose": None, "options": opts}
+        ok = bool(self.menu.select_label(choice, max_presses=6))
+        return {"answered": ok,
+                "chose": choice if ok else None, "options": opts}
     def _naming_sig(self):
         """WRAM signature of naming-screen state; NamingScreen writes
         these BEFORE rendering (engine/menus/naming_screen.asm), so a
@@ -1097,6 +1160,8 @@ class Driver:
                         self.press("A:2 .:8")
                         quiet = 0
                         continue
+                    self.last_choice_options = \
+                        self._choice_labels(self.emu.screen_text())
                     return "menu"   # cursor outside box: deliberate
                 return "done"
         return "timeout"
@@ -1126,6 +1191,7 @@ class Driver:
             elif self.textbox():
                 # cursor glyph outside the box: a choice/menu opened --
                 # report instead of blind-picking it (AGENTS.md gotcha 13)
+                self.last_choice_options = self._choice_labels(rows)
                 return "menu"
             else:
                 self.press(".:8")
@@ -1164,6 +1230,8 @@ class Driver:
                     # needs a short bounded wait, then A is safe.
                     for i in range(7):
                         if any(c in r for r in rows for c in CURSORS):
+                            self.last_choice_options = \
+                                self._choice_labels(rows)
                             return "menu"   # true choice: never blind-pick
                         if dialog_press_safe(rows) or i == 6:
                             break
@@ -1211,6 +1279,7 @@ class Driver:
         if not self.battle():
             return self.lead()
         self._resolve_learn_flow()   # repair a wedged mid-learn state
+        moves0 = self._party_moves()   # learn-transparency baseline
         f0 = self.emu.frame
         money0 = game_state(self.emu, self.names)["player"]["money"]
         b = Battle(self.emu, self.names, self.bdata)
@@ -1227,6 +1296,9 @@ class Driver:
             outcome = b.play(policy=policy, max_frames=max_frames,
                              text_handler=self._battle_text_handler)
         self._pending_nickname = None
+        # surface mid-battle level-up swaps (b.play resolved them through
+        # _battle_text_handler); the sweep below diffs its own window
+        self._diff_learned_moves(moves0)
         self._resolve_learn_flow(4000)   # sweep post-battle leftovers
         self.flush_dialog(3000)
         # Wipe signature: play() reports 'wipe' when the party is down at
@@ -1324,12 +1396,24 @@ class Driver:
 
     def _battle_text_handler(self, rows):
         """Modal-text hook for Battle.play: drive the level-up move-learning
-        flow. With self.learn_moves (default) the new move is LEARNED by
-        forgetting the first FORGET_PRIORITY match on the move list;
-        with learn_moves=False it declines deterministically ("Stop
-        learning <MOVE>?" -> YES; B there means "don't stop" and loops).
-        Blind A-mashing derails into party menus and wedges the battle.
-        Returns True when this frame's input was consumed."""
+        flow. Returns True when this frame's input was consumed.
+
+        ACCEPT/REPLACE policy (wren pt4, documented from the code -- this
+        is what actually gets sacrificed):
+        * learn_moves=True (default): answer YES to "make room?". On the
+          "Which move should be forgotten?" menu, walk the cursor DOWN
+          (wrapping) to the FIRST FORGET_PRIORITY move on the list and
+          confirm it. When NONE of the mon's moves are in FORGET_PRIORITY,
+          the move already under the cursor is confirmed -- the menu opens
+          on SLOT 1, so the mon's OLDEST move is what silently disappears
+          (how GATOR's BITE became SCARY FACE while a 'press slot 1'
+          policy whiffed three Morty fights). HM moves are never
+          confirmed: the game refuses, and the cursor is moved off them.
+        * learn_moves=False: decline deterministically ("Stop learning
+          <MOVE>?" -> YES; B there means "don't stop" and loops).
+        Completed swaps are surfaced by _diff_learned_moves (LEARN log
+        line + d.move_changes entry) from _resolve_learn_flow / fight().
+        Blind A-mashing derails into party menus and wedges the battle."""
         if not self._learn_prompt_up(rows):
             return False
         joined = "".join(rows).upper()
@@ -1365,16 +1449,67 @@ class Driver:
         return True
 
     def _resolve_learn_flow(self, max_frames=8000):
-        """Drive any on-screen move-learning flow to completion (declining
-        the swap). Used to repair wedged states and sweep post-battle
-        leftovers; safe to call when no flow is present."""
+        """Drive any on-screen move-learning flow to completion. Used to
+        repair wedged states and sweep post-battle leftovers; safe to call
+        when no flow is present. WHICH move gets sacrificed is decided by
+        _battle_text_handler (see its docstring); any completed swap is
+        logged and recorded on d.move_changes via _diff_learned_moves."""
         f0 = self.emu.frame
+        before = None
+        done = True
         while self.emu.frame - f0 < max_frames:
             rows = self.emu.screen_text()
             if not self._learn_prompt_up(rows):
-                return True
+                break
+            if before is None:       # snapshot only once a flow is real
+                before = self._party_moves()
             self._battle_text_handler(rows)
-        return False
+        else:
+            done = False
+        if before is not None:
+            self._diff_learned_moves(before)
+        return done
+
+    def _party_moves(self):
+        """[(mon label, [move names])] snapshot for learn-flow diffing.
+        The label prefers the nickname so LEARN lines match how the party
+        is addressed in play (GATOR, REED, ...)."""
+        try:
+            return [((m.get("nickname") or "").strip() or m.get("name", "?"),
+                     [mv["name"] for mv in m.get("moves", [])])
+                    for m in game_state(self.emu, self.names)["party"]]
+        except Exception:
+            return []                 # mid-transition WRAM: skip the diff
+
+    def _diff_learned_moves(self, before):
+        """Diff a _party_moves() snapshot against the party NOW: one clear
+        LEARN log line per replaced move slot plus an entry on
+        d.move_changes ({'mon','forgot','learned','slot'}, slot 1-based)
+        so policies that press fixed move slots can notice their mapping
+        broke (Morty lesson: BITE -> SCARY FACE at slot 1 cost three
+        whiteouts). Moves landing in previously EMPTY slots shift no
+        existing slot and are not recorded; a mon whose label changed
+        (evolution without a nickname, party reorder) is skipped rather
+        than misattributed."""
+        if not before:
+            return []
+        after = self._party_moves()
+        if not hasattr(self, "move_changes"):
+            self.move_changes = []     # bare/duck-typed drivers
+        changes = []
+        for (b_label, b_mv), (a_label, a_mv) in zip(before, after):
+            if b_label != a_label:
+                continue
+            for i, old in enumerate(b_mv):
+                new = a_mv[i] if i < len(a_mv) else None
+                if old and new and old != new:
+                    changes.append({"mon": a_label, "forgot": old,
+                                    "learned": new, "slot": i + 1})
+        for c in changes:
+            log.warning(f"LEARN: {c['mon']} forgot {c['forgot']} -> "
+                        f"learned {c['learned']} (slot {c['slot']})")
+        self.move_changes.extend(changes)
+        return changes
 
 
     def _resolve_nickname(self, nickname, species):
@@ -1539,7 +1674,10 @@ class Driver:
         """Rotation-train every non-egg party member to >= target_level in
         the nearest grass patch on the current map; returns the min party
         level. Caller must stand on a map WITH grass (ValueError otherwise)
-        -- explicit failure beats silently wandering in search of one."""
+        -- explicit failure beats silently wandering in search of one.
+        Level-up learns are accepted per _battle_text_handler's policy;
+        any REPLACED move is logged (LEARN: ...) and appended to
+        d.move_changes -- check it before reusing slot-based policies."""
         import random
         grass = self._grass_cells()
         if not grass:
@@ -1548,6 +1686,7 @@ class Driver:
         log.info(f"[train] target L{target_level}, cap {max_battles} battles",
               )
         battles = dry = 0
+        changes0 = len(self.move_changes)
         while True:
             obs = self.observe()
             party = obs["party"]
@@ -1658,6 +1797,12 @@ class Driver:
         log.info(f"[train] done after {battles} battles: party min L{lo}"
               f"{' (target reached)' if lo >= target_level else ''}",
               )
+        swapped = self.move_changes[changes0:]
+        if swapped:
+            log.warning(f"[train] {len(swapped)} move slot(s) changed by "
+                        "level-up learns this run (LEARN lines above; "
+                        "d.move_changes has details) -- re-check any "
+                        "policy that presses fixed move slots")
         self.save()
         return lo
 
@@ -2001,7 +2146,11 @@ class Driver:
         climb back up (leg-2 'no potion visible' with 2 in the bag).
         Navigate on the live WRAM index (wMenuScrollPosition +
         wMenuCursorY) in BOTH directions, then verify the highlighted
-        row's TEXT really is the item before pressing A."""
+        row's TEXT really is the item before pressing A. The verify
+        normalizes BOTH sides (_item_row_matches: case/space/hyphen/POKe
+        blind, quantity-digit and edge-clip tolerant) and prefers the
+        ACTIVE list cursor row over a stale submenu leftover (wren pt4:
+        two-word 'SUPER POTION' never confirmed)."""
         want = _norm_item(item_name)
         last, stuck = None, 0
         for _ in range(max_steps):
@@ -2016,11 +2165,23 @@ class Driver:
         else:
             return False
         self.press(".:10")      # let the row repaint before scraping
-        got = self.menu.cursor_row()
-        if not got or not _norm_item(got[1]).startswith(want):
-            return False        # WRAM/screen disagree: never blind-A
-        self.press("A:6 .:18")
-        return True
+        scrape = self.menu.cursor_row()
+        got = scrape[1] if scrape else None
+        if got is not None and _item_row_matches(got, want):
+            self.press("A:6 .:18")
+            return True
+        # cursor_row returns the FIRST glyph row on screen; a stale ▷/▶
+        # leftover higher up (submenu remnants, START-menu row) shadows
+        # the live selection -- rescan for an ACTIVE ▶ row naming the
+        # item before giving up
+        for row in self.emu.screen_text():
+            x = row.find("▶")
+            if x >= 0 and _item_row_matches(row[x + 1:], want):
+                self.press("A:6 .:18")
+                return True
+        log.info(f"  pocket row mismatch: want {item_name!r} "
+                 f"(norm {want}), cursor row {got!r}")
+        return False        # WRAM/screen disagree: never blind-A
 
     def _party_target(self, slot, max_steps=12):
         """Steer the party-menu cursor to row `slot` (0-based; eggs count
@@ -2347,9 +2508,14 @@ class Driver:
                         if dr == "menu":
                             # a choice opened mid-scene: mashing would
                             # pick something (gotcha 13) -- surface it
-                            reason = ("blocked by choice menu during "
-                                      "scene drain -- answer it "
-                                      "deliberately (gotcha 13)")
+                            # WITH its labels so the decider can answer
+                            # deliberately in one call
+                            self.last_choice_options = \
+                                self._choice_labels(self.emu.screen_text())
+                            reason = (f"blocked by choice menu "
+                                      f"{self.last_choice_options} -- "
+                                      f"resolve_choice('YES') if answering "
+                                      f"is safe (gotcha 13)")
                             self.last_goto_reason = reason
                             log.warning(f"  GAVE UP ({reason}) at "
                                   f"{self.map_name()} {self.pos()[2:]}")

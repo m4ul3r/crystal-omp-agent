@@ -165,3 +165,28 @@ Harness work this leg (2 subagents + live verification):
   WRAM-driven revive targeting. Full suite 147 green.
 - Three new bugs found and journaled: in-battle item stall, two-word item
   name resolution, silent move replacement in learn flows.
+
+## Leg 5 — Storm Badge (the lighthouse and the boulders)
+
+**5/8 badges.** FERALIGATR L41 (Cut/Strength/Fury Cutter/Surf), ¥25382,
+SECRETPOTION held for Jasmine, TM01 DynamicPunch. Chuck swept first try,
+GATOR untouched, with a per-enemy policy (Strength vs Poliwrath's water
+resist, Surf vs Primeape).
+
+The leg was two genuine puzzles solved from source + probing:
+1. **Olivine Lighthouse**: six floors of hole/ladder topology. Mapped it by
+   rendering nav's true collision grids and probing; the winning chain was
+   fall-through-(9,3) → 3F center → ladder → 4F pocket → 5F center → 6F.
+2. **Cianwood Gym boulders**: solved analytically after one failed attempt
+   corked the corridor — side boulders up, middle boulder LEFT through the
+   freed slot. The failed attempt was recoverable only because a fork was
+   saved before touching anything (checkpoint discipline pays again).
+
+Harness this leg: BattleItemFixer + TrekLearnFixer landed (29 new tests,
+full suite 176 green). BattleGuard's validation earned its keep live —
+Surf ran out of PP mid-ocean and the policy degraded gracefully where the
+old code would have wedged. Move-learn transparency now logs every
+replacement (the class of bug that cost three Morty whiteouts is dead).
+
+Retro items carried forward: goto's silent no-op on unreachable targets,
+lighthouse mapgraph warp mismatches, party-reorder cursor blindness.

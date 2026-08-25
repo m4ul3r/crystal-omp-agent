@@ -46,6 +46,7 @@ ACTIONS = {
         Action("catch_up", optional=("nickname", "ball", "max_balls",
                                      "max_encounters", "label"),
                need_battle=False),
+        Action("resolve_choice", optional=("choice",)),
         Action("route", required=("dest_map",), optional=("max_cost",),
                need_battle=False),
         Action("travel", required=("dest_map",), optional=("label",),

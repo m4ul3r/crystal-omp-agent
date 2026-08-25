@@ -75,12 +75,18 @@ class BattleData:
         return m
 
 
-def _norm_item(name):
-    """Normalize an item name for lookup: the repo writes the POKé glyph
-    as '#' ("# BALL"), screens show "POKé BALL"; callers say "POKE BALL"."""
+def norm_item(name):
+    """Canonical item-name key: uppercase alphanumerics only, so spacing,
+    hyphens, and case never matter ('SUPER POTION' == 'SUPERPOTION' ==
+    'Super Potion'). The repo writes the POKé glyph as '#' ("# BALL"),
+    screens show "POKé BALL"; callers say "POKE BALL". Shared by the bag
+    lookup AND every screen-row match (import: crystalagent.battle)."""
     return re.sub(r"[^A-Z0-9]", "",
                   name.replace("#", "POKE").replace("é", "e")
-                  .replace("\x80", "e").upper())
+                  .replace("É", "E").replace("\x80", "e").upper())
+
+
+_norm_item = norm_item   # legacy import name (trek.py)
 
 
 def bag_item_index(emu, names, item_name, pocket="items"):
@@ -91,9 +97,9 @@ def bag_item_index(emu, names, item_name, pocket="items"):
     else:
         count_sym, list_sym = "wNumItems", "wItems"
     count = min(emu.read_u8(count_sym), 20)
-    want = _norm_item(item_name)
+    want = norm_item(item_name)
     got = next((i for i, n in names.items.items()
-                if _norm_item(n) == want), None)
+                if norm_item(n) == want), None)
     if got is None or count == 0:
         return None
     bank, addr = emu.sym[list_sym]
@@ -339,82 +345,151 @@ class Battle:
         idx = self.bag_item_index(ball, pocket="balls")
         if idx is None or not self._battle_option(3):
             return False
-        # NB: _cancel_pack returns True when the back-out SUCCEEDS -- that is
-        # not action success, so never `return self._cancel_pack()` here (a
-        # cancelled action reported as done loops the turn forever).
+        # NB: _bail_pack always returns False -- a successful back-out is
+        # not action success (a cancelled action reported as done loops
+        # the turn forever).
         if not self._goto_pocket("balls"):
-            self._cancel_pack()
-            return False
-        if not self.menu.select_abs(idx) or \
-                not self._verify_pack_cursor(ball):
-            self._cancel_pack()
-            return False
+            return self._bail_pack()
+        if not self._pocket_select(idx, ball):
+            return self._bail_pack()
         if not self.menu.wait_for_label("USE") or \
                 not self.menu.select_label("USE", max_presses=4):
-            self._cancel_pack()
-            return False
+            return self._bail_pack()
         return True
 
+    ITEM_CONFIRM_FRAMES = 1800  # description + target pick + use text
+    ITEM_STALL_REPS = 8         # identical screens before declaring a stall
+
     def use_battle_item(self, item_name, target_slot=0):
-        """Main-menu PACK -> items pocket -> item -> USE -> pick target."""
+        """Main-menu PACK -> items pocket -> item -> confirm through the
+        description / "Use on which PM?" pages -> bag-count decrement.
+
+        The live Morty stall: select_abs's blind trailing A got swallowed
+        and the flow parked on the item description until the wedge cap
+        fired. Every step now runs on live WRAM cursor reads
+        (_pocket_select / _party_target), every page advance is
+        state-verified, success is ONLY a bag read-back, and any page that
+        stops responding backs out to the battle menu and reports the
+        action failed so play()'s substitution guard takes the next turn."""
         idx = self.bag_item_index(item_name, pocket="items")
         if idx is None or not self._battle_option(3):
             return False
         if not self._goto_pocket("items"):
-            self._cancel_pack()
-            return False
-        if not self.menu.select_abs(idx) or \
-                not self._verify_pack_cursor(item_name):
-            self._cancel_pack()
-            return False
-        if not self.menu.wait_for_label("USE") or \
-                not self.menu.select_label("USE", max_presses=4):
-            self._cancel_pack()
-            return False
-        # The confirming A can land during popup setup and get swallowed
-        # (gotcha 2): then the popup sits on USE forever, the CANCEL wait
-        # below times out, and no target is ever picked. Verify the popup
-        # actually left; re-press USE while it is still showing.
-        for _ in range(3):
-            if self.menu.wait_for(
-                    lambda r: any("CANCEL" in x for x in r)
-                    or not any("USE" in x for x in r),
-                    timeout_frames=300):
-                break
-            self.menu.press("A:6 .:20")
-        # consumption lands once the battle text resolves; a quantity
-        # that never drops means the USE misfired (wrong item, no effect)
+            return self._bail_pack()
         before = bag_quantity(self.emu, self.names, item_name)
-        if self.menu.wait_for(
-                lambda r: any("CANCEL" in x for x in r), timeout_frames=400):
-            self.menu.select_abs(target_slot)
-            self.menu.press("A:6 .:25")
-        # 500 frames missed real consumptions (FULL HEAL cured paralysis but
-        # the quantity decrement landed after the window -> reported False)
+        if before is None:
+            # consumption is the only success signal; an unverifiable use
+            # is a wedge risk (once burned ~9 potions blind) -- refuse
+            return self._bail_pack()
+        if not self._pocket_select(idx, item_name):
+            return self._bail_pack()
+        if self._confirm_item_pages(item_name, target_slot, before):
+            return True
+        return self._bail_pack()
+
+    def _pocket_select(self, idx, item_name, max_steps=40):
+        """Steer the pack-pocket cursor to absolute index `idx` on the
+        live WRAM position (wMenuScrollPosition + wMenuCursorY), in BOTH
+        directions -- the pocket REMEMBERS its cursor between opens, so a
+        DOWN-only walk from an assumed top row can never climb back up --
+        then verify the highlighted row's TEXT really is the item before
+        pressing A (select_abs desyncs once burned ~9 potions blind)."""
+        want = norm_item(item_name)
+        last, stuck = None, 0
+        for _ in range(max_steps):
+            cur = self.menu.scroll_abs()
+            if cur == idx:
+                break
+            stuck = stuck + 1 if cur == last else 0
+            if stuck >= 3:
+                return False    # cursor pinned: list edge or wrong menu
+            last = cur
+            self.menu.press("D:6 .:4" if cur < idx else "U:6 .:4")
+        else:
+            return False
+        self.menu.press(".:10")     # let the row repaint before scraping
+        got = self.menu.cursor_row()
+        if not got or not norm_item(got[1]).startswith(want):
+            return False            # WRAM/screen disagree: never blind-A
+        self.menu.press("A:6 .:18")
+        return True
+
+    def _party_target(self, slot, max_steps=12):
+        """Steer the party-menu cursor to row `slot` (0-based) on the live
+        WRAM cursor (wMenuCursorY, 1-based) and confirm with A. The menu
+        persists its cursor between opens, and wMenuScrollPosition still
+        holds the pocket's scroll offset here, so neither blind press
+        counts nor scroll_abs are safe for this list."""
+        last, stuck = None, 0
+        for _ in range(max_steps):
+            cur = self.emu.read_u8("wMenuCursorY") - 1
+            if cur == slot:
+                self.menu.press("A:6 .:18")
+                return True
+            stuck = stuck + 1 if cur == last else 0
+            if stuck >= 3:
+                return False    # cursor pinned: wrong menu / list edge
+            last = cur
+            self.menu.press("D:6 .:6" if cur < slot else "U:6 .:6")
+        return False
+
+    @staticmethod
+    def _party_pick_up(rows):
+        """The "Use on which PM?" target list: CANCEL plus HP fractions.
+        (The pocket list also draws a CANCEL row, but its quantities are
+        '× n', never 'hp/max'.)"""
+        if "USE ON WHICH" in "".join(rows).upper():
+            return True
+        return any("CANCEL" in r for r in rows) and \
+            any(re.search(r"\d\s*/\s*\d+", r) for r in rows)
+
+    def _confirm_item_pages(self, item_name, target_slot, before):
+        """Drive whatever the battle pack shows after the item row's A --
+        the USE/QUIT popup, the item description page, the "Use on which
+        PM?" party list -- one state-verified press per pass. True only on
+        a bag-count decrement; a screen that stops changing despite
+        presses is a stall (False: the caller backs out and reports the
+        action failed)."""
         f0 = self.emu.frame
-        while before is not None and self.emu.frame - f0 < 1500:
+        last_snap, reps = None, 0
+        while self.emu.frame - f0 < self.ITEM_CONFIRM_FRAMES:
             after = bag_quantity(self.emu, self.names, item_name)
             if after is None or after < before:
-                return True
-            self.menu.press(".:20")
-        return before is None    # untrackable (key pocket etc.): trust flow
+                return True     # consumption: the only success signal
+            rows = self.menu.screen()
+            snap = tuple(rows)
+            if snap == last_snap:
+                reps += 1
+                if reps >= self.ITEM_STALL_REPS:
+                    return False    # pages stopped responding: stall
+            else:
+                last_snap, reps = snap, 0
+            if self.menu.has_label(rows, "USE"):
+                if not self.menu.select_label("USE", max_presses=4):
+                    return False
+            elif self._party_pick_up(rows):
+                # an unchanged bag proves nothing was used yet, so a
+                # re-confirm here can never double-consume (gotcha 2:
+                # party menus swallow the first A during setup)
+                if not self._party_target(target_slot):
+                    return False
+            else:
+                # description page / battle text: a plain A advances it
+                self.menu.press("A:6 .:20")
+        return False
 
-    def _verify_pack_cursor(self, item_name):
-        """select_abs desyncs can park the cursor on the wrong row; confirm
-        the highlighted text really is the item BEFORE confirming USE
-        (once burned ~9 potions in a wedge)."""
-        self.menu.press(".:10")
-        want = _norm_item(item_name)
-        # If select_abs's trailing A already opened the USE/QUIT popup, the
-        # popup covers the right half of the item name and steals the solid
-        # cursor; the item row keeps a hollow marker with only a name
-        # PREFIX visible ("▷FULL " for FULL HEAL) -- prefix-match that.
-        for row in self.menu.screen():
-            if "▷" in row:
-                vis = _norm_item(row.split("▷", 1)[1].split("│", 1)[0])
-                return bool(vis) and want.startswith(vis)
-        got = self.menu.cursor_row()
-        return bool(got and want and want in _norm_item(got[1]))
+    def _bail_pack(self):
+        """Back out of a misfired pack/item flow all the way to the battle
+        menu. cancel_pack alone is jumptable-gated and leaves non-pocket
+        pages (item description, target list) on screen -- exactly the
+        frozen page the Morty wedge fingerprinted. Always returns False so
+        callers can `return self._bail_pack()`."""
+        self._cancel_pack()
+        for _ in range(6):
+            if battle_menu_up(self.menu.screen()):
+                break
+            self.menu.press("B:4 .:12")
+        return False
 
     def switch_to(self, party_index):
         """From the main battle menu: PKMN -> slot -> SWITCH."""
@@ -716,12 +791,18 @@ class Battle:
             else:
                 ok = self.attack(arg if isinstance(arg, int) else None)
             if not ok:
-                # a menu interaction misfired: back out and re-sync
+                # a menu interaction misfired: back out and re-sync. The
+                # repainted menu with unchanged vitals is retry progress,
+                # not a freeze -- reset the wedge fingerprint (the Morty
+                # stall 'wedged' out here before the fails counter could
+                # degrade to attacks); this lane is bounded by fails, not
+                # the freeze detector (forced attack at 2, 'stuck' at 12).
                 fails += 1
                 if fails >= 12:
                     return "stuck"   # even plain attacks misfire: bail
                 self.menu.press("B:4 .:12")
                 was_menu = False
+                wedge_snap, wedge_reps = None, 0
                 continue
             if not substituted:
                 # a substituted turn keeps its fail count so a policy that
