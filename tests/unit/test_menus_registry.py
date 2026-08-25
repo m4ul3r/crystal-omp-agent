@@ -114,6 +114,11 @@ REQUIRED_KWARGS = {
     "step_dir": {"mv": "D"},
     "press": {"seq": "A:4"},
     "use_cut": {"tree_x": 4, "tree_y": 8},
+    "gym_scout": {"map": "VIOLET_GYM"},
+    "who_fights": {},
+    "resolve_choice": {"choice": "YES"},
+    "drain_scene": {},
+    "catch_up": {},
 }
 
 

@@ -115,6 +115,14 @@ states `omp_saves/moss-*`; never touches `saves/`. Rival to be **FERN**
 (plant-name culture). Roster contract: ≥3 all-nicknamed L8+ party before
 Falkner; ≥4 after Slowpoke Well; 15-ball budget for the Zephyr leg.
 Ledger: `omp_saves/moss-ledger.md` ([S]/[W] harness observations).
+**ZEPHYR DONE Aug 24 2026** (`moss-zephyr.state`, CLI-verified): roster
+BAYLEEF **FROND** L16 31/51, PIDGEY **BRAMBLE** L9, SENTRET **THISTLE**
+L9 — contract met (3 nicknamed, GRASS/FLYING/NORMAL, all ≥L8 pre-gym).
+Rival **FERN** named at lab cop scene. Catches: BRAMBLE+THISTLE via
+catch_up on R29 (3 balls); 7 bought, 10/15 budget used.
+Next: ≥4th nicknamed member before Slowpoke Well (persona wants
+BELLSPROUT→SPROUT on R32), then Union Cave → Azalea → Well → Bugsy.
+Ledger: `omp_saves/moss-ledger.md`.
 ## session claude-wren pt3 — PLAIN BADGE (DONE, Aug 24 2026)
 
 **3/8 badges.** Azalea→Ilex (Farfetch'd herding solved by reading the position

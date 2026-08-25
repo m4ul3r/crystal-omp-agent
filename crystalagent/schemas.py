@@ -70,6 +70,7 @@ class EnemyObs(_Strict):
     level: int
     hp: int
     max_hp: int
+    types: list[str] = []
 
 
 class BattleState(_Strict):

@@ -813,9 +813,12 @@ class Driver:
             # Q&A #3.2)
             try:
                 en = Battle(self.emu, self.names, self.bdata).enemy()
+                tnames = {i: n for n, i in self.bdata.types.items()}
                 obs["enemy"] = {"species": en["species"], "name": en["name"],
                                 "level": en["level"], "hp": en["hp"],
-                                "max_hp": en["max_hp"]}
+                                "max_hp": en["max_hp"],
+                                "types": [tnames.get(t, str(t))
+                                          for t in en.get("types", [])]}
             except Exception:
                 pass
         return validate_observe(obs)
@@ -1027,9 +1030,111 @@ class Driver:
         if choice not in opts or \
                 not any(c in r for r in rows for c in CURSORS):
             return {"answered": False, "chose": None, "options": opts}
-        ok = bool(self.menu.select_label(choice, max_presses=6))
-        return {"answered": ok,
-                "chose": choice if ok else None, "options": opts}
+        # gotcha-2 variant: the box may still be settling when labels
+        # first decode -- confirm-then-verify, one bounded retry
+        for _attempt in range(2):
+            self.press(".:12")
+            ok = bool(self.menu.select_label(choice, max_presses=6))
+            self.emu.tick(20)
+            still = self._choice_labels(self.emu.screen_text())
+            if ok and choice not in still:
+                return {"answered": True, "chose": choice,
+                        "options": opts}
+            opts = still or opts
+        return {"answered": False, "chose": None, "options": opts,
+                "rows": [r.strip() for r in self.emu.screen_text()
+                         if r.strip()][:8]}
+
+    def who_fights(self):
+        """Rank the party against the CURRENT battle's foe using the repo
+        type chart (registry 'who_fights'; needs ui.battle). Switch
+        decisions become evidence-based: best-move effectiveness per mon,
+        healthiest and hardest-hitting first. Returns {'enemy': ...,
+        'ranking': [...]} -- pair with fight(policy=('switch', slot))."""
+        if not self.battle():
+            raise ValueError("who_fights: needs an active battle "
+                             "(ui.battle=False)")
+        b = Battle(self.emu, self.names, self.bdata)
+        enemy = b.enemy()
+        tnames = {i: n for n, i in self.bdata.types.items()}
+        etypes = enemy.get("types") or []
+        move_id = {n: i for i, n in self.names.moves.items()}
+        rows = []
+        for i, m in enumerate(game_state(self.emu, self.names)["party"]):
+            if m.get("egg"):
+                continue
+            best_eff, best_mv = 0.0, None
+            for mv in m["moves"]:
+                mid = move_id.get(mv["name"])
+                if not mid:
+                    continue
+                mtype = self.bdata.moves[mid]["type"]
+                eff = self.bdata.effectiveness(mtype, etypes)
+                if eff > best_eff:
+                    best_eff, best_mv = eff, mv["name"]
+            rows.append({"slot": i, "mon": m.get("nickname") or m["name"],
+                         "level": m["level"],
+                         "hp": round(m["hp"] / max(m["max_hp"], 1), 2),
+                         "best_move": best_mv, "eff": best_eff})
+        rows.sort(key=lambda r: (-r["eff"], -r["level"]))
+        return {"enemy": {"name": enemy["name"],
+                          "types": [tnames.get(t, str(t)) for t in etypes],
+                          "level": enemy["level"], "hp": enemy["hp"],
+                          "max_hp": enemy["max_hp"]},
+                "ranking": rows,
+                "note": "send the top healthy ranked mon in via "
+                        "fight(policy=('switch', slot))"}
+
+    def gym_scout(self, map_name):
+        """Read the repo's ground truth for a gym BEFORE entering:
+        parse maps/<Map>.asm trainer references + data/trainers/parties.asm
+        into [{trainer, group, mons: [{species, level, moves}]}] so roster
+        evolution is planned, not discovered by wiping (repo-is-the-map).
+        map_name: CONST ('VIOLET_GYM') or CamelCase."""
+        const = self._resolve_map(map_name)
+        path = paths.REPO_ROOT / "maps" / f"{const.title().replace('_', '')}.asm"
+        if not path.exists():
+            raise ValueError(f"gym_scout: no map source at {path}")
+        text = path.read_text()
+        wanted = []                       # (GROUP, TEMPLATE) pairs
+        for m in re.finditer(r"loadtrainer\s+(\w+),\s*(\w+)", text):
+            wanted.append((m.group(1), m.group(2)))
+        for m in re.finditer(r"^\ttrainer\s+(\w+),\s*(\w+),", text, re.M):
+            wanted.append((m.group(1), m.group(2)))
+        if not wanted:
+            raise ValueError(f"gym_scout: no trainers found in {const}")
+        parties_path = paths.REPO_ROOT / "data/trainers/parties.asm"
+        ptext = parties_path.read_text()
+        out = []
+        for group, template in wanted:
+            camel = "".join(p.capitalize() for p in group.split("_"))
+            gsec = re.search(
+                rf"^({camel}Group:.*?)(?=^\w+Group:|\Z)",
+                ptext, re.M | re.S)
+            if not gsec:
+                out.append({"trainer": template, "group": group,
+                            "mons": [], "error": "group not in parties.asm"})
+                continue
+            tmatch = re.search(
+                rf'db "{re.escape(template.rstrip("0123456789"))}@".*?\n'
+                rf"((?:\s+db .*\n)+?)\s+db -1", gsec.group(1))
+            if not tmatch:
+                out.append({"trainer": template, "group": group,
+                            "mons": [], "error": "template not found"})
+                continue
+            mons = []
+            for line in tmatch.group(1).splitlines():
+                fields = [f.strip() for f in line.strip().removeprefix("db").split(",")]
+                if len(fields) < 2 or not fields[0].isdigit():
+                    continue
+                mon = {"level": int(fields[0]), "species": fields[1]}
+                if "MOVES" in tmatch.group(0):
+                    mon["moves"] = [f for f in fields[2:]
+                                    if f and f != "NO_MOVE"]
+                mons.append(mon)
+            base = re.sub(r"\d+$", "", template)
+            out.append({"trainer": base, "group": group, "mons": mons})
+        return out
     def _naming_sig(self):
         """WRAM signature of naming-screen state; NamingScreen writes
         these BEFORE rendering (engine/menus/naming_screen.asm), so a

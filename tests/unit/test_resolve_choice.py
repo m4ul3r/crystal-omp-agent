@@ -5,7 +5,7 @@ from trek import Driver
 
 pytestmark = pytest.mark.unit
 
-# real decoded frames: nurse-style YES/NO box and the mom day-picker
+# real decoded frames: nurse-style YES/NO box and a multi-option picker
 YESNO = ["", "", "┌────┐", "│▶YES│", "│    │", "│ NO │", "└────┘"]
 PICKER = ["┌──────────┐", "│▶MONDAY   │", "│ TUESDAY  │", "│ WEDNESDAY│",
           "└──────────┘"]
@@ -30,32 +30,58 @@ def test_frame_borders_never_become_labels():
 
 
 class _Menu:
-    def __init__(self, ok):
-        self.ok = ok
+    """select_label that closes the box on success (like the engine)."""
+
+    def __init__(self, world, flaky=False):
+        self.world = world
+        self.flaky = flaky
         self.got = None
+        self.calls = 0
 
     def select_label(self, label, max_presses=14):
         self.got = label
-        return self.ok
+        self.calls += 1
+        if self.flaky and self.calls == 1:
+            return True              # whiffed: box still settling
+        self.world["open"] = False
+        return True
 
 
-def _driver_with_rows(rows, menu_ok=True):
+class _Emu:
+    def __init__(self, world):
+        self.world = world
+
+    def screen_text(self):
+        return list(YESNO) if self.world["open"] else ["overworld"]
+
+    def tick(self, frames):
+        pass
+
+
+def _driver(flaky=False):
     d = Driver.__new__(Driver)
-    d.emu = type("E", (), {"screen_text": staticmethod(lambda: rows)})()
-    d.menu = _Menu(menu_ok)
+    d.press = lambda seq: None       # drains settle between attempts
+    d.emu = _Emu({"open": True})
+    d.menu = _Menu(d.emu.world, flaky=flaky)
     return d
 
 
-def test_resolve_choice_answers_visible_label():
-    d = _driver_with_rows(YESNO)
+def test_resolve_choice_answers_and_verifies_close():
+    d = _driver()
     out = d.resolve_choice("YES")
-    assert out == {"answered": True, "chose": "YES",
-                   "options": ["YES", "NO"]}
+    assert out["answered"] is True and out["chose"] == "YES"
     assert d.menu.got == "YES"
 
 
+def test_resolve_choice_retries_when_box_stays_open():
+    d = _driver(flaky=True)
+    out = d.resolve_choice("YES")
+    assert out["answered"] is True
+    assert d.menu.calls == 2            # one bounded retry happened
+
+
 def test_resolve_choice_refuses_invisible_label():
-    d = _driver_with_rows(YESNO)
+    d = _driver()
     out = d.resolve_choice("QUIT")
     assert out["answered"] is False and out["chose"] is None
     assert d.menu.got is None            # never pressed a blind key
