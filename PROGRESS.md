@@ -1,3 +1,75 @@
+## session claude-wren pt9 - CHAMPION (Aug 25 2026)
+
+**Beat the Elite Four and Lance.** `BEAT_CHAMPION_LANCE=True`, Hall of Fame
+registered, 8/8 badges. Milestones: `claude_saves/wren-champion.state`,
+`wren-pre-e4.state`, `wren-pre-lance.state`.
+
+| leader | result | who did it |
+|---|---|---|
+| WILL | won | SNAG (FAINT ATTACK x2 on PSYCHIC) fell to Exeggutor; GATOR closed |
+| KOGA | won, no faints | BROOK solo, 155/211 left |
+| BRUNO | won in 5 turns, every one a one-shot | BROOK solo |
+| KAREN | won | BROOK took four, fainted; GATOR finished Vileplume |
+| LANCE | won | GATOR solo'd all six, L78 -> L79, ended 59/293 |
+
+### The bug that mattered: every SPECIAL type id was wrong by 9
+
+`crystalagent.battle._parse_types` matched `const NAME` lines and counted
+from zero, silently ignoring `const_next 19` (constants/type_constants.asm:22),
+which jumps the unused-type block. So the parser produced FIRE=11, PSYCHIC=15,
+DARK=18 where the game uses 20/24/27. The matchup table was keyed by those
+wrong ids, and **ROM move types and the WRAM type bytes are REAL ids**, so
+every special-type lookup missed the table and returned a flat 1.0: no
+super-effective, no resistance, no immunity, for FIRE/WATER/GRASS/ELECTRIC/
+PSYCHIC/ICE/DRAGON/DARK.
+
+Caught it live, not by reading code: the first Will attempt printed
+`FAINT ATTACK x1` into EXEGGUTOR and `?24/FLYING` for a Xatu. DARK is 2x on
+PSYCHIC. After the fix the same battle read `FAINT ATTACK x2` and the type
+names resolved. Every "best move" this harness has ever chosen for a
+special-type attack was picked from a flat chart.
+
+### New: crystalagent/tactics.py (real Gen-2 combat maths)
+
+Derived from the disassembly, cited in the module docstring:
+`DamageCalc` (effect_commands.asm:2900) -> `Stab` (1214: badge boost, then
+`d + d/2`, then the type rows) -> `DamageVariation` (1496: 85-100%), plus
+`DoBadgeTypeBoosts` (misc.asm:147, `d/8`, PLAYER's turn only) and the
+physical/special boundary `DEF SPECIAL` (type_constants.asm:26) -- in Gen 2
+the move's TYPE picks Atk/Def vs SpA/SpD, not the move.
+
+- `read_side/read_battle` read the in-battle structs, which the engine keeps
+  STAGE-MODIFIED (`ApplyStatLevelMultiplierOnAllStats`, core.asm:6671), so
+  Screech/Swords Dance are already in the numbers.
+- Fixed-damage effects are honoured, not discarded: DRAGON RAGE is
+  `EFFECT_STATIC_DAMAGE` power 40 (a flat 40), SEISMIC TOSS is level damage.
+  The old power-based picker threw both away for "having no power".
+- Immunity beats fixed damage (SEISMIC TOSS does nothing to a GHOST).
+- `d.outlook()`, `d.tactics.recommend()`, `d.tactics.explain()` -- see
+  AGENTS.md. 27 unit tests, type ids and the chart come from the real files.
+
+Live decisions this produced, none of them "highest base power":
+- vs SLOWBRO: HYDRO PUMP over STRENGTH -- high Defense, ordinary Sp.Def.
+- vs ONIX: IRON TAIL over WING ATTACK -- STEEL is 2x on ROCK, FLYING is 1x.
+- vs FORRETRESS: WING ATTACK read x1, not x2 -- 2x BUG x 0.5 STEEL.
+- vs AERODACTYL/CHARIZARD: HYDRO PUMP x2, NOT the 4x I assumed by hand --
+  FLYING is neutral to WATER. The chart corrected me.
+
+### Notes for next time
+
+- Badge boost with 8 Johto badges covers FLYING/BUG/NORMAL/GHOST/STEEL/
+  FIGHTING/ICE/DRAGON -- three of BROOK's four moves. WATER is NOT boosted
+  (that needs CASCADEBADGE), so GATOR's SURF never gets it.
+- E4 rooms: walk north, step AROUND the beaten leader (they keep standing on
+  the centre column), then the top door needs `_step_warp_tap`. The League
+  door out of the Plateau PC is the (14,3) warp, and the static grid claims
+  the corridor at x=16 is unreachable -- `step_hold("U")` walks it anyway.
+- Shop lists draw the cursor as U+25B6 while they own input and U+25B7 under
+  a textbox (gotcha 1). A one-glyph reader goes blind after each purchase.
+- `use_item` out of battle is unreliable here (REVIVE worked, FULL RESTORE
+  returned False); in-battle healing through the policy works.
+
+
 ## session claude-wren pt8 - DRAGONITE for the E4 (Aug 25 2026)
 
 **Where the run stands:** 8/8 badges, VICTORY_ROAD (13,10), party healed.

@@ -89,6 +89,9 @@ from the leg's own arguments.
 | Decide a wild encounter | `d.encounter_policy = lambda frame: 'catch'` — asked ONCE per wild for `'ko'`/`'catch'`/`'flee'`/`('ball', NAME)`; trainers are never asked |
 | Decide every turn yourself | `d.fight(require_decision=True)` or `d.decide_all = True` — a turn your policy declines raises `trek.DecisionRequired` (`.frame`, `.kind`, `.options`) instead of the harness guessing |
 | See the whole battle in one read | `d.battle_frame()` → `{me, enemy, party, bag, turn, wild, can_switch, moves}`; each move carries `power`/`pp`/`effect_mult` (type effectiveness vs THIS enemy) |
+| Real damage/type maths for THIS turn | `d.outlook()` → every move of mine scored with the game's own formula against the mon actually standing there (type multiplier, the Gen-2 **per-TYPE** physical/special split, STAB, badge boost, 85-100% roll, hits-to-KO) plus the enemy's moves aimed back and who is faster; `None` before the battle mon block is populated |
+| A decision with a stated reason | `d.tactics.recommend(analysis, frame)` → `(action, why)`: certain KO first (accuracy breaks ties), then heal, then switch to a mon that RESISTS what is incoming, else best expected damage |
+| Audit the maths as a table | `d.tactics.explain(d.outlook())` — one line per move: multiplier, phys/spec, damage span, % of its HP, accuracy, STAB, and each enemy move with `LETHAL` marked |
 | Audit a battle afterwards | `d.last_battle` (`.rows()`, `.summary()`, `.free_hits()`) — free hits are the switch-in/item turns that wiped the party at Koga |
 | Mid-battle actions | policy returns `('attack', slot)`, `('switch', party_idx)`, `('item','SUPER POTION')`, `('ball','GREAT BALL')`, or `'flee'` |
 | Name a caught Pokémon | `d.catch(nickname="BUBBLES")` (str, species-keyed dict, or callable) or `trek catch NICKNAME` — types it on the naming keyboard; without a name the prompt is declined |

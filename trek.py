@@ -1921,6 +1921,36 @@ class Driver:
     # plain 'catch' never burns an ULTRA BALL on a RATTATA.
     BALL_PREFERENCE = ("POKE BALL", "GREAT BALL", "ULTRA BALL")
 
+    _tactics = None
+
+    @property
+    def tactics(self):
+        """Type/damage analysis for this save (crystalagent.tactics).
+
+        Badge-boosted attacking types are read live, because the boost is
+        worth +1/8 damage and depends on which badges this file has
+        (DoBadgeTypeBoosts, engine/battle/misc.asm:147)."""
+        if self._tactics is None:
+            from crystalagent.tactics import Tactics, boosted_types
+            self._tactics = Tactics(
+                self.bdata, self.names, paths.REPO_ROOT,
+                badge_types=boosted_types(self.emu, self.bdata,
+                                          paths.REPO_ROOT))
+        return self._tactics
+
+    def outlook(self):
+        """Real per-turn combat maths for the CURRENT battle, or None.
+
+        Every one of my moves scored with the game's own damage formula
+        against the enemy actually standing there -- type multiplier, the
+        Gen-2 physical/special split (which is per TYPE), STAB, badge
+        boost, the 85-100% spread, hits-to-KO -- plus the enemy's moves
+        aimed back at me and who moves first. `d.tactics.explain(...)`
+        renders it as one auditable line per move."""
+        if not self.battle():
+            return None
+        return self.tactics.read(self.emu)
+
     def battle_frame(self):
         """The decision frame for the CURRENT battle -- the dict
         crystalagent.decide.battle_frame documents (me/enemy/party/bag/

@@ -26,13 +26,28 @@ MOVE_LENGTH = 7  # animation, effect, power, type, accuracy, pp, effect chance
 
 
 def _parse_types(path):
+    """``{TYPE_NAME: id}`` matching the game's real type ids.
+
+    ``const_next N`` resets the counter (constants/type_constants.asm:22
+    jumps the unused block to 19, so FIRE is 20 and DARK is 27). Ignoring
+    it shifted every SPECIAL type down by 9, which silently turned every
+    matchup lookup made with a real id -- ROM move types and the WRAM type
+    bytes are real ids -- into a 1.0 "no interaction" miss.
+    """
     types = {}
     tid = 0
     for line in Path(path).read_text().splitlines():
+        nxt = re.match(r"\s+const_next (\d+)", line)
+        if nxt:
+            tid = int(nxt.group(1))
+            continue
         m = re.match(r"\s+const (\w+)", line)
         if m:
             types[m.group(1)] = tid
             tid += 1
+    # The engine's constant is PSYCHIC_TYPE; every caller says PSYCHIC.
+    if "PSYCHIC_TYPE" in types:
+        types.setdefault("PSYCHIC", types["PSYCHIC_TYPE"])
     return types
 
 
