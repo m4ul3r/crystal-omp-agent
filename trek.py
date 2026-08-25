@@ -1035,6 +1035,17 @@ class Driver:
             self.press(".:8")
             quiet += 8
             if quiet >= quiet_frames:
+                # A page_wait event is consumed on drain even when it
+                # could not be acted on (stale/mid-transition), after
+                # which the loop goes deaf while the box keeps waiting.
+                # The visible textbox is the persistent signal: fall
+                # back to glyph-gated paging instead of reporting done.
+                if self.textbox():
+                    if dialog_press_safe(self.emu.screen_text()):
+                        self.press("A:2 .:8")
+                        quiet = 0
+                        continue
+                    return "menu"   # cursor outside box: deliberate
                 return "done"
         return "timeout"
 
@@ -2737,12 +2748,35 @@ def heal_pokecenter(d):
         raise RuntimeError(
             f"heal_pokecenter: not inside a Pokécenter (on {d.map_name()})")
 
+    def _hp_snapshot():
+        return tuple(m["hp"] for m in game_state(d.emu, d.names)["party"])
+
+    def _wait_heal_settled(timeout=1500):
+        """The jingle animates HP upward; reading before it finishes is
+        the stale-HP raise class (omp-fresh: 6/7 heals). Settled = HP
+        stable across polls with no textbox and no owning script."""
+        f0, prev = d.emu.frame, None
+        while d.emu.frame - f0 < timeout:
+            cur = _hp_snapshot()
+            if cur == prev and not d.textbox() \
+                    and d.emu.read_u8("wScriptMode") == 0:
+                return True
+            prev = cur
+            d.emu.tick(10)
+        return False
+
     def _nurse():
         d.goto(3, 3, "nurse counter")
         d.step_dir("U")        # face her (blocked step = turn)
         d.press("A:2 .:20")
-        d.flush_dialog()       # "shall we heal?" -> A = yes
-        d.press(".:300")       # heal jingle
+        d.flush_dialog()       # intro page(s) -- stops ("menu") at the
+        # heal prompt. The YES/NO box is a deliberate choice: cursor
+        # defaults to YES, but an extra stray A earlier can leave it on
+        # NO (omp-fresh variant), so navigate explicitly.
+        if d.menu.wait_for(lambda rows: any("YES" in r for r in rows),
+                           260):
+            d.menu.select_label("YES", max_presses=4)
+        _wait_heal_settled()   # HP-keyed jingle wait, not a blind frame
         d.flush_dialog()       # "we hope to see you again"
         d.settle()
         d.flush_dialog(1500)   # sweep straggler pages before verifying
