@@ -50,12 +50,13 @@ class _Menu:
 class _Emu:
     def __init__(self, world):
         self.world = world
+        self.frame = 0
 
     def screen_text(self):
         return list(YESNO) if self.world["open"] else ["overworld"]
 
     def tick(self, frames):
-        pass
+        self.frame += frames
 
 
 def _driver(flaky=False):
