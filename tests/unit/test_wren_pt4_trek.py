@@ -243,7 +243,8 @@ def test_learn_flow_logs_and_records_replacement(caplog):
     assert lines == [
         "LEARN: GATOR forgot BITE -> learned SCARY FACE (slot 1)"]
     assert d.move_changes == [{"mon": "GATOR", "forgot": "BITE",
-                               "learned": "SCARY FACE", "slot": 1}]
+                               "learned": "SCARY FACE", "slot": 1,
+                               "source": "auto"}]
 
 
 def test_learn_flow_declined_no_entries(caplog):
@@ -291,6 +292,7 @@ def test_learn_flow_relabeled_mon_skipped():
 def test_move_changes_accumulate_across_flows():
     d, _ = learn_driver([("GATOR", ["BITE"])], [("GATOR", ["SLASH"])])
     d.move_changes = [{"mon": "REED", "forgot": "GUST",
-                       "learned": "WING ATTACK", "slot": 2}]
+                       "learned": "WING ATTACK", "slot": 2,
+                       "source": "auto"}]
     d._resolve_learn_flow()
     assert [c["mon"] for c in d.move_changes] == ["REED", "GATOR"]

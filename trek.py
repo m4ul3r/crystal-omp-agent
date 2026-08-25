@@ -565,8 +565,10 @@ class Driver:
         # Level-up learn transparency (wren pt4: the learn flow replaced
         # BITE with SCARY FACE and a slot-1 policy whiffed through three
         # whiteouts): every resolved learn flow that REPLACES a move
-        # appends {'mon','forgot','learned','slot'} here and logs a
-        # LEARN line. Inspect after train()/fight() before trusting
+        # appends {'mon','forgot','learned','slot','source'} here and
+        # logs a LEARN line ('source': 'policy' | 'auto' |
+        # 'auto-fallback' -- who decided the sacrifice; see
+        # _diff_learned_moves). Inspect after train()/fight() before trusting
         # slot-based policies. Never cleared automatically.
         self.move_changes = []
         self.hooks = hookevents.install(self.emu)
@@ -1528,7 +1530,15 @@ class Driver:
 
     _LEARN_MARKERS = ("TRYING TO LEARN", "WANTS TO LEARN",
                       "DELETE A MOVE", "FORGET A MOVE", "MAKE ROOM",
-                      "STOP LEARNING", "FORGOTTEN")
+                      "STOP LEARNING", "FORGOTTEN",
+                      # mid-battle _AskForgetMoveText scrolls through a
+                      # 2-line box; these cover its middle pages ("But
+                      # <MON> can't learn more than four moves." /
+                      # "Delete an older move to make room for <MOVE>?")
+                      # which used to trip NO marker and dropped the
+                      # flow state mid-flow (the GATOR/SCREECH wedge).
+                      # Apostrophe-free on purpose (charmap ligatures).
+                      "LEARN MORE", "THAN FOUR MOVES", "DELETE AN OLDER")
 
     # moves we're happy to sacrifice when learning something new, most
     # expendable first: pure-status filler, then weak/situational attacks.
@@ -1553,15 +1563,25 @@ class Driver:
     #   * a move name from current_moves -- forget THAT move,
     #   * 'DECLINE'                      -- do not learn new_move,
     #   * None                           -- fall back to the auto behavior.
-    # Called ONCE per learn flow, the moment the '<MON> is trying to/wants
-    # to learn <MOVE>' page is first detected and BEFORE any YES/NO is
-    # answered, so 'DECLINE' answers NO cleanly. A policy that raises, or
+    # Called ONCE per learn flow BEFORE any YES/NO is answered, so
+    # 'DECLINE' answers NO cleanly. Mon and move are parsed off the
+    # '<MON> is trying to/wants to learn <MOVE>' text and ACCUMULATED
+    # across frames: the mid-battle variant scrolls that sentence through
+    # a 2-line box, so mon and move are never on screen together (pt5c:
+    # this silently skipped the policy and auto-accepted). A policy that raises, or
     # that names a move not on the forget menu, or that names an HM move
     # (the game refuses those), logs ONE warning and falls back to auto --
     # a bad policy never wedges a battle. Policy-driven replacements land
     # in the SAME LEARN log line / move_changes entry as auto ones.
     learn_policy = None
     _learn_flow = None   # per-flow policy state; live only while a flow is
+    # who decided the LAST resolved learn: 'policy' (learn_policy's word
+    # was followed), 'auto-fallback' (policy raised / stale / HM: auto
+    # took over after a warning), 'auto' (no policy engaged). Stamped
+    # onto move_changes entries by _diff_learned_moves, then reset.
+    # NB: several flows diffed in ONE batch (fight()'s end-of-battle
+    # diff) all get the last flow's source -- rare, documented caveat.
+    _learn_source = "auto"
 
     def _learn_prompt_up(self, rows):
         joined = "".join(rows).upper()
@@ -1600,13 +1620,26 @@ class Driver:
         _resolve_learn_flow / fight().
         Blind A-mashing derails into party menus and wedges the battle."""
         if not self._learn_prompt_up(rows):
-            self._learn_flow = None    # flow over: drop per-flow state
+            # Transient scroll frames of the mid-battle 2-line box (e.g.
+            # "SCREECH." / "But GATOR" while page 2 scrolls in) carry no
+            # marker; dropping the flow state there loses a policy
+            # DECLINE and the make-room YES/NO then falls through to
+            # learn_moves=True (the GATOR/SCREECH forget-menu wedge).
+            # Tolerate a few marker-less frames before declaring the
+            # flow over.
+            st = self._learn_flow
+            if st is not None and st.get("misses", 0) < 3:
+                st["misses"] = st.get("misses", 0) + 1
+            else:
+                self._learn_flow = None    # flow over: drop per-flow state
             return False
         joined = "".join(rows).upper()
         st = self._learn_flow
         if st is None:                 # first frame of a fresh flow
             st = self._learn_flow = {"decision": None, "consulted": False,
-                                     "answered": False}
+                                     "answered": False, "mon": None,
+                                     "move": None, "misses": 0}
+        st["misses"] = 0
         if not st["consulted"] and not st["answered"]:
             self._consult_learn_policy(rows, st)
         decision = st["decision"]
@@ -1618,10 +1651,18 @@ class Driver:
                 log.warning(f"learn_policy: game refused to forget "
                             f"{forget} (HM) -- falling back to auto")
                 st["decision"] = None
+                self._learn_source = "auto-fallback"
             self.press("A:4 .:16 D:4 .:16")
             return True
         if "FORGOTTEN" in joined:
             # "Which move should be forgotten?" move menu is up
+            if decision == "DECLINE":
+                # safety net: a DECLINE flow must never walk this menu
+                # (live pt5c wedge: GATOR/SCREECH mid-battle, cursor
+                # parked on an HM). B backs out to "Stop learning
+                # <MOVE>?", which the YES/NO branch below confirms.
+                self.press("B:6 .:20")
+                return True
             cur = [r.strip().upper() for r in rows if "▶" in r or "▷" in r]
             on_hm = any(hm in r for r in cur for hm in self.HM_MOVES)
             if forget is not None:
@@ -1631,12 +1672,14 @@ class Driver:
                     log.warning(f"learn_policy chose HM move {forget}: the "
                                 "game refuses those -- falling back to auto")
                     st["decision"] = forget = None
+                    self._learn_source = "auto-fallback"
                 elif not any(_item_row_matches(r.lstrip("▶▷ "), want)
                              for r in (x.strip().upper() for x in rows) if r):
                     log.warning(f"learn_policy chose {forget} but it is not "
                                 "on the forget menu (stale moveset?) -- "
                                 "falling back to auto")
                     st["decision"] = forget = None
+                    self._learn_source = "auto-fallback"
             if forget is not None:
                 # confirm ONLY once the cursor row itself names the
                 # requested move (row-match tolerance); otherwise walk.
@@ -1676,31 +1719,43 @@ class Driver:
         """Ask self.learn_policy about the learn flow on screen (once per
         flow, before any YES/NO is answered; contract on the attribute).
         Mon and move are parsed off the '<MON> is trying to/wants to learn
-        <MOVE>' page; a flow entered MID-WAY (the wedge-repair path) never
-        shows that page again, so the policy is skipped and auto applies.
-        A policy that raises is logged once and treated as None (auto):
-        a bad policy must never wedge a battle."""
+        <MOVE>' text and ACCUMULATED on st across frames: the mid-battle
+        variant scrolls that sentence through a 2-line box, so mon and
+        move are NEVER on screen together there (pt5c: the old
+        single-shot regex silently skipped the policy and auto-accepted
+        SCREECH). A flow entered MID-WAY (the wedge-repair path) never
+        shows either fragment, so the policy is skipped and auto applies.
+        A policy that raises is logged once -- exception text plus the
+        args it was called with -- and treated as None (auto): a bad
+        policy must never wedge a battle."""
         policy = getattr(self, "learn_policy", None)
         if policy is None:
             st["consulted"] = True
             return
         text = re.sub(r"\s+", " ", " ".join(rows)).upper()
-        m = re.search(r"(\S+) (?:IS TRYING|WANTS) TO LEARN "
+        m = re.search(r"(\S+) (?:IS TRYING|WANTS) TO LEARN", text)
+        if m:
+            st["mon"] = m.group(1)
+        m = re.search(r"(?:TRYING|WANTS) TO LEARN "
                       r"([A-Z0-9♂♀'.\- ]+?)[!?.]", text)
-        if m is None:
-            return                     # page not up yet: retry next frame
+        if m:
+            st["move"] = m.group(1).strip()
+        mon, new_move = st.get("mon"), st.get("move")
+        if mon is None or new_move is None:
+            return              # sentence still scrolling: retry next frame
         st["consulted"] = True
-        mon, new_move = m.group(1), m.group(2).strip()
         moves = next((list(mv) for label, mv in self._party_moves()
                       if label.upper() == mon), [])
         try:
             decision = policy(mon, new_move, moves)
         except Exception as e:
-            log.warning(f"learn_policy({mon!r}, {new_move!r}) raised "
-                        f"{e!r} -- falling back to auto")
+            self._learn_source = "auto-fallback"
+            log.warning(f"learn_policy({mon!r}, {new_move!r}, {moves!r}) "
+                        f"raised {e!r} -- falling back to auto")
             return
         if decision is not None:
             st["decision"] = str(decision).strip().upper()
+            self._learn_source = "policy"
 
     def _resolve_learn_flow(self, max_frames=8000):
         """Drive any on-screen move-learning flow to completion. Used to
@@ -1714,7 +1769,18 @@ class Driver:
         while self.emu.frame - f0 < max_frames:
             rows = self.emu.screen_text()
             if not self._learn_prompt_up(rows):
-                break
+                if before is None:
+                    break         # no flow on screen at all
+                # mid-scroll transient of the 2-line mid-battle box (no
+                # marker while "But <MON>" scrolls in): let the screen
+                # settle before declaring the flow over.
+                for _ in range(2):
+                    self.emu.tick(24)
+                    rows = self.emu.screen_text()
+                    if self._learn_prompt_up(rows):
+                        break
+                else:
+                    break
             if before is None:       # snapshot only once a flow is real
                 before = self._party_moves()
             self._battle_text_handler(rows)
@@ -1739,18 +1805,22 @@ class Driver:
     def _diff_learned_moves(self, before):
         """Diff a _party_moves() snapshot against the party NOW: one clear
         LEARN log line per replaced move slot plus an entry on
-        d.move_changes ({'mon','forgot','learned','slot'}, slot 1-based)
-        so policies that press fixed move slots can notice their mapping
-        broke (Morty lesson: BITE -> SCARY FACE at slot 1 cost three
-        whiteouts). Moves landing in previously EMPTY slots shift no
-        existing slot and are not recorded; a mon whose label changed
-        (evolution without a nickname, party reorder) is skipped rather
-        than misattributed."""
+        d.move_changes ({'mon','forgot','learned','slot','source'},
+        slot 1-based; 'source' is 'policy' | 'auto' | 'auto-fallback' --
+        who decided the sacrifice, so audits can tell a policy pick from
+        a silent fallback: SNAG lost ROCK SLIDE to an exception-swallowed
+        policy in pt5c) so policies that press fixed move slots can
+        notice their mapping broke (Morty lesson: BITE -> SCARY FACE at
+        slot 1 cost three whiteouts). Moves landing in previously EMPTY
+        slots shift no existing slot and are not recorded; a mon whose
+        label changed (evolution without a nickname, party reorder) is
+        skipped rather than misattributed."""
         if not before:
             return []
         after = self._party_moves()
         if not hasattr(self, "move_changes"):
             self.move_changes = []     # bare/duck-typed drivers
+        src = getattr(self, "_learn_source", "auto")
         changes = []
         for (b_label, b_mv), (a_label, a_mv) in zip(before, after):
             if b_label != a_label:
@@ -1759,11 +1829,13 @@ class Driver:
                 new = a_mv[i] if i < len(a_mv) else None
                 if old and new and old != new:
                     changes.append({"mon": a_label, "forgot": old,
-                                    "learned": new, "slot": i + 1})
+                                    "learned": new, "slot": i + 1,
+                                    "source": src})
         for c in changes:
             log.warning(f"LEARN: {c['mon']} forgot {c['forgot']} -> "
                         f"learned {c['learned']} (slot {c['slot']})")
         self.move_changes.extend(changes)
+        self._learn_source = "auto"    # consumed: next flow starts clean
         return changes
 
 

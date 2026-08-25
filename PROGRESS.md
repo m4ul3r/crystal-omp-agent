@@ -25,6 +25,22 @@ ATTACK when MIMIC was the obvious junk — suspect policy exception ->
 auto fallback; needs the warning line surfaced) — SNAG now has no rock
 STAB; (4) benign level-up stat pages still trip the frozen-screen
 diagnostic (spammy); whitelist 'grew to level' screens.
+[fix] BattleIdentFixer (Aug 25): items (2)+(4) — me/enemy now carry stable
+'nickname' (wCurBattleMon -> wPartyMonNicknames) + 'party_slot'; 'name' stays
+species (compat). Wedge detector whitelists 'grew to'/stat-page screens as
+PROGRESS (paged with plain A, no diagnostic); real freezes still 'wedged'.
+tests/unit/test_battle_identity_wedge.py (8 green; guards+item flow 42 total).
+[fix] TrekDeclineFixer (Aug 25): items (1)+(3) — root cause of the DECLINE
+wedge: mid-battle _AskForgetMoveText scrolls through a 2-line box, so the
+full 'is trying to learn X' sentence never fits one screen (consult regex
+never fired) AND its middle pages carried no _LEARN_MARKERS (per-flow state
+dropped mid-flow) -> make-room auto-YESed into the forget menu. Now: markers
+cover all scroll pages, mon/move accumulate across frames before the ONE
+policy consult, forget-menu-with-DECLINE safety net Bs out to 'Stop
+learning' + confirms; raising policies log exception text + full args, and
+move_changes entries carry 'source': 'policy'|'auto'|'auto-fallback' for
+post-hoc audits. tests/unit/test_wren_pt5c_learn_decline.py (6) + pt5/pt4
+learn tests updated; 29 green.
 
 
 ## session claude-wren pt5b — learn_policy + team training (Aug 24 2026)

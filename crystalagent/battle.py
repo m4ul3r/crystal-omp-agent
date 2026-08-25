@@ -17,7 +17,7 @@ import re
 from pathlib import Path
 
 from .menus import Menus, battle_menu_up, naming_keyboard_up, _cursor_x
-from .state import EGG
+from .state import EGG, MON_NAME_LENGTH
 
 log = logging.getLogger("trek")
 
@@ -170,14 +170,28 @@ class Battle:
         off = lambda f: sym.offset(base_label + f, base_label)
         return lambda f, n=1: self.emu.read((bank, base + off(f)), n)
 
+    def _party_nickname(self, slot):
+        """Nickname of party slot `slot`, straight from wPartyMonNicknames."""
+        bank, base = self.emu.sym["wPartyMonNicknames"]
+        raw = self.emu.read((bank, base + slot * MON_NAME_LENGTH),
+                            MON_NAME_LENGTH)
+        return self.emu.charmap.decode(raw)
+
     def me(self):
+        """Active battler snapshot. Identity: 'name' is the SPECIES name
+        (compat -- it CHANGES on mid-battle evolution and is shared by
+        duplicate mons); 'nickname' + 'party_slot' are the stable handles
+        policies should match on (wCurBattleMon -> wPartyMonNicknames)."""
         rd = self._struct_reader("wBattleMon")
         moves = list(rd("Moves", 4))
         pps = list(rd("PP", 4))
         species = rd("Species")[0]
+        slot = self.emu.read_u8("wCurBattleMon")
         return {
             "species": species,
             "name": self.names.species.get(species, "?"),
+            "nickname": self._party_nickname(slot),
+            "party_slot": slot,
             "level": rd("Level")[0],
             "hp": int.from_bytes(rd("HP", 2), "big"),
             "max_hp": int.from_bytes(rd("MaxHP", 2), "big"),
@@ -186,11 +200,17 @@ class Battle:
         }
 
     def enemy(self):
+        """Enemy battler snapshot; 'nickname' is the displayed name
+        (wEnemyMonNickname) and 'party_slot' the OT party index
+        (wCurOTMon; meaningless for wild mons)."""
         rd = self._struct_reader("wEnemyMon")
         species = rd("Species")[0]
         return {
             "species": species,
             "name": self.names.species.get(species, "?"),
+            "nickname": self.emu.read_text("wEnemyMonNickname",
+                                           MON_NAME_LENGTH),
+            "party_slot": self.emu.read_u8("wCurOTMon"),
             "level": rd("Level")[0],
             "hp": int.from_bytes(rd("HP", 2), "big"),
             "max_hp": int.from_bytes(rd("MaxHP", 2), "big"),
@@ -635,6 +655,23 @@ class Battle:
             vitals = None
         return (tuple(rows), battle_menu_up(rows), vitals)
 
+    # stat-page fingerprint: the level-up stat sheet lists these labels
+    STAT_PAGE_LABELS = ("ATTACK", "DEFENSE", "SPCL", "SPEED")
+
+    @staticmethod
+    def _levelup_screen(rows):
+        """Benign level-up pages -- the 'grew to level N!' announcement and
+        the stat sheet it opens -- hold text AND vitals perfectly still,
+        exactly like a freeze, but a plain A advances them. They are
+        PROGRESS: never confirm-wait on them, never print the wedge
+        diagnostic (the pt5c grind spammed dozens of frozen-screen dumps
+        on these). A truly stuck level-up page is still bounded by the
+        caller's frame cap."""
+        joined = " ".join(rows).upper()
+        if "GREW TO" in joined:
+            return True
+        return sum(1 for s in Battle.STAT_PAGE_LABELS if s in joined) >= 3
+
     def _log_wedge_diag(self, rows):
         log.warning("[battle diagnostic] frozen screen (state unchanged):")
         for r in rows:
@@ -656,6 +693,11 @@ class Battle:
         ('item', name), ('switch', party_idx); defaults to smart damage +
         auto-POTION + fleeing hopeless wild fights. Returns 'won' | 'fled'
         | 'caught' | 'wipe' | 'timeout' | 'naming' | 'stuck' | 'wedged'.
+        Identity: policies SHOULD match their roster on me['nickname'] /
+        me['party_slot'] -- me['name'] is the SPECIES name and silently
+        changes on mid-battle/mid-grind EVOLUTION (the pt5c TOGEPI policy
+        matched 'TOGEPI', PEBBLE evolved to TOGETIC, and the mon Struggled
+        to death for 5 cycles).
         Policy actions that cannot work this turn (switch to a fainted/
         EGG/missing slot, item or ball not in the bag, attack slot empty
         or dry) are substituted with the default policy's pick after one
@@ -689,7 +731,7 @@ class Battle:
                 wedge_reps += 1
             else:
                 wedge_snap, wedge_reps, wedge_recovered = snap, 0, False
-            if wedge_reps >= self.WEDGE_REPS:
+            if wedge_reps >= self.WEDGE_REPS and not self._levelup_screen(rows):
                 # Same text AND same vitals over several passes: either a
                 # long animation or a genuine freeze. Confirm before
                 # escalating -- an animation moves within the window.

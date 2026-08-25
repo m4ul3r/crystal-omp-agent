@@ -147,7 +147,8 @@ def test_policy_forgets_requested_mid_list_move(caplog):
     assert learn_lines(caplog) == [
         f"LEARN: {MON} forgot RAGE -> learned {NEW} (slot 3)"]
     assert d.move_changes == [{"mon": MON, "forgot": "RAGE",
-                               "learned": NEW, "slot": 3}]
+                               "learned": NEW, "slot": 3,
+                               "source": "policy"}]
     assert policy_warnings(caplog) == []
 
 
@@ -176,7 +177,8 @@ def test_policy_none_falls_back_to_auto_byte_identical(caplog):
     assert w_pol["moves"] == w_auto["moves"] == [NEW, "WATER GUN",
                                                  "RAGE", "SCRATCH"]
     assert d_pol.move_changes == d_auto.move_changes == [
-        {"mon": MON, "forgot": "BITE", "learned": NEW, "slot": 1}]
+        {"mon": MON, "forgot": "BITE", "learned": NEW, "slot": 1,
+         "source": "auto"}]
     assert policy_warnings(caplog) == []
 
 
@@ -202,7 +204,8 @@ def test_policy_stale_move_warns_once_and_falls_back(caplog):
     # auto took over: slot 1 sacrificed, change recorded normally
     assert world["moves"] == [NEW, "WATER GUN", "RAGE", "SCRATCH"]
     assert d.move_changes == [{"mon": MON, "forgot": "BITE",
-                               "learned": NEW, "slot": 1}]
+                               "learned": NEW, "slot": 1,
+                               "source": "auto-fallback"}]
 
 
 # -- (e) policy raises: one warning + auto ------------------------------------
@@ -218,7 +221,8 @@ def test_policy_exception_warns_once_and_falls_back(caplog):
     assert len(raised) == 1 and "model asleep" in raised[0]
     assert world["moves"] == [NEW, "WATER GUN", "RAGE", "SCRATCH"]
     assert d.move_changes == [{"mon": MON, "forgot": "BITE",
-                               "learned": NEW, "slot": 1}]
+                               "learned": NEW, "slot": 1,
+                               "source": "auto-fallback"}]
 
 
 # -- HM request: refused up front, auto takes over ----------------------------
