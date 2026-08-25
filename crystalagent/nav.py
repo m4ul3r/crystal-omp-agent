@@ -121,6 +121,25 @@ class MapData:
                 self.warps[const] = warps
                 self.warp_cells[const] = cells
 
+        # CONST_NAME -> {(bx, by): {block, ...}} declared changeblock
+        # variants from maps/<CamelCase>.asm: hidden doors/stairs/boulders
+        # the map script can swap in. Coords in the script are STEP coords
+        # of the block's top-left cell (the engine adds the +4 border then
+        # halves), so block = (x//2, y//2). Macro-generated changeblocks
+        # with symbolic coords (Goldenrod underground doors) are not
+        # scanned -- literal-int declarations only.
+        self.changeblocks = {}
+        for camel, const in inv.items():
+            path = repo / "maps" / f"{camel}.asm"
+            if not path.exists():
+                continue
+            for m in re.finditer(r"\tchangeblock\s+(\d+),\s*(\d+),\s*"
+                                 r"\$([0-9a-fA-F]+)", path.read_text()):
+                x, y, b = (int(m.group(1)), int(m.group(2)),
+                           int(m.group(3), 16))
+                self.changeblocks.setdefault(const, {}) \
+                    .setdefault((x // 2, y // 2), set()).add(b)
+
         self._coll_cache = {}
         self._grid_cache = {}
         self._cell_overrides = {}    # {(const, x, y): original collision}
@@ -137,7 +156,13 @@ class MapData:
         return self._coll_cache[tileset]
 
     def grid(self, const_name):
-        """Collision byte per walkable cell: grid[y][x], 2*w x 2*h cells."""
+        """Collision byte per walkable cell: grid[y][x], 2*w x 2*h cells.
+
+        Decodes the DEFAULT blockdata (verified byte-exact against the
+        built ROM and GetCoordTileCollision's block*4 + (y&1)*2 + (x&1)
+        quadrant math). Cells a map script can swap via changeblock are
+        listed by conditional() -- their static byte is only the
+        pre-event state."""
         if const_name in self._grid_cache:
             return self._grid_cache[const_name]
         camel = self.camel[const_name]
@@ -152,6 +177,59 @@ class MapData:
                     grid[by * 2 + (i // 2)][bx * 2 + (i % 2)] = c
         self._grid_cache[const_name] = grid
         return grid
+
+    def conditional(self, const_name):
+        """Event-conditional cells: the map script declares changeblock(s)
+        for their block (hidden doors, uncovered stairs, falling boulders),
+        so the static grid() byte is only the pre-event state -- probe live
+        before trusting wall/floor there. Returns {(x, y): (byte, ...)}
+        of the possible collision bytes (sorted, default included),
+        restricted to cells whose byte actually differs between the
+        default blockdata and a declared variant: the B2F transmitter
+        door only flags its (14,12)/(15,12) top half; the (14,13)/(15,13)
+        half is floor in both states."""
+        cache = self.__dict__.setdefault("_conditional_cache", {})
+        if const_name in cache:
+            return cache[const_name]
+        out = {}
+        decls = getattr(self, "changeblocks", {}).get(const_name)
+        if decls:
+            camel = self.camel[const_name]
+            _, _, w, h = self.consts[const_name]
+            blocks = (self._repo / self.blk[camel]).read_bytes()
+            table = self._tileset_coll(self.tileset[camel])
+            for (bx, by), variants in decls.items():
+                if not (0 <= bx < w and 0 <= by < h):
+                    continue
+                cand = [table[blocks[by * w + bx]]] + \
+                    [table[b] for b in sorted(variants) if b < len(table)]
+                for i in range(4):
+                    vals = {c[i] for c in cand}
+                    if len(vals) > 1:
+                        out[(bx * 2 + i % 2, by * 2 + i // 2)] = \
+                            tuple(sorted(vals))
+        cache[const_name] = out
+        return out
+
+    def cell_kind(self, const_name, x, y):
+        """Coarse class for planners/renders: 'conditional' when a declared
+        changeblock can swap this cell's collision (never trust wall/floor
+        there statically), else 'floor'/'grass'/'ice'/'water'/'warp'/
+        'ledge'/'wall'."""
+        if (x, y) in self.conditional(const_name):
+            return "conditional"
+        c = self.grid(const_name)[y][x]
+        if c in WALKABLE:
+            return "floor" if c == 0x00 else "grass"
+        if c in ICE:
+            return "ice"
+        if c in WATER:
+            return "water"
+        if c in WARPS:
+            return "warp"
+        if c in HOPS:
+            return "ledge"
+        return "wall"
 
     @staticmethod
     def _offset(expr):
@@ -457,14 +535,18 @@ class MapData:
 
     def render(self, const_name, mark=None):
         """Debug view: '.' floor, '"' grass, '#' blocked, '~' water,
-        '>' warp, 'v<^' ledges, '@' the mark."""
+        '>' warp, 'v<^' ledges, '?' event-conditional (changeblock door/
+        stairs -- probe live), '@' the mark."""
         grid = self.grid(const_name)
+        cond = self.conditional(const_name)
         out = []
         for y, row in enumerate(grid):
             line = ""
             for x, c in enumerate(row):
                 if mark == (x, y):
                     line += "@"
+                elif (x, y) in cond:
+                    line += "?"
                 elif c == 0x00:
                     line += "."
                 elif c in (0x14, 0x18):

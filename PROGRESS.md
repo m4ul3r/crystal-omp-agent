@@ -17,6 +17,32 @@ Warnings for next sessions:
 - B1F west room exits via the (5,15) teleporter to (25,1), not row 16.
 - Ice gym: `slide()` helper (press+settle, log p0->p1, fight on event) beats
   any BFS; dead-end pocket at (9,2).
+[fix] GridTruthFixer (Aug 25): B2F/B1F "off-by-rows/phantom walls" diagnosed —
+grid() decode is byte-exact vs the ROM (blk/tilecoll/GetCoordTileCollision all
+verified); the real liars were changeblock doors: nav now exposes them via
+conditional()/cell_kind()=='conditional'/render() '?' ((14,12)-(15,12) B2F door,
+B3F (10,9)-(11,9), Mahogany Mart stairs (7,3)); note: row 16 has a REAL pipe
+pillar at x6 (block $3e). tests/unit/test_wren_pt6_nav_grid.py (10 green).
+[fix] PackCursorFixer (Aug 25): party/pack rows are now TEXT-targeted — new
+Menus.select_row_text / Driver.select_menu_row finds the row naming the label
+(word-bounded or _item_row_matches), steps the exact cursor delta (column-band
+glyph pick ignores the party ▶ behind submenus and stale ▷ leftovers), verifies
+every press, and scroll-searches D-then-U at list pins; party_swap SWITCH,
+use_cut CUT, and _pocket_select's confirm all use it (field moves above SWITCH
+no longer misfire). tests/unit/test_wren_pt6_submenu_rows.py (11 green).
+[fix] HealRecoveryFixer (Aug 25): heal_pokecenter called mid-composite outside
+a PC no longer explodes — it now travel()s into the current map's routable
+Pokécenter warp first (bounded `tries` kwarg); genuinely unreachable -> new
+HealError (carries map, still a RuntimeError), and registry resolve('heal')
+returns {'ok': False, 'reason', 'map'} instead of propagating. Success shape
+unchanged. tests/unit/test_heal_recovery.py (11 green).
+[fix] GotoNoopFixer (Aug 25): goto no longer no-ops silently — every
+navigation failure funnels through _goto_fail: d.last_goto_reason now
+distinguishes 'outside-bounds:'/'unreachable:'/'target-occupied:' (NPC
+standing on the goal, 3-pass wander tolerance), and a new goto(...,
+strict=True) kwarg raises TravelError on those (handoffs — manual battle,
+choice menu — still return False); travel's approach-fallback TravelError
+carries the last goto reason. tests/unit/test_goto_loud_failures.py (10 green).
 
 # PROGRESS — Pokémon Crystal run
 
@@ -204,6 +230,11 @@ d. mart qty-box screen parsing is fragile; wrap single-unit cycles +
    bag-delta verification as fallback.
 e. hatch-naming: egg in party => poll keyboard_open during walking
    segments (freeze shipped; detection cadence is the open half).
+**LEG 3 CLAIMED Aug 24 2026: GOLDENROD + PLAIN BADGE (Whitney).**
+Resuming from `moss-hive.state`. Mission order: (1) Name Rater — rename
+TOGEPI "AAAAAAAAAA" → plant name; (2) Whitney with rotation roster
+intact. Route: Ilex Farfetch'd herd → HM01 → R34 → Goldenrod. Ledger
+continues in `omp_saves/moss-ledger.md`.
 
 ## session claude-wren pt3 — PLAIN BADGE (DONE, Aug 24 2026)
 **3/8 badges.** Azalea→Ilex (Farfetch'd herding solved by reading the position

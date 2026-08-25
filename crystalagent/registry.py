@@ -19,10 +19,16 @@ class Action:
     fn: object | None = None         # non-Driver callable taking (d)
 
 
-def _heal(d):
+def _heal(d, tries=None):
     # lazy import: trek (repo root) imports siblings of this package
     import trek
-    return trek.heal_pokecenter(d)
+    kw = {} if tries is None else {"tries": tries}
+    try:
+        return trek.heal_pokecenter(d, **kw)
+    except trek.HealError as e:
+        # recoverable planning failure, not a crash: report it structured
+        # so autopilot/serve keep the composite alive (wren pt4/pt5)
+        return {"ok": False, "reason": str(e), "map": e.map_name}
 
 
 ACTIONS = {
@@ -34,7 +40,7 @@ ACTIONS = {
         Action("fight", optional=("max_frames", "policy"), need_battle=True),
         Action("catch", optional=("ball", "max_balls", "nickname"),
                need_battle=True),
-        Action("heal", fn=_heal),
+        Action("heal", fn=_heal, optional=("tries",)),
         Action("talk_to", required=("x", "y"), optional=("label", "facing"),
                need_battle=False),
         Action("mart_buy", required=("x", "y", "item_name"),
@@ -49,10 +55,9 @@ ACTIONS = {
         Action("resolve_choice", optional=("choice",)),
         Action("who_fights", need_battle=True),
         Action("gym_scout", required=("map",)),
-        Action("route", required=("dest_map",), optional=("max_cost",),
-               need_battle=False),
         Action("travel", required=("dest_map",), optional=("label",),
                need_battle=False),
+        Action("name_prompt", required=("name",), need_battle=False),
         Action("step_dir", required=("mv",), optional=("max_frames",),
                need_battle=False),
         Action("press", required=("seq",)),
@@ -92,7 +97,7 @@ def callable_for(d, name):
     """The bound callable for a validated action name."""
     act = ACTIONS[name]
     if act.fn is not None:
-        return lambda **kw: act.fn(d)
+        return lambda **kw: act.fn(d, **kw)
     return getattr(d, act.method or name)
 
 

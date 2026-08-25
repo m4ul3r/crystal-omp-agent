@@ -7,6 +7,8 @@ the same screen text we already decode. Scrolling lists additionally track
 their absolute position in WRAM (wMenuScrollPosition + wMenuCursorY).
 """
 
+import re
+
 from .emu import parse_sequence
 
 
@@ -91,6 +93,88 @@ class Menus:
             self.press("D:6 .:4")
             pressed += 1
         return False
+
+    def select_row_text(self, label, max_presses=14, confirm=True,
+                        match=None, confirm_seq="A:2 .:10"):
+        """Text-targeted row selection for menus whose LAYOUT VARIES:
+        the party slot submenu lists the selected mon's field moves
+        (CUT/SURF/STRENGTH/...) ABOVE the fixed STATS/SWITCH rows, and
+        pack windows scroll -- so positional press counts select the
+        wrong entry (wren pt6: field-Strength misfires during reorder).
+
+        Finds the visible row whose text names `label` (word-bounded,
+        or a custom `match(text)` predicate), takes the cursor glyph in
+        that menu's COLUMN (the party list keeps its own glyph painted
+        behind the submenu box), and steps the signed row delta one
+        press at a time, re-reading the screen after every press. A
+        label scrolled off-screen is searched for by walking the window
+        DOWN, then UP once the list pins. Returns True only when the
+        cursor verifiably sits on the matching row (A pressed when
+        `confirm`; `confirm_seq` lets callers use a longer press for
+        menus that swallow the short one)."""
+        up = label.strip().upper()
+        pat = re.compile(r"(?<![A-Z0-9])" + re.escape(up) + r"(?![A-Z0-9])")
+        if match is None:
+            def match(text):
+                return bool(pat.search(text.upper()))
+
+        def target(rows):
+            """(row, column) where the matched label's text starts."""
+            for y, row in enumerate(rows):
+                gx = _cursor_x(row)
+                text = row[gx + 1:] if gx >= 0 else row
+                if match(text):
+                    m = pat.search(text.upper())
+                    off = m.start() if m else \
+                        len(text) - len(text.lstrip(" "))
+                    return y, (gx + 1 if gx >= 0 else 0) + off
+            return None
+
+        presses = stuck = 0
+        prev = last_rows = None
+        search_dir, flipped = "D", False
+        while True:
+            rows = self.screen()
+            curs = [(y, _cursor_x(r)) for y, r in enumerate(rows)
+                    if _cursor_x(r) >= 0]
+            tgt = target(rows)
+            if tgt is not None:
+                y_tgt, x_tgt = tgt
+                # cursors of THIS menu sit immediately left of its
+                # label column; glyphs elsewhere (party list behind a
+                # submenu, stale leftovers) are ignored
+                band = [c for c in curs if x_tgt - 2 <= c[1] < x_tgt]
+                if any(y == y_tgt for y, _ in band):
+                    if confirm:
+                        self.press(confirm_seq)
+                    return True
+            if presses >= max_presses:
+                return False
+            if tgt is None:
+                # off-screen (scrolled list): identical rows after a
+                # press mean the window pinned -- reverse once
+                if last_rows is not None and rows == last_rows:
+                    if flipped:
+                        return False
+                    search_dir, flipped = "U", True
+                last_rows = rows
+                self.press(f"{search_dir}:6 .:8")
+                presses += 1
+                continue
+            ref = band[0] if band else (curs[0] if curs else None)
+            if ref is None:
+                stuck += 1
+                if stuck >= 4:
+                    return False   # no cursor painted: wrong screen
+                self.press(".:6")  # tilemap paint lag: poll, don't press
+                continue
+            key = (ref[0], ref[1], y_tgt)
+            stuck = stuck + 1 if key == prev else 0
+            if stuck >= 3:
+                return False       # cursor pinned: wrong menu or edge
+            prev = key
+            self.press("D:6 .:8" if y_tgt > ref[0] else "U:6 .:8")
+            presses += 1
 
     def select_abs(self, target, max_steps=30, confirm=True):
         """Navigate a scrolling list until the absolute selection index is

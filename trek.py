@@ -35,6 +35,20 @@ class TravelError(RuntimeError):
     """travel(): a transition landed somewhere the plan didn't expect."""
 
 
+class HealError(RuntimeError):
+    """heal_pokecenter(): no nurse reachable from here. Carries the map
+    name so callers (registry 'heal') can report a structured failure
+    instead of exploding mid-composite. Subclasses RuntimeError so old
+    `except RuntimeError` guards keep working."""
+
+    def __init__(self, map_name, detail=""):
+        self.map_name = map_name
+        msg = f"heal_pokecenter: not inside a Pokécenter (on {map_name})"
+        if detail:
+            msg += f" -- {detail}"
+        super().__init__(msg)
+
+
 # EnterMapConnection: stepping off `letter`'s edge from (x, y) with the
 # connection's `off` lands on the destination at -- (dw = dest width in
 # cells, dh = dest height). Same math as nav._conn_landing.
@@ -1189,6 +1203,18 @@ class Driver:
             return True
         except Exception:
             return False
+
+    def name_prompt(self, name):
+        """Registry 'name_prompt': give a DELIBERATE name on whatever
+        naming keyboard is currently open (hatch prompts, catch naming).
+        The press() freeze blocks every other input source while this
+        runs, so persona names land exactly once. Precondition: a naming
+        screen must be up (keyboard_open)."""
+        if not self.keyboard_open():
+            raise ValueError(
+                "name_prompt: no naming keyboard open -- poll "
+                "keyboard_open() after hatches/catches first")
+        self.dismiss_keyboard(name)
 
     def dismiss_keyboard(self, name=None):
         """Confirm a naming screen. With a name, actually type it; without,
@@ -2360,8 +2386,11 @@ class Driver:
                 return False
             self.press("A:4 .:25")
             if label == "first":
-                # slot menu: STATS / SWITCH / ITEM / CANCEL
-                if not self.menu.select_label("SWITCH", max_presses=6):
+                # slot menu: the mon's FIELD MOVES (CUT/SURF/STRENGTH/..)
+                # list ABOVE the fixed STATS/SWITCH rows, so the row
+                # count varies per mon -- steer by row TEXT, never by
+                # position (wren pt6: blind counts fired Strength)
+                if not self.select_menu_row("SWITCH", max_presses=8):
                     self.close_menus()
                     log.info("  SWITCH entry not found")
                     return False
@@ -2452,25 +2481,9 @@ class Driver:
         if not sub:
             self.close_menus()
             raise RuntimeError("use_cut: POKéMON submenu never opened")
-        hit = False
-        # the party list stays visible behind the submenu box, so scan
-        # every cursor row -- not just the first one
-        def cut_on_cursor():
-            rows = [r.strip().upper() for r in self.emu.screen_text()
-                    if ("▶" in r or "▷" in r)]
-            return any("CUT" in r for r in rows)
-        for _ in range(8):
-            if cut_on_cursor():
-                hit = True
-                break
-            self.press("D:4 .:16")
-        if not hit:
-            for _ in range(8):
-                self.press("U:4 .:16")
-                if cut_on_cursor():
-                    hit = True
-                    break
-        if not hit:
+        # the party list stays visible behind the submenu box and field
+        # moves sit ABOVE STATS/SWITCH, so steer by row TEXT (wren pt6)
+        if not self.select_menu_row("CUT", confirm=False, max_presses=10):
             raise RuntimeError("use_cut: CUT row missing from the "
                                "POKéMON submenu")
         self.press("A:6 .:50")                        # use CUT
@@ -2510,6 +2523,32 @@ class Driver:
             n += 10
         return False
 
+    def select_menu_row(self, label, max_presses=14, confirm=True,
+                        match=None, confirm_seq="A:6 .:18"):
+        """Text-targeted submenu/list selection (Menus.select_row_text):
+        find the row whose text names `label` (or satisfies `match`),
+        step the cursor exactly to it, verify after every press, then
+        confirm. First-class because variable-layout submenus -- the
+        party slot menu lists field moves ABOVE SWITCH -- and scrolled
+        pack windows make positional press counts unsafe (wren pt6).
+        The long default confirm press avoids the swallowed-A gotcha
+        (START menu / pack, gotcha 2)."""
+        fn = getattr(self.menu, "select_row_text", None)
+        if fn is not None:
+            return fn(label, max_presses=max_presses, confirm=confirm,
+                      match=match, confirm_seq=confirm_seq)
+        # duck-typed fakes / older Menus: best-effort select_label fallback
+        legacy = getattr(self.menu, "select_label", None)
+        if legacy is None:
+            return False
+        try:
+            return legacy(label, max_presses=max_presses, confirm=confirm)
+        except TypeError:
+            try:
+                return legacy(label, max_presses=max_presses)
+            except TypeError:
+                return legacy(label)
+
     def _pocket_select(self, idx, item_name, max_steps=40):
         """Steer the items-pocket cursor to absolute index `idx` and
         confirm with A. The pocket REMEMBERS its cursor between opens
@@ -2519,11 +2558,11 @@ class Driver:
         climb back up (leg-2 'no potion visible' with 2 in the bag).
         Navigate on the live WRAM index (wMenuScrollPosition +
         wMenuCursorY) in BOTH directions, then verify the highlighted
-        row's TEXT really is the item before pressing A. The verify
-        normalizes BOTH sides (_item_row_matches: case/space/hyphen/POKe
-        blind, quantity-digit and edge-clip tolerant) and prefers the
-        ACTIVE list cursor row over a stale submenu leftover (wren pt4:
-        two-word 'SUPER POTION' never confirmed)."""
+        row's TEXT really is the item before pressing A (wren pt6:
+        select_menu_row -- _item_row_matches normalizes BOTH sides,
+        case/space/hyphen/POKe blind, quantity-digit and edge-clip
+        tolerant, and the column-band cursor pick ignores stale ▷/▶
+        leftovers that shadowed 'SUPER POTION' in wren pt4)."""
         want = _norm_item(item_name)
         last, stuck = None, 0
         for _ in range(max_steps):
@@ -2538,22 +2577,26 @@ class Driver:
         else:
             return False
         self.press(".:10")      # let the row repaint before scraping
-        scrape = self.menu.cursor_row()
-        got = scrape[1] if scrape else None
-        if got is not None and _item_row_matches(got, want):
-            self.press("A:6 .:18")
-            return True
-        # cursor_row returns the FIRST glyph row on screen; a stale ▷/▶
-        # leftover higher up (submenu remnants, START-menu row) shadows
-        # the live selection -- rescan for an ACTIVE ▶ row naming the
-        # item before giving up
-        for row in self.emu.screen_text():
-            x = row.find("▶")
-            if x >= 0 and _item_row_matches(row[x + 1:], want):
+        # text-targeted verify + confirm: the helper re-checks the row
+        # under the ACTIVE cursor and can correct a small WRAM/screen
+        # disagreement by text -- but never blind-A's a mismatched row
+        if getattr(self.menu, "select_row_text", None) is None and \
+                hasattr(self.menu, "cursor_row"):
+            # older Menus / duck-typed fakes: verify the highlighted row's
+            # text directly (pre-pt6 algorithm), rescanning the visible
+            # rows for the ACTIVE glyph when a stale leftover shadows it
+            row = self.menu.cursor_row()
+            texts = [row[1] if isinstance(row, tuple) else row]
+            texts += [l for l in self.emu.screen_text() if "\u25b6" in l]
+            if any(_item_row_matches(t.replace("\u25b6", " "), want)
+                   for t in texts if t):
                 self.press("A:6 .:18")
                 return True
+        elif self.select_menu_row(item_name, max_presses=4,
+                                  match=lambda t: _item_row_matches(t, want)):
+            return True
         log.info(f"  pocket row mismatch: want {item_name!r} "
-                 f"(norm {want}), cursor row {got!r}")
+                 f"(norm {want}), cursor row {self.menu.cursor_row()!r}")
         return False        # WRAM/screen disagree: never blind-A
 
     def _party_target(self, slot, max_steps=12):
@@ -2722,11 +2765,32 @@ class Driver:
                 return const
         raise SystemExit(f"unknown map {name!r}")
 
-    def goto(self, x, y, label="", map_name=None):
+    def _goto_fail(self, reason, strict, where=""):
+        """Loud goto failure (wren pt6: 'goto silently no-ops on
+        unreachable targets'): record the machine-checkable reason on
+        d.last_goto_reason, log the GAVE UP, and either return False
+        or -- strict=True -- raise TravelError so callers that never
+        check the return value stop instead of drifting."""
+        self.last_goto_reason = reason
+        log.warning(f"  GAVE UP ({reason})"
+                    f"{' at ' + where if where else ''}")
+        if strict:
+            raise TravelError(f"goto: {reason}")
+        return False
+
+    def goto(self, x, y, label="", map_name=None, strict=False):
         """BFS-pathfind to (x,y) and walk it. Defaults to the current map;
         pass map_name (CONST_NAME or CamelCase) to route across maps via
         warp events and edge connections. Replans around NPC bumps; fights
-        encounters on the way."""
+        encounters on the way.
+
+        Failure is loud, never silent: every False return sets
+        d.last_goto_reason first ('outside-bounds: ...' /
+        'unreachable: ...' / 'target-occupied: ...' / the give-up
+        diagnoses). strict=True upgrades those navigation failures to
+        TravelError; interactive handoffs (manual battle, choice menu,
+        whiteout recovery) still return False under strict so the
+        decider can take over."""
         self._refresh_nav_blocks()
         goal_map = self._resolve_map(map_name)
         goal = (x, y)
@@ -2739,14 +2803,12 @@ class Driver:
         if goal_map == self.map_name():
             grid = self.nav.grid(goal_map)
             if not (0 <= x < len(grid[0]) and 0 <= y < len(grid)):
-                self.last_goto_reason = (
-                    f"target ({x},{y}) outside {goal_map} bounds "
-                    f"{len(grid[0])}x{len(grid)} -- pass map_name or use "
-                    f"travel for cross-map goals")
-                log.warning(f"  GAVE UP ({self.last_goto_reason})")
-                return False
+                return self._goto_fail(
+                    f"outside-bounds: target ({x},{y}) outside {goal_map} "
+                    f"bounds {len(grid[0])}x{len(grid)} -- pass map_name "
+                    f"or use travel for cross-map goals", strict)
         entry_map = self.map_name()
-        replans = idle = passes = drains = 0
+        replans = idle = passes = drains = occupied = 0
         edge_counts = {}    # (from_map, to_map): crossings this one call
         last_block = ""     # diagnosis text from the most recent blocked step
         reason = "unspecified"
@@ -2793,11 +2855,21 @@ class Driver:
                     # trainers.
                     path = self.nav.find_path(cur_map, cur, goal)
                     if not path:
-                        log.info(f"  no static path {cur_map} {cur} -> "
-                              f"{goal}")
-                        reason = f"no-path {cur_map} {cur} -> {goal}"
-                        self.last_goto_reason = reason
-                        return False
+                        return self._goto_fail(
+                            f"unreachable: no path from {cur} to {goal} "
+                            f"on {cur_map}", strict, f"{cur_map} {cur}")
+                    if goal in avoid:
+                        # a static route exists but an NPC is STANDING on
+                        # the goal cell: walking there can only bump. Give
+                        # a wanderer a few passes to step off, then fail
+                        # naming the real problem instead of storming.
+                        occupied += 1
+                        if occupied >= 3:
+                            return self._goto_fail(
+                                f"target-occupied: NPC standing on {goal} "
+                                f"({cur_map}) -- talk_to/face it from an "
+                                f"adjacent cell instead", strict,
+                                f"{cur_map} {cur}")
                     replans += 1
                     if replans % 5 == 1:
                         log.info(f"  threading {cur} -> {goal} past NPCs",
@@ -2809,12 +2881,10 @@ class Driver:
                     relaxed = self.nav.find_route(cur_map, cur, goal_map,
                                                   goal)
                     if not relaxed:
-                        log.info(f"  no static path {cur_map} {cur} -> "
-                              f"{goal_map} {goal}")
-                        reason = (f"no-path cross-map {cur_map} -> "
-                                  f"{goal_map} {goal}")
-                        self.last_goto_reason = reason
-                        return False
+                        return self._goto_fail(
+                            f"unreachable: no route {cur_map} {cur} -> "
+                            f"{goal_map} {goal}", strict,
+                            f"{cur_map} {cur}")
                     replans += 1
                     if replans % 5 == 0:
                         log.info(f"  threading {cur} -> {goal} past NPCs",
@@ -2931,16 +3001,19 @@ class Driver:
         if "script-scene-active" in reason:
             reason += ("; if crossing the scene cell is talk-only-safe, "
                        "set d.trip_scenes=True for this one goto")
-        self.last_goto_reason = reason
-        log.warning(f"  GAVE UP ({reason}) at {self.map_name()} "
-              f"{self.pos()[2:]} -> {goal_map} {goal}")
-        return False
+        return self._goto_fail(
+            reason, strict,
+            f"{self.map_name()} {self.pos()[2:]} -> {goal_map} {goal}")
 
     # Deliberate-trip opt-in (FABLE_FEEDBACK failure pattern 5): after
     # confirming from maps/<Map>.asm that a scene script is safe
     # (talk-only, sets scene NOOP), set d.trip_scenes = True for the one
     # goto that must cross its cell, then clear it. Never leave it on.
     trip_scenes = False
+
+    # machine-checkable diagnosis of the most recent goto failure; None
+    # until a goto has run (class default so fresh/old drivers both read)
+    last_goto_reason = None
 
     def _refresh_nav_blocks(self):
         """Mark every coord_event cell that would fire RIGHT NOW unwalkable
@@ -3238,7 +3311,8 @@ class Driver:
                 else:
                     raise TravelError(
                         f"leg {i}: no path to any approach of the next "
-                        f"{nxt['kind'] if nxt else 'transition'} on {cur}")
+                        f"{nxt['kind'] if nxt else 'transition'} on {cur} "
+                        f"(last goto: {self.last_goto_reason})")
                 i += 1
                 continue
             key = json.dumps([st["kind"], st["from"], st["to"], st["dir"],
@@ -3616,13 +3690,46 @@ class Driver:
 
 # -- legs -------------------------------------------------------------------
 
-def heal_pokecenter(d):
-    """From inside any Pokécenter: talk to the nurse, wait out the jingle.
-    Verifies the location on entry and the actual heal on exit -- an
-    unverified 'healed' claim once masked a failed goto entirely."""
+def _enter_local_pokecenter(d, tries):
+    """heal called outside a Pokécenter: if the CURRENT map has a routable
+    Pokécenter warp in the mapgraph, walk in via the normal travel
+    machinery (goto approach + held warp entry) instead of exploding.
+    Bounded by `tries` travel attempts; raises HealError otherwise."""
+    here = d.map_name()
+    pcs = sorted({e["to_map"] for e in mapgraph()["edges"]
+                  if e.get("routable") and e["from_map"] == here
+                  and "POKECENTER" in e["to_map"]})
+    if not pcs:
+        raise HealError(here, "no Pokécenter warp on this map")
+    pc = pcs[0]
+    tries = max(1, int(tries))
+    last = None
+    for attempt in range(1, tries + 1):
+        log.info(f"  heal: not in a Pokécenter (on {here}); "
+                 f"entering {pc} (try {attempt}/{tries})")
+        try:
+            d.travel(pc, label="heal detour")
+        except Exception as e:            # TravelError, LookupError, ...
+            last = e
+            log.info(f"  heal detour attempt {attempt} failed: {e}")
+        if "POKECENTER" in d.map_name():
+            return
+    raise HealError(d.map_name(),
+                    f"couldn't enter {pc} after {tries} "
+                    f"tr{'y' if tries == 1 else 'ies'}"
+                    + (f" ({last})" if last else ""))
+
+
+def heal_pokecenter(d, tries=2):
+    """Talk to the nurse, wait out the jingle. Verifies the location on
+    entry and the actual heal on exit -- an unverified 'healed' claim once
+    masked a failed goto entirely. Called outside a Pokécenter, walks in
+    first when the current map has a routable Pokécenter warp in the
+    mapgraph (bounded by `tries`); raises HealError when it genuinely
+    cannot reach a nurse (wren pt4/pt5: the old bare RuntimeError blew up
+    whole composites over a recoverable one-map detour)."""
     if "POKECENTER" not in d.map_name():
-        raise RuntimeError(
-            f"heal_pokecenter: not inside a Pokécenter (on {d.map_name()})")
+        _enter_local_pokecenter(d, tries)
 
     def _hp_snapshot():
         return tuple(m["hp"] for m in game_state(d.emu, d.names)["party"])
