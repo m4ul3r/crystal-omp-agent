@@ -64,6 +64,14 @@ class EnemyMon(_Strict):
     max_hp: int
 
 
+class EnemyObs(_Strict):
+    species: int
+    name: str
+    level: int
+    hp: int
+    max_hp: int
+
+
 class BattleState(_Strict):
     mode: Union[str, int]
     enemy: EnemyMon
@@ -116,6 +124,7 @@ class ObserveOut(_Strict):
     flags: dict[str, bool]
     npcs: list[list[int]]
     ui: UIState
+    enemy: Optional[EnemyObs] = None   # present only while battling
     frame: int
 
 

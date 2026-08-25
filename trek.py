@@ -768,6 +768,17 @@ class Driver:
                    "battle": bool(s["battle"])},
             "frame": s["frame"],
         }
+        if s["battle"]:
+            # foe visibility during battles: targeting decisions for
+            # catching/type-matching were blind without it (omp-fresh
+            # Q&A #3.2)
+            try:
+                en = Battle(self.emu, self.names, self.bdata).enemy()
+                obs["enemy"] = {"species": en["species"], "name": en["name"],
+                                "level": en["level"], "hp": en["hp"],
+                                "max_hp": en["max_hp"]}
+            except Exception:
+                pass
         return validate_observe(obs)
 
     def settle(self, quiet=3, spacing=20, max_frames=900):
@@ -1355,6 +1366,93 @@ class Driver:
             self._pending_nickname = None
 
     # -- rotation trainer ---------------------------------------------------
+
+    def catch_up(self, nickname=None, ball="POKE BALL", max_balls=6,
+                 max_encounters=12, label=""):
+        """Catch-composition primitive: pace into the nearest grass belt
+        on the current map, engage wilds, and throw balls until a catch
+        lands or a budget runs out. One tool call instead of ~40 lines of
+        bespoke policy per session -- without it deciders price catching
+        as high-risk-low-reward and run solo (omp-fresh Q&A #3.1).
+        Detection is party-growth based; with a FULL party Crystal routes
+        catches to the PC and this cannot see them, so keep a slot open.
+        Raises ValueError on a grass-less map and RuntimeError when out
+        of balls mid-hunt. Returns a structured outcome dict."""
+        import random
+        if label:
+            log.info(f"[{label}] catch_up on {self.map_name()}")
+        grass = self._grass_cells()
+        if not grass:
+            raise ValueError(f"no grass on {self.map_name()} -- travel to "
+                             "a route with grass first")
+
+        def _balls():
+            return self._bag().get(_norm_item(ball), 0)
+
+        if _balls() == 0:
+            raise RuntimeError(f"catch_up: no {ball} in the bag")
+        known = {m["name"] for m in game_state(self.emu, self.names)["party"]}
+        encounters = used_total = 0
+        while encounters < max_encounters:
+            if self.battle():
+                encounters += 1
+                b0 = _balls()
+                self.catch(nickname=nickname, ball=ball, max_balls=max_balls)
+                used_total += max(0, b0 - _balls())
+                gs = game_state(self.emu, self.names)["party"]
+                fresh = [m for m in gs if m["name"] not in known]
+                if fresh:
+                    m = fresh[-1]
+                    log.info(f"  catch_up: caught {m['name']} "
+                          f"({used_total} balls, {encounters} encounters)")
+                    return {"caught": True, "species": m["name"],
+                            "nick": m.get("nickname"),
+                            "level": m["level"], "balls_used": used_total,
+                            "encounters": encounters,
+                            "party_size": len(gs)}
+                if self._bag().get(_norm_item(ball), 0) == 0:
+                    raise RuntimeError(
+                        f"catch_up: out of {ball} after {encounters} "
+                        f"encounters, {used_total} thrown -- restock")
+                continue
+            obs = self.observe()
+            cx, cy = obs["x"], obs["y"]
+            near = sorted(grass, key=lambda c: abs(c[0] - cx)
+                          + abs(c[1] - cy))[:8]
+            for tx, ty in near:
+                try:
+                    self.goto(tx, ty, "into the grass")
+                    break
+                except Exception:
+                    continue
+            else:
+                raise RuntimeError("catch_up: no reachable grass cell on "
+                                   f"{self.map_name()}")
+            steps = 0
+            while not self.battle() and steps < 60:
+                o = self.observe()
+                tiles, npcs = o["tiles"], {tuple(c) for c in o["npcs"]}
+                px, py = o["x"], o["y"]
+                opts = []
+                for dd, kind in tiles.items():
+                    if dd == "here":
+                        continue
+                    mv = dd.upper()
+                    dx, dy = STEP[mv]
+                    if (px + dx, py + dy) in npcs:
+                        continue
+                    if kind == "grass":
+                        opts += [mv] * 3      # bias toward re-entering
+                    elif kind == "floor":
+                        opts.append(mv)
+                if not opts:
+                    break                     # boxed in; outer relocates
+                res = self.step_dir(random.choice(opts))
+                if res == "battle":
+                    break
+                steps += 1
+        return {"caught": False, "species": None, "nick": None,
+                "balls_used": used_total, "encounters": encounters}
 
     # Probed plan-only (route()) and the shortest actual match wins, so the
     # list order is only a tie-breaker; covers the whole early-Johto span.

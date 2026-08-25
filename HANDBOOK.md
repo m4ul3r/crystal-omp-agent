@@ -49,6 +49,8 @@ decision or the precondition, don't bypass.
 | `step_dir` | mv | max_frames | not in battle |
 | `press` | seq | — | — |
 | `use_cut` | tree_x, tree_y | label, forget_move | not in battle |
+| `catch_up` | — | nickname, ball, max_balls, max_encounters, label | on a map with grass; needs balls |
+| `drain_scene` | — | max_frames | scene owns input (wScriptMode/boxes) |
 
 Call it from anywhere:
 
