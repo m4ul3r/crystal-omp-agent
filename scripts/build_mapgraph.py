@@ -35,6 +35,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from crystalagent.nav import MapData  # noqa: E402 (collision grids/regions)
+
 DEFAULT_REPO = Path(__file__).resolve().parent.parent.parent  # pokecrystal/
 OUT_PATH = Path(__file__).resolve().parent.parent / "data" / "mapgraph.json"
 
@@ -186,6 +189,37 @@ def build_graph(repo):
 
     warp_cells, warp_edges, objects = parse_warps_and_objects(repo, camel_of)
 
+    # Regions: connected components of each map's static walkable grid.
+    # Multi-region maps (Sprout Tower floors) have warps that are NOT
+    # mutually reachable on foot; edges carry from_regions/to_regions so
+    # planners route on (map, region), not bare maps.
+    md = MapData(repo)
+    md.surf = True   # optimistic connectivity: water is passable terrain
+
+    def landing_regions(const, x, y):
+        """Regions steppable-into after WALKING onto (x,y): None without a
+        grid, () when the landing cell is not enterable (walled -- a
+        connection transition would bonk in-game). Warp landings teleport
+        and never bonk; they use regions_at directly."""
+        try:
+            if not md._enterable(const, x, y):
+                return []
+            return list(md.regions_at(const, x, y))
+        except (KeyError, FileNotFoundError, IndexError):
+            return None
+
+    def regions_at(const, x, y):
+        try:
+            return list(md.regions_at(const, x, y))
+        except (KeyError, FileNotFoundError, IndexError):
+            return None    # no decodable collision grid for this map
+
+    def region_count(const):
+        try:
+            return md.region_map(const)[1]
+        except (KeyError, FileNotFoundError, IndexError):
+            return None
+
     nodes = {}
     for const, dims in sorted(maps.items()):
         node = dict(dims)
@@ -193,6 +227,7 @@ def build_graph(repo):
         node["file"] = f"maps/{camel_of[const]}.asm" if const in camel_of else None
         node["connections"] = sorted(conns.get(const, {}))
         node["npc_count"] = len(objects.get(const, []))
+        node["region_count"] = region_count(const)
         nodes[const] = node
 
     edges = []
@@ -210,13 +245,20 @@ def build_graph(repo):
                              f"{dest} (or is a back-warp)",
                 })
                 continue
-            edges.append({
+            edge = {
                 "from_map": src, "to_map": dest, "kind": "warp",
                 "cells": [x, y], "warp_id": wid, "dest_cell": landing,
                 "routable": True,
                 "notes": "step onto cell; door/cutscene warps only fire "
                          "with the direction held through the transition",
-            })
+            }
+            frm = regions_at(src, x, y)
+            tos = regions_at(dest, landing[0], landing[1])
+            if frm is not None:
+                edge["from_regions"] = frm
+            if tos is not None:
+                edge["to_regions"] = tos
+            edges.append(edge)
 
     # Connection edges (one directed edge per `connection` macro line).
     for src in sorted(conns):
@@ -238,7 +280,22 @@ def build_graph(repo):
             sx = x_mid = mid[0] - 2 * offset if direction in ("north", "south") else fx
             sy = mid[1] - 2 * offset if direction in ("west", "east") else fy
             entry_cell = [sx, sy]
-            edges.append({
+            frm, tos = set(), set()
+            have_grids = (regions_at(src, *band[0]) is not None
+                          and regions_at(dest, sx, sy) is not None)
+            (x1, y1), (x2, y2) = band
+            for bx in range(x1, x2 + 1):
+                for by in range(y1, y2 + 1):
+                    r = regions_at(src, bx, by) or ()
+                    frm.update(r)
+                    if not r:
+                        continue   # can't stand here; landing irrelevant
+                    if direction in ("north", "south"):
+                        lx, ly = bx - 2 * offset, fy
+                    else:
+                        lx, ly = fx, by - 2 * offset
+                    tos.update(landing_regions(dest, lx, ly) or ())
+            edge = {
                 "from_map": src, "to_map": dest, "kind": "connection",
                 "direction": direction, "offset": offset,
                 "cells": band,
@@ -256,7 +313,11 @@ def build_graph(repo):
                 },
                 "routable": True,
                 "notes": "walk off the map across the border band",
-            })
+            }
+            if have_grids:
+                edge["from_regions"] = sorted(frm)
+                edge["to_regions"] = sorted(tos)
+            edges.append(edge)
 
     graph = {
         "_meta": {
@@ -268,6 +329,8 @@ def build_graph(repo):
                 "maps/*.asm (def_warp_events, def_object_events)",
                 "macros/scripts/maps.asm (macro arg order)",
                 "engine/overworld/warp_connection.asm (EnterMapConnection math)",
+                "maps/*.blk + data/tilesets/*_collision.asm (region components"
+                " via crystalagent.nav.MapData.region_map)",
             ],
             "unmatched_constants": {"only_in_map_constants": missing,
                                     "only_in_attributes": extra},

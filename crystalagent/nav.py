@@ -18,6 +18,11 @@ WARPS = set(range(0x70, 0x80))         # doors, stairs, carpets, ladders, caves
 HOPS = {0xA0: "R", 0xA1: "L", 0xA2: "U", 0xA3: "D"}  # one-way ledges
 ICE = {0x23}                            # COLL_ICE: sliding floor
 COLL_PIT = 0x60                         # COLL_PIT: fall-through hole
+DYNAMIC = {0x12, 0x15, 0x24, 0x33}      # cut tree, headbutt tree, whirlpool,
+                                        # waterfall: removable in-game, so
+                                        # they never SPLIT a region (regions
+                                        # only split at permanent walls);
+                                        # still walls for cell-level pathing
 CONN_NAME = {"R": "east", "L": "west", "U": "north", "D": "south"}
 STEP = {"R": (1, 0), "L": (-1, 0), "U": (0, -1), "D": (0, 1)}
 
@@ -201,17 +206,138 @@ class MapData:
         if key not in self._cell_overrides:
             self._cell_overrides[key] = grid[y][x]
         grid[y][x] = coll
+        self.__dict__.setdefault("_region_cache", {}).pop(const_name, None)
 
     def clear_cell(self, const_name, x, y):
         orig = self._cell_overrides.pop((const_name, x, y), None)
         if orig is not None:
             self.grid(const_name)[y][x] = orig
+            self.__dict__.setdefault("_region_cache", {}).pop(const_name, None)
 
     def clear_overrides(self, const_name=None):
         """Restore every patched cell (optionally only one map's)."""
         for cn, x, y in [k for k in self._cell_overrides
                          if const_name in (None, k[0])]:
             self.clear_cell(cn, x, y)
+
+    def region_map(self, const_name):
+        """Connected components of the static passable grid: (ids, count).
+        ids[y][x] = component id >= 0 for passable cells, -1 for walls and
+        warp-EVENT tiles (you cannot walk THROUGH a live warp -- stepping
+        on fires it; warp-collision tiles WITHOUT an event are plain
+        floor). Passability is optimistic: grass, ice, water, ledge lips
+        count, a ledge hop merges its two sides, and REMOVABLE obstacles
+        (cut/headbutt trees, whirlpools, waterfalls -- cleared live via
+        set_cell) do not split. Components therefore only split at
+        permanent architecture -- the disconnected-floor case where warps
+        are the sole link between areas of one map (Sprout Tower floors)."""
+        cache = self.__dict__.setdefault("_region_cache", {})
+        if const_name in cache:
+            return cache[const_name]
+        grid = self.grid(const_name)
+        hgt, wid = len(grid), len(grid[0])
+        events = self.warps.get(const_name, {})
+
+        def passable(x, y):
+            if (x, y) in events:
+                return False
+            c = grid[y][x]
+            return c in WALKABLE or c in HOPS or c in ICE or c in WATER \
+                or c in DYNAMIC or c in WARPS
+
+        ids = [[-1] * wid for _ in range(hgt)]
+        count = 0
+        for sy in range(hgt):
+            for sx in range(wid):
+                if ids[sy][sx] != -1 or not passable(sx, sy):
+                    continue
+                q = deque([(sx, sy)])
+                ids[sy][sx] = count
+                while q:
+                    x, y = q.popleft()
+                    nbrs = [(x + dx, y + dy) for dx, dy in STEP.values()]
+                    # ledge hops jump the cliff tile: merge lip and landing
+                    # (undirected on purpose -- optimistic like WATER above)
+                    for d, (dx, dy) in STEP.items():
+                        if grid[y][x] in HOPS and HOPS[grid[y][x]] == d:
+                            nbrs.append((x + 2 * dx, y + 2 * dy))
+                        lx, ly = x - 2 * dx, y - 2 * dy
+                        if 0 <= lx < wid and 0 <= ly < hgt and \
+                                grid[ly][lx] in HOPS and HOPS[grid[ly][lx]] == d:
+                            nbrs.append((lx, ly))
+                    for nx, ny in nbrs:
+                        if 0 <= nx < wid and 0 <= ny < hgt and \
+                                ids[ny][nx] == -1 and passable(nx, ny):
+                            ids[ny][nx] = count
+                            q.append((nx, ny))
+                count += 1
+        cache[const_name] = (ids, count)
+        return cache[const_name]
+
+    def regions_at(self, const_name, x, y):
+        """Region ids reachable standing at (x,y): the cell's own component,
+        or -- for warp tiles / non-passable landing cells -- the components
+        you can step off into. Sorted tuple; empty when sealed all around."""
+        ids, _ = self.region_map(const_name)
+        hgt, wid = len(ids), len(ids[0])
+        if not (0 <= x < wid and 0 <= y < hgt):
+            return ()
+        if ids[y][x] >= 0:
+            return (ids[y][x],)
+        return tuple(sorted({ids[y + dy][x + dx]
+                             for dx, dy in STEP.values()
+                             if 0 <= x + dx < wid and 0 <= y + dy < hgt
+                             and ids[y + dy][x + dx] >= 0}))
+
+    def plan_route(self, edges, start_map, start, goal_map, goal=None):
+        """Region-aware map-level plan over data/mapgraph.json edges:
+        BFS on (map, region) nodes using each edge's from_regions /
+        to_regions (written by scripts/build_mapgraph.py), so a warp on a
+        disconnected part of the current map is never planned -- Sprout
+        Tower's 2F->3F stairs are unreachable from the 2F east arrival
+        area; the real route detours over the 1F walkway. Returns the
+        ordered list of edge dicts to take ([] when already there), or
+        None. `goal` (x,y) pins the goal region (needed when goal_map is
+        itself multi-region); omitted = any region of goal_map. Edges
+        missing region fields are treated permissively (wildcard)."""
+        adj = {}
+        for e in edges:
+            if e.get("routable"):
+                adj.setdefault(e["from_map"], []).append(e)
+        for lst in adj.values():
+            lst.sort(key=lambda e: (e["to_map"], e["kind"], str(e["cells"])))
+
+        goal_regions = None if goal is None else \
+            set(self.regions_at(goal_map, *goal))
+
+        def done(m, r):
+            return m == goal_map and (
+                goal_regions is None or r is None or r in goal_regions)
+
+        starts = [(start_map, r)
+                  for r in self.regions_at(start_map, *start)]
+        prev = {s: None for s in starts}
+        q = deque(starts)
+        while q:
+            node = q.popleft()
+            m, r = node
+            if done(m, r):
+                legs = []
+                while prev[node]:
+                    node, e = prev[node]
+                    legs.append(e)
+                return legs[::-1]
+            for e in adj.get(m, ()):
+                frm = e.get("from_regions")
+                if frm is not None and r is not None and r not in frm:
+                    continue
+                tos = e.get("to_regions")
+                for nr in ([None] if tos is None else tos):
+                    nxt = (e["to_map"], nr)
+                    if nxt not in prev:
+                        prev[nxt] = (node, e)
+                        q.append(nxt)
+        return None
 
     def _warp_landing(self, const_name, edge):
         """Where stepping onto warp cell `edge` on `const_name` puts you:
