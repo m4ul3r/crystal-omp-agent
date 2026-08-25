@@ -1,5 +1,5 @@
-"""Fresh-boot intro for session vega: raw power-on -> named player ->
-overworld control -> save saves/vega.state. Run: .venv/bin/python
+"""Fresh-boot intro for session omp-fresh: raw power-on -> named player ->
+overworld control -> save omp_saves/omp-fresh-intro.state. Run: .venv/bin/python
 scripts/vega_intro.py"""
 import logging, sys, time
 from pathlib import Path
@@ -11,8 +11,8 @@ log = logging.getLogger("vega")
 import trek  # noqa: E402  (registers everything)
 from crystalagent import emu as emu_mod  # noqa: E402
 
-STATE = Path("saves/vega.state")
-PLAYER = "VEGA"
+STATE = Path("omp_saves/omp-fresh-intro2.state")
+PLAYER = "HERDR"
 
 _orig = emu_mod.Crystal.__init__
 def _patched(self, rom, sym, cm, state_path):
@@ -42,8 +42,6 @@ e.tick(60)
 deadline = time.time() + 600
 named = False
 while time.time() < deadline:
-    d.press(".:20")
-    e.tick(10)                                # screen text lags the window
     if d.keyboard_open():
         log.info("naming keyboard up; typing %s", PLAYER)
         d.type_name(PLAYER)
@@ -51,7 +49,12 @@ while time.time() < deadline:
         named = True
         e.tick(120)
         continue
+    d.press(".:20")
+    e.tick(10)
+    if d.keyboard_open():
+        continue
     d.press("A:4")
+    e.tick(30)
     try:
         g, n = e.read_u8("wMapGroup"), e.read_u8("wMapNumber")
         sm = e.read_u8("wScriptMode")

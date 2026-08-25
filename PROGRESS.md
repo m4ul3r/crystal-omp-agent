@@ -1,5 +1,156 @@
 # PROGRESS — Pokémon Crystal run
 
+## session claude-wren pt2 — HIVE BADGE (DONE, Aug 24 2026)
+
+Model-driven navigation this leg (decision-boundary doctrine): waypoints chosen
+from map_view/observe, goto as local executor only, no full-route travel calls.
+Violet: Togepi EGG from Elm's aide (triggered by the Route 32 call at (18,8),
+walked back for it), verified mart run (4 Potions + 2 Antidotes). Route 32:
+declined the SlowpokeTail scammer; Route 32 PC heal. Union Cave 1F traversed
+(GATOR **evolved to CROCONAW L18** inside). Route 33 → Azalea. Slowpoke Well:
+all 4 grunts beaten, Kurt scene done. Azalea Gym: Al/Benny/Josh beaten, Bugsy
+beaten → **HIVE badge 2/8**, TM49. Final: CROCONAW L22, PIDGEY L4, EGG.
+Milestones: claude_saves/wren-well-cleared, wren-pre-gym2, **wren-hive-badge**.
+Field note for coord: the new _drain_scene choice-menu guard MISDETECTS
+empty/blank pre-battle trainer textboxes as choice menus (repeated
+"GAVE UP (blocked by choice menu...)" at Slowpoke Well and Azalea Gym where
+the box contained no text and A safely started the trainer battle). Guard
+should require an actual cursor glyph ($ec/$ed) before claiming 'menu'.
+
+## session claude-wren — fresh boot → ZEPHYR BADGE (DONE, Aug 24 2026)
+
+Persona run (persona.md at repo root): player intended "WREN" — actual
+in-game name is **AWREN** (hit the known vega_intro stray-A naming bug,
+coord fix 1/2 above; run used the old press-then-check order). Totodile
+**GATOR** L16 (Scratch/Leer/Rage/Water Gun), Pidgey **REED** L4, rival
+**SILVER**. Full story line completed: starter, Mystery Egg errand,
+Cherrygrove rival fight, egg delivered, all Sprout Tower sages + Elder
+Li (HM05), Violet Gym (Abe, Rod, Falkner) → **ZEPHYR BADGE 1/8**.
+ALL states in `claude_saves/` (never touched `saves/`): working
+`claude_saves/wren.state`, milestones wren-starter / wren-egg-delivered
+/ wren-pre-tower / wren-tower-cleared / wren-pre-gym /
+**wren-zephyr-badge**. Postmortem: `fable_results.md` at repo root.
+Field notes for coord: (a) travel/goto replan-storm on scene textboxes
+remains the top friction — drain is always the fix, never automated;
+(b) Sprout Tower mapgraph stairs wrong both directions (tower.py probe
+still the answer); (c) use_item/heal/mart_buy all fail first call to
+menu-setup swallowing, succeed on settle+retry; (d) 1F tower exit
+ping-pongs (8,15)↔(11,15) — held-direction door step needed.
+[fix] TrekFixer (Aug 24): landed (a)(c)(d) in trek.py — goto/travel now
+auto-drain scene textboxes via new `_drain_scene` (bounded A-paging to
+wScriptMode==0, aborts on choice menus per gotcha 13, battles route to
+the existing fight path); use_item/heal_pokecenter/mart_buy each
+settle-drain-retry ONCE before surfacing their first-call failure
+(gotcha 2); travel's warp legs fall back to `_held_warp_entry`
+(held/tapped step back onto the door tile) when a held glide crosses a
+multi-warp door row without firing (gotcha 12, Sprout Tower 1F).
+Unit-tested in tests/unit/test_wren_frictions.py (17 tests).
+[fix] MapgraphFixer (Aug 24): landed (b) — mapgraph.json is now
+region-aware: build_mapgraph.py flood-fills each map's walkable grid and
+edges carry from_regions/to_regions; nav.MapData gains region_map()/
+regions_at()/plan_route() (region-aware map planner). Sprout Tower
+1F↔3F now plans the real walkway chain (6,4)→(17,3)→(2,6)→(10,14) both
+ways; locked in tests/unit/test_mapgraph_regions.py (11 tests). trek's
+Dijkstra (`route`) can adopt the fields to filter edges by entry region.
+[fix] RouteWirer (Aug 24): wired (b) into trek.py — route()'s Dijkstra
+now runs on (map, region) nodes gated by the edges' from_regions/
+to_regions (absent = wildcard; entry region from the live standing
+cell), and travel() replans the remainder when a tolerated glide lands
+across a region seam. Locked in tests/unit/test_route_regions.py (5).
+
+## session ox-alpha-coord owns framework improvement loop + omp-fresh oversight
+
+Coordinator session (Aug 24 2026, Herdr two-pane setup): player session
+**omp-fresh** (pane w19:p1F) owns the fresh-boot run to ZEPHYR BADGE —
+raw power-on boot, working state `omp_saves/omp-fresh.state`. It must NOT
+read/fork anything in `saves/` and stores ALL its states under
+`omp_saves/` (brief: OMP_BRIEF.md at repo root; postmortem will land in
+omp_saves/omp-fresh-postmortem.md). Coordinator (pane w19:p1E) triages
+omp-fresh's field reports and lands harness fixes + doc updates; fixes
+are announced back as `[coord] fixed ...` messages over Herdr.
+NOTE for all sessions: a concurrent process swept root *.md into backup/
+today; PROGRESS.md was restored from backup/PROGRESS.md — keep it at root.
+Coord fix 1 (Aug 24): fresh-boot scripts/vega_intro.py named the player
+"A<NAME>" — its poll loop pressed A every iteration THEN checked
+keyboard_open(), so one stray A landed on the naming keyboard's home
+tile before type_name() (proof: vega's own "AVEGA" entry below). Fixed
+by checking keyboard BEFORE pressing; omp-fresh redoing its intro with
+the corrected order.
+Coord fix 2 (Aug 24): reorder alone was insufficient — keyboard_open()
+is screen-TEXT based (DEL/END glyphs, trek.py:905) so it lags the window
+by several frames; the loop still committed one A after a true open.
+omp-fresh diagnosed the flag lag live; vega_intro.py now does
+press(".:20") -> tick(10) -> recheck BEFORE press("A:4"). Backlog
+candidate: event-driven ui.keyboard flag (hookevents _2DMenu anchor or
+a WRAM naming-state read) instead of screen-text sniffing.
+Coord fix 3 (Aug 24): Driver.save(name) force-joined EVERY name onto
+saves/ (Path(SAVES_DIR)/name), so omp-fresh's d.save("omp_saves/...")
+silently wrote saves/omp_saves/... — milestone lost + isolation rule
+broken by the harness itself. Now: bare names -> saves/, path-like
+names honored verbatim (staticmethod Driver._save_target; unit tests
+tests/unit/test_save_paths.py; full suite green). omp-fresh's starter
+milestone recovered to omp_saves/omp-fresh-starter.state.
+Coord fix 4 (Aug 24): goto's internal flush_dialog drains could mash A
+through a MATERIALIZING naming keyboard (NameRival scene): hooks path
+_flush_dialog_hooks pressed A on page_wait with no keyboard gate, and
+text-based checks lag the render (same class as fix 2). Fix: new
+Driver._naming_sig() WRAM signature (wNamingScreenType/DestPointer —
+NamingScreen.asm writes them BEFORE rendering); both flush paths stop
+pressing A the moment it changes and hand to dismiss_keyboard, which
+now CLEARS stray chars (B=backspace xN, verified in source) before
+typing/confirming — garbage names like "AA" can no longer be committed.
+Suite green. Backlog intake from claude-wren postmortem: Sprout Tower
+mapgraph stairs wrong both directions (b), first-call menu-setup
+swallow in use_item/heal/mart_buy (c), 1F held-direction door exit (d).
+Coord fix 5 (Aug 24, close-out): goto's whiteout-abort return left
+last_goto_reason=None — now "whiteout-abort". (omp-fresh also reported
+goto claiming success/no-reason with unchanged pos ×3; needs a live
+repro before touching the arrival heuristics.)
+MISSION COMPLETE (Aug 24): omp-fresh reached ZEPHYR BADGE from raw
+power-on — omp_saves/omp-fresh-zephyr.state frame 385988, QUILAVA L15,
+Togepi egg secured post-badge (omp-fresh-egg-in-party.state), zero
+saves/ contact. ~386k frames / ~1h45m play over ~2h wall incl. 3 burned
+naming forks. Postmortem: omp_saves/omp-fresh-postmortem.md.
+PRIORITIZED BACKLOG (from omp-fresh + claude-wren field data; needs
+live repro sessions):
+1. heal_pokecenter still races despite drain+retry-once (3x this run:
+   "party not fully healed ([(155,12,30)])"); suspect nurse YES/NO
+   choice menu interacting with dialog_press_safe. Repro on zephyr
+   save. Repro hint (agent sign-off): fires on EVERY first
+   heal_pokecenter call after a dialog-heavy scene — start repro there.
+2. mart_buy: shop-not-open is a silent log line from a registry action;
+   must raise/return False loudly; qty helper verifying xNN glyph per
+   press (RIGHT=+10/LEFT=-10/UP=+1/DOWN=-1).
+3. goto no-op True/None-with-unchanged-pos: instrument arrival
+   proximity + exit_warp_goal paths with movement counters.
+4. GAVE UP text should mention d.trip_scenes when script-scene-active.
+5. observe().party 'nick' vs game_state 'nickname' unify; curated flag
+   list expansion (ELMS_AIDE_IN_VIOLET_POKEMON_CENTER not observable).
+6. train() map hint arg; Sprout Tower mapgraph stairs wrong both ways
+   (wren; nav.py work in progress by another session may cover it).
+
+## session omp-fresh owns fresh-boot run to Zephyr Badge, working state omp_saves/omp-fresh.state
+
+**OBJECTIVE COMPLETE Aug 24 2026: ZEPHYR BADGE WON.** Milestone
+`omp_saves/omp-fresh-zephyr.state` (verified frame 385988 VIOLET_GYM,
+badges 1/8); final checkpoint `omp_saves/omp-fresh-egg-in-party.state`
+(Violet PC healed, Togepi egg in party). Party: QUILAVA L15 46/46
+(TACKLE/LEER/SMOKESCREEN/EMBER) + TOGEPI egg. Bag 10 balls, 3 potions,
+TM31; ₽2539. Rival **AXIOM** (verified via CLI decoder).
+Milestones this session (all in omp_saves/, new filename per milestone):
+intro2 / starter / lab-exit / egg-got / rival-named / egg-delivered /
+quilava-l14 / pregym / zephyr / egg-in-party.
+Postmortem with ranked framework fixes: `omp_saves/omp-fresh-postmortem.md`.
+Key gotchas discovered: goto's internal GAVE-UP drain mashes THROUGH
+naming keyboards (cost 3 forks before manual-step workaround — coord has
+since fixed in harness); Togepi egg aide appears only AFTER Zephyr badge
+(SPECIALCALL_ASSISTANT fired by VioletGym.asm); Elm's "disaster!" phone
+call fires BEFORE delivery too (blocks R30 (17,6)); R29 catch-tutorial
+cells (53,8)/(53,9) seal the route corridor — trip_scenes or manual walk;
+heal_pokecenter race hit 3x (verify-before-drain), manual drain fallback
+works every time; mart qty selector keys are RIGHT=+10 LEFT=-10 UP=+1
+DOWN=-1 and swallow presses unpredictably — verify ×N on screen per press.
+
 ## harness upgrade (ox-alpha, Aug 24 2026) — ai-plays-pokemon adoption
 
 Engineering pass on the driver itself; NO timeline advanced. All existing
@@ -102,18 +253,46 @@ Session gotchas (new):
   battle state was clean after interrupt).
 - Union Cave 1F: entrance pocket exits via ROW 2 westward to x=9-11,
   NOT straight south (side-wall tiles $b2 block down at x=15-16).
-Next objective (claimed Aug 24, goal mode): **FOG BADGE = 4th gym** (Morty,
-Ecruteak) — subsumes PLAIN. Route: Ilex Farfetch'd -> HM01 -> tree ->
-R34/R35 -> Goldenrod gym -> Squirtbottle chain (Floria R36 first!) ->
-Sudowoodo -> R37 -> Ecruteak gym. NOTE Aug 24: all saves/oxa-johto* files
-were GC'd into saves/backup/ (trek gc didn't protect them despite
-PROGRESS.md mention); RESTORED via cp -n -- treat saves/backup as the
-canonical store for this series until gc is fixed.
-Catches still PENDING (Geodude/Poliwag/flyer); 14 balls + 1 Lure Ball
-ready. TOGEPI egg hatches on foot — keep it in party while walking.
-NOTE for concurrent sessions: `session vega` also claimed a fresh run
-after me — I have not touched saves/vega.state; my forks all start with
-oxa-johto-.
+**FOG BADGE WON Aug 24 — GOAL COMPLETE: new game driven to the 4th gym.**
+Badges 4/8 (ZEPHYR HIVE PLAIN FOG). Party: QUILAVA "CINDER" L33 (CUT/
+FLAME WHEEL/QUICK ATTACK/EMBER — Mud-Slap was replaced by level-up Flame
+Wheel during the gym fights), TOGEPI L6. Milestone savestate (gc-proof):
+`journal/oxa-fog4-gym-done.state` (+ .meta) — outside Ecruteak Gym.
+`saves/` is UNSAFE for this series right now: a concurrent session's gc
+deleted my named checkpoints within seconds AND overwrote
+saves/backup/oxa-johto-working.state with its own data. Keep oxa-johto
+forks in journal/ until the gc protection is fixed.
+
+Route taken: Azalea west rival (Croconaw L16 — needs potions, solo fire
+eats 2x water; 2 whiteouts before winning at full HP + 3 potions) -> Ilex
+Farfetch'd herd (bird flees the direction you FACE; chase table in
+maps/IlexForest.asm) -> Charcoal Master HM01 -> use_cut(8,25) forgets
+TACKLE -> R34 trainers -> Goldenrod -> Whitney (won inside talk_to's
+auto-fight; badge needs the Bridget cries coord-event at gym (8,5) via
+step_hold, then re-talk) -> R35 grind to L26 -> Dept Store 2F SUPER
+POTIONS (clerk counter faces DOWN from row 3, not up!) -> R36 Floria
+(33,12) -> Goldenrod Flower Shop: talk SHOP Floria (wanders ~(5,6)) THEN
+teacher -> Squirtbottle -> Sudowoodo at (35,9) yes/no -> R36 -> Ecruteak
+-> Burned Tower (gym is LOCKED until the beasts: SCENE_FORCED_TO_LEAVE
+ejects you) -> 1F rival battle (sight line row 9) -> fall -> B1F beasts
+scene at (10,6) -> Eusine talk -> ladder (7,15) -> Morty.
+
+Morty fight (Gastly L21, Haunter L21, Haunter L23 — no Gengar in this
+build): fight() CANNOT drive this battle — it times out mashing A. Root
+cause chain: (a) the battle-intro HP-bar scroll leaves wEnemyMonHP=0
+until the intro text is advanced — poll (1,d216) > 0 and A-mash until
+then; (b) the 2x2 battle menu renders FIGHT=0x85,0x88,0x86,0x87,0x93 in
+wTilemap — detect THAT, not the decoded text; (c) menu cursor via
+wMenuCursorY: FIGHT=(1,1), PACK=(2,1); move list slot = same var. Manual
+driver: A until FIGHT pattern -> A -> cursor to slot -> A -> A-mash text.
+Flame Wheel burned Haunter down. DO NOT whiteout mid-battle: the
+auto-heal heals party WRAM but leaves the battle struct at 0 HP ->
+zombie battle that re-poisons every retry; reload a clean savestate
+instead.
+
+Next objective (unclaimed): Olivine City (R39 coast, lighthouse Amphy ->
+Jasmine -> Steel badge), Cianwood Chuck along the way. Catches still
+pending (14 balls). TOGEPI hatched en route.
 Operator Q&A Aug 24 (hub send to Main still self-routed/no peers; logged here):
 1. Team: TOGEPI slot is an unhatched egg (egg:true, 0/18 is normal), not a
    faint. Solo-until-Zephyr was deliberate; catches start now — GEODUDE in

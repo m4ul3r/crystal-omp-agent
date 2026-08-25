@@ -863,6 +863,33 @@ class Driver:
                 return "moved"
         return "blocked"
 
+    def _held_warp_entry(self, st):
+        """Gotcha 12 last resort for a door warp a plain transition step
+        crossed without firing: re-approach along the warp tile's
+        row/column and drive onto it -- held first when adjacent (doors
+        need the key down through the step), then _step_warp_tap's
+        phase-shifted taps (staircase tiles bounce held keys back off).
+        Multi-warp door rows (Sprout Tower 1F's double door) make a held
+        glide cross BOTH tiles without firing; walking back tap-by-tap
+        lands on one. Returns 'warp' | 'battle' | None (couldn't fire)."""
+        tx, ty = st["cell"]
+        px, py = self.pos()[2:]
+        dist = abs(px - tx) + abs(py - ty)
+        if dist == 0 or dist > 3 or (px != tx and py != ty):
+            return None         # on the tile, too far, or off its axes
+        if px != tx:
+            mv = "R" if tx > px else "L"
+        else:
+            mv = "D" if ty > py else "U"
+        log.info(f"  held-entry fallback: {mv} onto warp {(tx, ty)} "
+              f"from {(px, py)}")
+        if dist == 1:
+            r = self.step_hold(mv)
+            if r in ("warp", "battle"):
+                return r
+        r = self._step_warp_tap(mv)
+        return r if r in ("warp", "battle") else None
+
     # -- actions -----------------------------------------------------------
 
     def press(self, seq):
@@ -906,14 +933,26 @@ class Driver:
         s = self.emu.screen_text()
         return any("DEL" in r for r in s) and any("END" in r for r in s)
 
+    def _naming_sig(self):
+        """WRAM signature of naming-screen state; NamingScreen writes
+        these BEFORE rendering (engine/menus/naming_screen.asm), so a
+        delta beats every screen-text check on fade-in frames."""
+        e = self.emu
+        return (e.read_u8("wNamingScreenType"),
+                e.read_u8("wNamingScreenDestinationPointer"))
+
     def dismiss_keyboard(self, name=None):
         """Confirm a naming screen. With a name, actually type it; without,
         confirm with the minimal name (fast path)."""
         if name:
             log.info(f"  naming keyboard: typing {name!r}")
+            for _ in range(12):       # B = backspace: clear stray chars
+                self.press("B:3 .:10")
             self.type_name(name)
             return
         log.info("  naming keyboard: confirming")
+        for _ in range(12):           # clear strays so decline is clean
+            self.press("B:3 .:10")
         self.press("START:4 .:20 A:4 .:30")          # jump to END, confirm
         if self.keyboard_open():                      # empty name refused:
             self.press("A:2 .:10 START:4 .:20 A:4 .:30")  # type one letter
@@ -975,9 +1014,14 @@ class Driver:
         waiting for a button (PromptButton hook); stop the moment a menu
         or battle-end event fires -- zero blind presses."""
         f0, quiet = self.emu.frame, 0
+        sig0 = self._naming_sig()
         while self.emu.frame - f0 < max_frames:
             if self.battle():
                 return "battle"
+            if self._naming_sig() != sig0 or self.keyboard_open():
+                self.dismiss_keyboard()
+                quiet = 0
+                continue
             events = self.hooks.drain()
             kinds = [k for k, _ in events]
             if hookevents._STOP_EVENTS & set(kinds):
@@ -988,10 +1032,6 @@ class Driver:
                 self.press("A:2 .:8")
                 quiet = 0
                 continue
-            if self.keyboard_open():
-                self.dismiss_keyboard()
-                quiet = 0
-                continue
             self.press(".:8")
             quiet += 8
             if quiet >= quiet_frames:
@@ -999,11 +1039,13 @@ class Driver:
         return "timeout"
 
     def flush_dialog(self, max_frames=6000, quiet_frames=40):
-        """Press A while a textbox is up; return once it's been gone a bit.
-        Handles a naming keyboard if one appears. With live hooks this is
-        event-driven; otherwise the legacy cadence applies, gated by
-        dialog_press_safe so a stray menu never gets blind-picked."""
+        """Press A while a textbox is up; return once it's been gone a
+        bit. Handles a naming keyboard if one appears. With live hooks
+        this is event-driven; otherwise the legacy cadence applies,
+        gated by dialog_press_safe and a naming-screen WRAM delta so a
+        fade-in keyboard never eats A presses as keystrokes."""
         f0, quiet = self.emu.frame, 0
+        sig0 = self._naming_sig()
         while self.emu.frame - f0 < max_frames:
             if self.battle():
                 return "battle"
@@ -1011,21 +1053,55 @@ class Driver:
                     self.hooks.has("page_wait"):
                 return self._flush_dialog_hooks(max_frames, quiet_frames)
             rows = self.emu.screen_text()
-            if self.textbox() and dialog_press_safe(rows):
+            if self._naming_sig() != sig0 or self.keyboard_open():
+                self.dismiss_keyboard()
+                quiet = 0
+            elif self.textbox() and dialog_press_safe(rows):
                 self.press("A:2 .:8")
                 quiet = 0
             elif self.textbox():
                 # cursor glyph outside the box: a choice/menu opened --
                 # report instead of blind-picking it (AGENTS.md gotcha 13)
                 return "menu"
-            elif self.keyboard_open():
-                self.dismiss_keyboard()
-                quiet = 0
             else:
                 self.press(".:8")
                 quiet += 8
                 if quiet >= quiet_frames:
                     return "done"
+        return "timeout"
+
+    def _drain_scene(self, max_pages=25, max_frames=6000):
+        """Bounded auto-drain for a scripted scene blocking movement
+        (Elm's phone call, the rival ambush, aide hand-offs): page
+        through with A until the textbox is gone AND wScriptMode reads
+        0, so the blocked step can be retried instead of replan-storming
+        (the top friction of the claude-wren run). Movement phases
+        between pages (applymovement) are waited out, never pressed
+        into. Never mashes a choice menu -- a cursor outside the box
+        aborts (gotcha 13). Returns 'done' | 'battle' | 'menu' |
+        'timeout'."""
+        pages = 0
+        f0 = self.emu.frame
+        while pages < max_pages and self.emu.frame - f0 < max_frames:
+            if self.battle():
+                return "battle"
+            if self.textbox():
+                if not dialog_press_safe(self.emu.screen_text()):
+                    return "menu"       # choice open: never blind-pick
+                self.press("A:2 .:8")
+                pages += 1
+                continue
+            try:
+                if self.emu.read_u8("wScriptMode"):
+                    self.press(".:20")  # scene still running its script
+                    continue
+            except Exception:
+                pass
+            self.settle(max_frames=300)  # let a follow-on page land
+            if self.battle():
+                return "battle"
+            if not self.textbox():
+                return "done"
         return "timeout"
 
     def fight(self, max_frames=90000, policy=None):
@@ -1729,12 +1805,22 @@ class Driver:
         if idx is None:
             log.info(f"  no {item_name} in bag")
             return False
+        def _start_menu_up(s):
+            return "PACK" in s   # START menu row; paints a beat late
         self.press("START:4 .:25")               # open START menu
-        if not self.menu_open():
+        if not self._wait_screen(_start_menu_up, 90):
             # Post-warp the START press sometimes lands during the fade;
             # blind D/A presses here WALK THE PLAYER (once onto a ladder).
-            log.warning("  START menu did not open")
-            return False
+            # Gotcha 2: the menu input loop isn't running the frame the
+            # menu is drawn -- settle, drain stragglers, retry ONCE.
+            log.info("  START menu slow to open; settling and retrying")
+            self.settle()
+            if self.textbox():
+                self.flush_dialog()
+            self.press("START:4 .:25")
+            if not self._wait_screen(_start_menu_up, 90):
+                log.warning("  START menu did not open")
+                return False
         if not self.menu.select_label("PACK", max_presses=8):
             self.press("B:4 .:10")
             log.info("  could not open PACK")
@@ -1846,7 +1932,7 @@ class Driver:
         exit_warp_goal = (map_name is None and goal_map == self.map_name()
                           and self._is_warp_cell(x, y))
         entry_map = self.map_name()
-        replans = idle = passes = 0
+        replans = idle = passes = drains = 0
         edge_counts = {}    # (from_map, to_map): crossings this one call
         last_block = ""     # diagnosis text from the most recent blocked step
         reason = "unspecified"
@@ -1926,6 +2012,7 @@ class Driver:
                 if r == "battle":
                     self.fight()
                     if self._whiteout_stop(f"goto {goal_map} {goal}"):
+                        self.last_goto_reason = "whiteout-abort"
                         return False
                     moved = True
                 elif r == "warp":
@@ -1967,6 +2054,32 @@ class Driver:
                     log.info(f"  blocked {mv} at {self.map_name()} "
                           f"{(bx, by)}{cause}")
                     if self.textbox():
+                        # a scripted scene (Elm's call, the rival ambush)
+                        # re-raises its textbox faster than flush_dialog's
+                        # quiet window -- replanning against it storms to
+                        # GAVE UP. Page the scene out (bounded, to
+                        # wScriptMode==0) and replan without charging a
+                        # storm strike.
+                        dr = "timeout"
+                        if drains < 3:
+                            drains += 1
+                            dr = self._drain_scene()
+                        if dr == "menu":
+                            # a choice opened mid-scene: mashing would
+                            # pick something (gotcha 13) -- surface it
+                            reason = ("blocked by choice menu during "
+                                      "scene drain -- answer it "
+                                      "deliberately (gotcha 13)")
+                            self.last_goto_reason = reason
+                            log.warning(f"  GAVE UP ({reason}) at "
+                                  f"{self.map_name()} {self.pos()[2:]}")
+                            return False
+                        if dr in ("done", "battle"):
+                            # drained (or a battle started: the next
+                            # pass's _step returns 'battle' and the
+                            # existing fight path takes it) -- retry via
+                            # a fresh plan, uncounted
+                            break
                         self.flush_dialog()
                     elif self.menu_open():
                         self.close_menus()
@@ -2103,6 +2216,16 @@ class Driver:
                                   c[0]))
         return cands
 
+    def _regions(self, m, x, y):
+        """nav.regions_at with the planner's wildcard convention: (-1,)
+        for maps with no grid (regions unknowable there) or cells sealed
+        all around -- region -1 matches anything."""
+        try:
+            r = self.nav.regions_at(m, x, y)
+        except KeyError:
+            return (-1,)
+        return r or (-1,)
+
     # Dijkstra edge costs: walking inside a map is ~1 unit/cell, every
     # map transition is a flat beat (door hold + settle + drift risk).
     # Hop-count BFS treated a 20-map detour ring (Azalea -> Route 33 ->
@@ -2120,11 +2243,17 @@ class Driver:
         mapgraph.json's validated warp/connection edges with walk-distance
         costs, expanded into per-leg steps --
         [{"kind": "walk", "map", "x", "y"}, {"kind": "warp"|"connection",
-        "from", "to", "dir", ...}, ...]. Raises LookupError when nothing
-        routes, or when the cheapest plan exceeds max_cost (a "detour
-        ring" -- almost certainly not what a straight-through run wants;
-        anchor closer or raise max_cost deliberately). Never moves the
-        player."""
+        "from", "to", "dir", ...}, ...]. Nodes are (map, region) over
+        nav.region_map components, gated by each edge's from_regions /
+        to_regions (absent field = wildcard, for grid-less maps): a warp
+        on a walled-off part of a map -- Sprout Tower 2F's (10,14) stairs
+        seen from the east arrival area -- is never planned; the real
+        route detours over the 1F walkway. The entry region comes from
+        the CURRENT standing cell (self.pos()). Raises LookupError when
+        nothing routes, or when the cheapest plan exceeds max_cost (a
+        "detour ring" -- almost certainly not what a straight-through run
+        wants; anchor closer or raise max_cost deliberately). Never moves
+        the player."""
         self._refresh_nav_blocks()
         dest = self._resolve_map(dest_map)
         src = self.map_name()
@@ -2134,63 +2263,77 @@ class Driver:
             return []
         adj = self._mg_edges()
         px, py = self.pos()[2:]
-        best = {src: 0}
-        entry = {src: (px, py)}       # where we'd start walking on that map
-        prev = {src: None}
-        heap = [(0, src)]
+        best, entry, prev, heap = {}, {}, {}, []
+        for r in self._regions(src, px, py):
+            node = (src, r)             # region -1 = wildcard
+            best[node] = 0
+            entry[node] = (px, py)    # where we'd start walking there
+            prev[node] = None
+            heap.append((0, node))
+        heapq.heapify(heap)
         seen = set()
+        goal = None
         while heap:
-            cost, m = heapq.heappop(heap)
-            if m in seen:
+            cost, node = heapq.heappop(heap)
+            if node in seen:
                 continue
-            seen.add(m)
+            seen.add(node)
+            m, reg = node
             if m == dest:
+                goal = node       # any region of the destination map
                 break
-            ex, ey = entry[m]
+            ex, ey = entry[node]
+            # scene seals are plan-truth too: an edge whose only
+            # approach cells sit behind an armed coord_event is not
+            # routable RIGHT NOW, even though the collision grid says
+            # otherwise (Route 32 descent, Azalea neck approaches)
+            sealed = self.nav.blocked.get(m, ())
             for e in sorted(adj.get(m, ()),
                             key=lambda e: (e["to_map"], e["kind"],
                                            json.dumps(e["cells"]))):
-                nxt = e["to_map"]
-                if nxt in seen:
-                    continue
-                # scene seals are plan-truth too: an edge whose only
-                # approach cells sit behind an armed coord_event is not
-                # routable RIGHT NOW, even though the collision grid says
-                # otherwise (Route 32 descent, Azalea neck approaches)
-                sealed = self.nav.blocked.get(m, ())
+                frm = e.get("from_regions")
+                if frm is not None and reg >= 0 and reg not in frm:
+                    continue    # warp sits on a walled-off part of m
                 cands = [c for c in self._edge_steps(e)
-                         if c[0] not in sealed]
+                         if c[0] not in sealed
+                         and (reg < 0
+                              or reg in self._regions(m, *c[0]))]
                 if not cands:
                     continue
                 walk = min(abs(ax - ex) + abs(ay - ey)
                            for (ax, ay), _ in cands)
                 ncost = cost + walk + self.TRANSITION_COST
-                if nxt in best and best[nxt] <= ncost:
-                    continue
-                best[nxt] = ncost
                 (ax, ay), d = min(cands, key=lambda c: (
                     abs(c[0][0] - ex) + abs(c[0][1] - ey), c[0]))
-                prev[nxt] = (m, e, (ax, ay), d, cands)
                 land = (tuple(e["dest_cell"]) if e["kind"] == "warp"
                         else None)
                 if land is None:
                     # connection landing depends on the departure cell;
                     # approximate with the far edge cell toward travel
-                    grid = self.nav.grid(nxt)
+                    grid = self.nav.grid(e["to_map"])
                     land = (len(grid[0]) - 1 if d == "L" else 0, ey)
-                entry[nxt] = land
-                heapq.heappush(heap, (ncost, nxt))
-        if dest not in prev:
+                for nr in (e.get("to_regions") or (-1,)):
+                    nxt = (e["to_map"], nr)
+                    if nxt in seen:
+                        continue
+                    if nxt in best and best[nxt] <= ncost:
+                        continue
+                    best[nxt] = ncost
+                    prev[nxt] = (node, e, (ax, ay), d, cands)
+                    entry[nxt] = land
+                    heapq.heappush(heap, (ncost, nxt))
+        if goal is None:
             raise LookupError(f"no routable mapgraph path {src} -> {dest}")
-        if best[dest] > max_cost:
+        if best[goal] > max_cost:
             raise LookupError(
-                f"cheapest {src} -> {dest} plan costs {best[dest]} "
+                f"cheapest {src} -> {dest} plan costs {best[goal]} "
                 f"(> max {max_cost}) -- detour ring; anchor at a nearer "
                 f"waypoint or pass a deliberate max_cost")
-        hops, m = [], dest
-        while prev[m]:
-            hops.append(prev[m])
-            m = prev[m][0]
+        hops, node = [], goal
+        while prev[node]:
+            pnode, e, a, d, cands = prev[node]
+            hops.append((pnode[0], e, a, d, cands))
+            node = pnode
         steps = []
         for frm, e, (ax, ay), d, cands in reversed(hops):
             steps.append({"kind": "walk", "map": frm, "x": ax, "y": ay,
@@ -2226,7 +2369,9 @@ class Driver:
         landing is expected (held key glides ~2 cells; AGENTS.md gotcha
         14); anything worse raises TravelError. If an edge's approach cell
         is unreachable from our side (one-way ledges/walls), falls back to
-        that edge's other approaches."""
+        that edge's other approaches. A tolerated glide that lands across
+        a region seam (door tile touching two rooms) replans the remainder
+        from the live cell -- route() rereads pos() for its entry region."""
         dest = self._resolve_map(dest_map)
         self._refresh_nav_blocks()
         if self.map_name() == dest:
@@ -2236,7 +2381,9 @@ class Driver:
               f"{self.map_name()} {self.pos()[2:]}"
               f"{' ' + label if label else ''}".rstrip())
         _edge_counts = {}
-        for i, st in enumerate(steps):
+        i = 0
+        while i < len(steps):
+            st = steps[i]
             cur = self.map_name()
             if st["kind"] == "walk":
                 if cur != st["map"]:
@@ -2248,6 +2395,7 @@ class Driver:
                     for alt in alts:
                         if [alt["x"], alt["y"]] == [st["x"], st["y"]]:
                             nxt["dir"] = alt["dir"]
+                    i += 1
                     continue
                 # this approach may sit on the far side of a one-way ledge
                 # or wall -- fall back to the edge's other approaches
@@ -2264,6 +2412,7 @@ class Driver:
                     raise TravelError(
                         f"leg {i}: no path to any approach of the next "
                         f"{nxt['kind'] if nxt else 'transition'} on {cur}")
+                i += 1
                 continue
             key = json.dumps([st["kind"], st["from"], st["to"], st["dir"],
                               st.get("cell") or st.get("band")], sort_keys=True)
@@ -2290,11 +2439,26 @@ class Driver:
                             f"{self.map_name()} -- relaunch travel()")
                 elif r == "blocked":
                     if self.textbox():
-                        self.flush_dialog()
+                        # scripted scene on the transition cell: page it
+                        # out (bounded); a battle it starts is caught by
+                        # the next attempt's _step -> the fight path above
+                        self._drain_scene()
                     else:
                         break
                 elif r != "warp" and self.map_name() == st["from"]:
-                    continue          # stepped but the warp didn't fire
+                    # stepped but the warp didn't fire. On a multi-warp
+                    # door row (Sprout Tower 1F's double door) the held
+                    # step GLIDES across every door tile without firing
+                    # (gotcha 12); each retry then re-crosses the row
+                    # from the other side -- the observed (8,15)<->(11,15)
+                    # ping-pong. We are off the modeled approach now, so
+                    # drive straight back onto the warp tile instead.
+                    if st["kind"] == "warp":
+                        fr = self._held_warp_entry(st)
+                        if fr == "warp":
+                            r = "warp"
+                            break
+                    continue
                 else:
                     break
             self.settle()
@@ -2313,6 +2477,14 @@ class Driver:
             log.info(f"  -> {here} {(mx, my)} (drift {drift})")
             if here == dest:
                 return steps      # landed on the destination: done
+            # the glide can carry the landing across a region seam: the
+            # rest of the plan then walks the wrong side of a wall.
+            if drift and set(self._regions(here, mx, my)).isdisjoint(
+                    self._regions(here, *expected)):
+                log.info("  landing crossed a region seam; replanning "
+                         "remainder from live cell")
+                steps = steps[:i + 1] + self.route(dest)
+            i += 1
         return steps
 
 
@@ -2412,13 +2584,23 @@ class Driver:
             return "battle"
         return "talked"
 
+    @staticmethod
+    def _save_target(default_path, name):
+        """Resolve a save target: bare milestone names land in saves/;
+        path-like names (absolute or containing a directory component)
+        are honored verbatim so sessions can isolate their checkpoints."""
+        if not name:
+            return default_path
+        p = Path(name)
+        return p if len(p.parts) > 1 else Path(paths.SAVES_DIR) / name
+
     def save(self, name=None, force=False):
         """Save the working state (plus a `name` milestone copy when given).
         Refuses to overwrite a file whose .meta frame count is NEWER than
         the running emulation unless force=True -- the accidental-rollback
         class (older checkpoint over post-badge progress) now fails loudly
         inside the harness instead of silently regressing."""
-        target = Path(paths.SAVES_DIR) / name if name else self.state_path
+        target = self._save_target(self.state_path, name)
         meta = Path(str(target) + ".meta")
         if meta.exists() and not force:
             try:
@@ -2463,20 +2645,34 @@ class Driver:
             return total
 
         before = bag_count()
+        bought = False
         want = _norm_item(item_name)
         shop_open = any("¥" in r for r in self.emu.screen_text())
         if not shop_open:
             if self.talk_to(x, y, label or "clerk") != "talked":
                 return False
-            # the list pops in frames AFTER talk_to's flush returns; wait
-            # it out passively -- an A press here buys whatever the cursor
-            # sits on (gotcha 13, cost a real session 1800 yen)
             opened = False
-            for _ in range(20):
-                if any("¥" in r for r in self.emu.screen_text()):
-                    opened = True
+            for _attempt in range(2):
+                # the list pops in frames AFTER talk_to's flush returns;
+                # wait it out passively -- an A press here buys whatever
+                # the cursor sits on (gotcha 13, cost a session 1800 yen)
+                for _ in range(20):
+                    if any("¥" in r for r in self.emu.screen_text()):
+                        opened = True
+                        break
+                    self.press(".:8")
+                if opened or _attempt:
                     break
-                self.press(".:8")
+                # gotcha 2 first-call race: the clerk A press can land the
+                # frame the dialog engine isn't polling input yet --
+                # settle, drain stragglers, re-talk ONCE before failing
+                log.info("  shop menu slow to open; settling and "
+                      "re-talking")
+                self.settle()
+                if self.textbox():
+                    self.flush_dialog()
+                if self.talk_to(x, y, label or "clerk") != "talked":
+                    break
             if not opened:
                 log.warning("  shop menu did not open")
                 self.press("B:4 .:10 .:20")
@@ -2540,22 +2736,34 @@ def heal_pokecenter(d):
     if "POKECENTER" not in d.map_name():
         raise RuntimeError(
             f"heal_pokecenter: not inside a Pokécenter (on {d.map_name()})")
-    d.goto(3, 3, "nurse counter")
-    d.step_dir("U")            # face her (blocked step = turn)
-    d.press("A:2 .:20")
-    d.flush_dialog()           # "shall we heal?" -> A = yes
-    d.press(".:300")           # heal jingle
-    d.flush_dialog()           # "we hope to see you again"
-    d.settle()
-    d.flush_dialog(1500)       # sweep straggler pages before verifying
+
+    def _nurse():
+        d.goto(3, 3, "nurse counter")
+        d.step_dir("U")        # face her (blocked step = turn)
+        d.press("A:2 .:20")
+        d.flush_dialog()       # "shall we heal?" -> A = yes
+        d.press(".:300")       # heal jingle
+        d.flush_dialog()       # "we hope to see you again"
+        d.settle()
+        d.flush_dialog(1500)   # sweep straggler pages before verifying
 
     def _hurt():
         return [m for m in game_state(d.emu, d.names)["party"]
                 if not m.get("egg") and m.get("hp", 0) < m.get("max_hp", 0)]
 
+    _nurse()
     hurt = _hurt()
     if hurt:                   # late pages can sit between us and truth
         d.flush_dialog(2000)
+        hurt = _hurt()
+    if hurt:
+        # gotcha 2 first-call race: the A that opens the nurse dialog is
+        # swallowed when the counter goto ends on an unsettled frame --
+        # settle, drain, and redo the interaction ONCE before raising
+        log.info("  heal not confirmed; settling and retrying once")
+        d.settle()
+        d.flush_dialog(1500)
+        _nurse()
         hurt = _hurt()
     lead = d.lead()
     log.info(f"  healed: {lead['name']} {lead['hp']}/{lead['max_hp']}",

@@ -2,3 +2,11 @@
 saves/
 __pycache__/
 journal/
+omp_saves/
+claude_saves/
+backup/
+*.state
+*.state.meta
+*.watch.state
+*.watch.state.meta
+*.swp
