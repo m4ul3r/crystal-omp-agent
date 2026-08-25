@@ -192,6 +192,7 @@ def goto_driver(step_results):
     """Driver whose _step consumes scripted results; anything after the
     script (and any 'moved') advances the player one cell."""
     d = bare_driver()
+    d.auto_fight = True          # real Driver default; manual is opt-in
     world = {"map": "TEST_MAP", "cell": (0, 0)}
     d._world = world
     d.map_name = lambda: world["map"]

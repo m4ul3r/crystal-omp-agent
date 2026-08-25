@@ -99,6 +99,23 @@ d.last_goto_reason        # None on success; see failure table below
 - **Train**: `d.train(target_level)` rotates the party, heals on the rail
   via Pokécenter visits. Heal verification drains straggler pages before
   asserting — if you must patch, don't; report instead.
+- **Grind (leveling the bench — learned the hard way, session claude-wren)**:
+  1. Exp is SPLIT among participants; lead-and-switch banking gives half and
+     never catches a mon up. To close big level gaps the trainee must be the
+     SOLE participant and land the KO itself — full exp.
+  2. Pick grounds by base-exp, not convenience: Tauros/Miltank (Routes 38/39,
+     base 211/200) beat everything pre-Mahogany; Golbat/Machop in Mt. Mortar
+     next. exp = base*level/7, halved per extra participant.
+  3. Recipe: trainee leads; policy = trainee fights solo while enemy level is
+     manageable and hp>35%, else switch to the anchor. Arm the SAME policy on
+     `d.default_policy` (intercepted battles bite otherwise) AND pass it to
+     every explicit fight. Set `d.learn_policy` BEFORE grinding — level-ups
+     will fire learn prompts mid-block.
+  4. Pace inside grass with `step_dir` (alternating raw taps only TURN in
+     place); check ui.textbox every iteration (a faced NPC eats all input).
+  5. Chunk it: ~20 fights -> heal rail -> `d.save()` -> repeat, printing
+     party each chunk. `d.train(target)` automates rotate+heal and is the
+     first tool to reach for; drive it in chunks and verify levels between.
 - **Shop**: `resolve(d, "mart_buy", {...})` waits passively for the shop
   list after the clerk talks (no A presses in that window). Never mash A
   near an open shop list (`AGENTS.md` gotcha 13).

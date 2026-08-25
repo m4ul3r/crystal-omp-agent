@@ -1,6 +1,32 @@
 # PROGRESS — Pokémon Crystal run
 
 
+## session claude-wren pt5b — learn_policy + team training (Aug 24 2026)
+
+User-directed: move-learn decisions now belong to the MODEL. LearnPolicyFixer
+landed Driver.learn_policy(mon, new_move, current_moves) -> move|'DECLINE'|None
+(consulted once at the prompt, HM/absent/raise all warn+auto-fallback; 58
+tests green). WREN's session policy: sacrifice status moves first, never a
+GOOD-coverage move, DECLINE status moves onto damage sets. Bite-for-Scary-Face
+can never silently happen again (and note for the record: Feraligatr gets NO
+Crunch in Gen 2 — Bite was irreplaceable; the auto slot-1 default destroyed
+strictly-better coverage for a status move).
+Team training (was a one-croc show): two Route 38 grass blocks with a
+bank-and-switch policy armed via d.default_policy — PEBBLE L5→17 (Metronome
+learned into the empty slot), REED L19→21 fighting his own weight class,
+zero net faints after heals. Roster now REED 21 / PEBBLE 17 / GATOR 42 /
+SNAG 20 (milestone wren-team-trained.state).
+Field notes: (1) party-menu submenu lists FIELD MOVES above SWITCH for
+HM-carriers — blind row counts fire Strength/Surf in the field (this cost
+one field-Strength misfire and explains every earlier reorder failure;
+navigate submenu by row TEXT); (2) alternating single direction taps only
+TURN in place in GSC — pacing loops must use step_dir or double-taps; (3)
+battle wedge diagnostics fire on benign level-up stat pages — consider
+whitelisting 'grew to level' screens; (4) an NPC dialog opened by pacing
+turns silently eats hundreds of inputs — pacing loops must check ui.textbox
+every iteration (mine now do).
+
+
 ## session claude-wren pt5 — STORM BADGE (DONE, Aug 24 2026)
 
 **5/8 badges** (milestone claude_saves/wren-storm-badge.state; FERALIGATR L41

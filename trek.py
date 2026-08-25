@@ -549,6 +549,8 @@ class Driver:
         self.bdata = BattleData(paths.REPO_ROOT, sym, paths.ROM)
         self._pending_nickname = None
         self.last_choice_options = []   # labels of the last refused box
+        self.auto_fight = True   # False: nav battles bubble to the decider
+        self.encounter_events = []   # decision-transparency journal
         self._whiteout_pending = False   # set by fight() on a detected wipe
         self.whiteouts = 0
         self.whiteout_policy = "abort"   # 'abort' | 'continue' (old behavior)
@@ -1284,6 +1286,10 @@ class Driver:
         f0 = self.emu.frame
         money0 = game_state(self.emu, self.names)["player"]["money"]
         b = Battle(self.emu, self.names, self.bdata)
+        try:
+            enemy0 = b.enemy()
+        except Exception:
+            enemy0 = {}
         name = self._resolve_nickname(self._pending_nickname,
                                       b.enemy()["name"])
         outcome = b.play(policy=policy, max_frames=max_frames,
@@ -1353,9 +1359,20 @@ class Driver:
         if self.state_path:
             self.emu.save(Path(self.state_path).with_suffix(".watch.state"))
         lead = self.lead()
-        log.info(f"  battle [{outcome}, {self.emu.frame - f0} frames] -> "
-              f"{lead['name']} L{lead['level']} {lead['hp']}/{lead['max_hp']}",
-              )
+        # decision-transparency journal: scripted/auto battles must leave
+        # a reviewable trace, or the decider stops making decisions
+        # (DESIGN.md rule 1) and persona expression dies in automation
+        events = getattr(self, "encounter_events", None)
+        if events is not None:   # duck-typed test doubles may omit it
+            events.append({
+                "frame": f0, "map": self.map_name(),
+                "enemy": enemy0.get("name"),
+                "enemy_level": enemy0.get("level"),
+                "outcome": outcome, "frames": self.emu.frame - f0,
+                "moves0": sorted(moves0), "moves1": sorted(
+                    self._party_moves()),
+                "policy": "custom" if policy is not None else "default",
+            })
         return lead
 
     def _whiteout_stop(self, where):
@@ -2427,14 +2444,14 @@ class Driver:
             while done < n:
                 r = self._step(d)
                 if r == "battle":
+                    if not self.auto_fight:
+                        self.last_goto_reason = (
+                            "battle during walk (auto_fight=manual) -- "
+                            "decide: fight()/catch() yourself")
+                        return False
                     self.fight()
                     if self._whiteout_stop(f"walk '{path}'"):
                         return False
-                elif r == "warp":
-                    self.settle()
-                    log.info(f"  -> {self.map_name()} {self.pos()[2:]}")
-                    done += 1
-                    stuck = 0
                 elif r == "moved":
                     done += 1
                     stuck = 0
@@ -2568,6 +2585,11 @@ class Driver:
             for mv in path:
                 r = self._step(mv)
                 if r == "battle":
+                    if not self.auto_fight:
+                        self.last_goto_reason = (
+                            "battle during goto (auto_fight=manual) -- "
+                            "decide: fight()/catch() yourself")
+                        return False
                     self.fight()
                     if self._whiteout_stop(f"goto {goal_map} {goal}"):
                         self.last_goto_reason = "whiteout-abort"
