@@ -1,3 +1,23 @@
+## session claude-wren pt6 - GLACIER BADGE (DONE, Aug 25 2026)
+
+**7/8 badges** (milestone `claude_saves/wren-glacier-badge.state`; FERALIGATR L55,
+SUDOWOODO L38, TOGETIC L37, PIDGEOT L37, **RIPTIDE** the Red Gyarados L30, ¥42156).
+
+Leg: Ecruteak -> Route 42 -> Mahogany -> Route 43 (toll not charged) -> Lake of
+Rage (RIPTIDE caught with chip-then-Great-Ball policy, RED SCALE from Lance) ->
+Rocket Hideout B1-B3 (passwords SLOWPOKETAIL + RATICATE TAIL, Murkrow HAIL
+GIOVANNI, ExecutiveF at the transmitter door, Electrodes, HM06 from Lance) ->
+Mahogany Gym ice puzzle solved by empirical slide probing -> Pryce swept.
+
+Warnings for next sessions:
+- `goto` cross-warp/complex-interior targets still silently no-op; the Rocket
+  base B2F middle complex is enterable ONLY via the (14,12)/(15,12) bg-event
+  door from row 13 (A-press) after Lance's heal scene; renders of B2F/B1F
+  mislead (row off-by-two in places) - trust live `tiles` probes.
+- B1F west room exits via the (5,15) teleporter to (25,1), not row 16.
+- Ice gym: `slide()` helper (press+settle, log p0->p1, fight on event) beats
+  any BFS; dead-end pocket at (9,2).
+
 # PROGRESS — Pokémon Crystal run
 
 

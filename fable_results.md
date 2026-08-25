@@ -190,3 +190,22 @@ replacement (the class of bug that cost three Morty whiteouts is dead).
 
 Retro items carried forward: goto's silent no-op on unreachable targets,
 lighthouse mapgraph warp mismatches, party-reorder cursor blindness.
+
+## Leg 5b - Glacier Badge (the hideout maze)
+
+**7/8 badges.** Team: FERALIGATR L55, RIPTIDE the Red Gyarados L30 (caught with
+a chip-to-35%-then-Great-Ball policy, one-shot capture avoided by design),
+SUDOWOODO, TOGETIC, PIDGEOT. ¥42156.
+
+What went well: the whole leg was live-probe driven - Route 42 pond surfed
+mid-route, Lake of Rage reached without a single whiteout, the Red Gyarados
+policy worked first try, and Pryce's ice puzzle fell to a 10-line `slide()`
+helper (press, settle, log start->end, auto-fight on event).
+
+What fought back: the Rocket Hideout. Static grid renders of B1F/B2F were
+wrong enough (off-by-rows, phantom walls) that I burned ~15 cells trying to
+"walk" to the Electrode room through walls. Root fix was methodological:
+stop trusting `render()`, probe `tiles` live cell-by-cell, and read the map
+scripts for bg_events (the transmitter door at (14,12) is an A-press bg
+event from row 13, not a walkable gap). `goto`'s silent no-op on unreachable
+targets struck again and remains the top harness debt.
