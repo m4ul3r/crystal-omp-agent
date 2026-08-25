@@ -89,7 +89,7 @@ from the leg's own arguments.
 | Catch / flee / switch mid-battle | custom policy: `d.fight(policy=lambda rows, me, enemy: ('ball',))`; options: `'flee'`, `('attack', slot)`, `('switch', party_idx)`, `('item','POTION')`, `('ball','POKE BALL')` — all verified live |
 | Name a caught Pokémon | `d.catch(nickname="BUBBLES")` (str, species-keyed dict, or callable) or `trek catch NICKNAME` — types it on the naming keyboard; without a name the prompt is declined |
 | Use items out of battle | `Driver.use_item('POTION', target_slot=0)` |
-| Menus anywhere | `Menus.select_label('SAVE')` (cursor-glyph driven), `select_abs(i)` (scrolling lists), `wait_for_label('USE')` |
+| Menus anywhere | `d.menu.select_label('SAVE')` (instance method, cursor-glyph driven), `select_abs(i)` (scrolling lists), `wait_for_label('USE')`; open YES/NO box → `resolve_choice('YES')` |
 | Read any game variable | `crystal sym <pattern>` then `crystal read <symbol> -n N [--text]` |
 
 Battle math comes from the repo itself: type chart parsed from

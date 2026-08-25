@@ -27,6 +27,11 @@ Agent-behavior notes: goto still silently no-ops on unreachable targets
 (returns without moving or raising — candidate fix); lighthouse mapgraph
 warp expectations wrong (travel unusable there); party-switch second cursor
 unreadable via screen glyphs (reorder flow needs WRAM like _party_target).
+[fix] LearnPolicyFixer (Aug 24): move learns are now model-controllable —
+Driver.learn_policy(mon, new_move, current_moves) -> move-to-forget |
+'DECLINE' | None(auto); consulted once at the learn prompt before YES/NO,
+cursor row verified before confirming; stale/HM/raising policies warn once
+and fall back to auto. tests/unit/test_wren_pt5_learn_policy.py (8 green).
 
 
 ## session claude-wren pt4 — FOG BADGE (DONE, Aug 24 2026)

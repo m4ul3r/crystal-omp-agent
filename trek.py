@@ -8,6 +8,7 @@ Usage: .venv/bin/python trek.py <leg> [args]   (see main() dispatch)
 import heapq
 import json
 import logging
+import re
 import sys
 from collections import deque
 from pathlib import Path
@@ -1390,6 +1391,25 @@ class Driver:
                        "QUICK ATTACK", "BUBBLE", "EMBER", "SWIFT"]
     learn_moves = True   # accept level-up moves by default
 
+    # learn_policy: optional per-driver hook that lets the driving model
+    # decide level-up learns instead of the AUTO policy below (which
+    # silently traded GATOR's BITE for SCARY FACE -- three whiteouts).
+    # Contract: callable(mon_name: str, new_move: str,
+    #                    current_moves: list[str]) -> decision, where the
+    # decision is one of
+    #   * a move name from current_moves -- forget THAT move,
+    #   * 'DECLINE'                      -- do not learn new_move,
+    #   * None                           -- fall back to the auto behavior.
+    # Called ONCE per learn flow, the moment the '<MON> is trying to/wants
+    # to learn <MOVE>' page is first detected and BEFORE any YES/NO is
+    # answered, so 'DECLINE' answers NO cleanly. A policy that raises, or
+    # that names a move not on the forget menu, or that names an HM move
+    # (the game refuses those), logs ONE warning and falls back to auto --
+    # a bad policy never wedges a battle. Policy-driven replacements land
+    # in the SAME LEARN log line / move_changes entry as auto ones.
+    learn_policy = None
+    _learn_flow = None   # per-flow policy state; live only while a flow is
+
     def _learn_prompt_up(self, rows):
         joined = "".join(rows).upper()
         return any(m in joined for m in self._LEARN_MARKERS)
@@ -1398,8 +1418,19 @@ class Driver:
         """Modal-text hook for Battle.play: drive the level-up move-learning
         flow. Returns True when this frame's input was consumed.
 
-        ACCEPT/REPLACE policy (wren pt4, documented from the code -- this
-        is what actually gets sacrificed):
+        When self.learn_policy is set it is consulted once per flow (see
+        the learn_policy attribute for the full contract) at the first
+        '<MON> is trying to/wants to learn <MOVE>' page, BEFORE any YES/NO
+        is answered: a returned move name answers YES and walks the forget
+        menu to THAT move (the cursor row is verified against the request
+        with _item_row_matches tolerance before confirming); 'DECLINE'
+        answers NO and confirms 'Stop learning'; None, an exception, a
+        request not on the menu, or an HM request (game refusal detected)
+        all fall back -- with one warning where applicable -- to the AUTO
+        policy below.
+
+        AUTO ACCEPT/REPLACE policy (wren pt4, documented from the code --
+        this is what actually gets sacrificed):
         * learn_moves=True (default): answer YES to "make room?". On the
           "Which move should be forgotten?" menu, walk the cursor DOWN
           (wrapping) to the FIRST FORGET_PRIORITY move on the list and
@@ -1411,21 +1442,58 @@ class Driver:
           confirmed: the game refuses, and the cursor is moved off them.
         * learn_moves=False: decline deterministically ("Stop learning
           <MOVE>?" -> YES; B there means "don't stop" and loops).
-        Completed swaps are surfaced by _diff_learned_moves (LEARN log
-        line + d.move_changes entry) from _resolve_learn_flow / fight().
+        Completed swaps (policy- or auto-driven alike) are surfaced by
+        _diff_learned_moves (LEARN log line + d.move_changes entry) from
+        _resolve_learn_flow / fight().
         Blind A-mashing derails into party menus and wedges the battle."""
         if not self._learn_prompt_up(rows):
+            self._learn_flow = None    # flow over: drop per-flow state
             return False
         joined = "".join(rows).upper()
+        st = self._learn_flow
+        if st is None:                 # first frame of a fresh flow
+            st = self._learn_flow = {"decision": None, "consulted": False,
+                                     "answered": False}
+        if not st["consulted"] and not st["answered"]:
+            self._consult_learn_policy(rows, st)
+        decision = st["decision"]
+        forget = decision if decision not in (None, "DECLINE") else None
         if "CAN" in joined and "BE FORGOTTEN" in joined:
             # "HM moves can't be forgotten": the refusal text. Acknowledge
             # it; the move menu reopens and the cursor must MOVE off the HM.
+            if forget is not None:
+                log.warning(f"learn_policy: game refused to forget "
+                            f"{forget} (HM) -- falling back to auto")
+                st["decision"] = None
             self.press("A:4 .:16 D:4 .:16")
             return True
         if "FORGOTTEN" in joined:
             # "Which move should be forgotten?" move menu is up
             cur = [r.strip().upper() for r in rows if "▶" in r or "▷" in r]
             on_hm = any(hm in r for r in cur for hm in self.HM_MOVES)
+            if forget is not None:
+                want = _norm_item(forget)
+                if forget in self.HM_MOVES:
+                    # don't even try: confirming loops through the refusal
+                    log.warning(f"learn_policy chose HM move {forget}: the "
+                                "game refuses those -- falling back to auto")
+                    st["decision"] = forget = None
+                elif not any(_item_row_matches(r.lstrip("▶▷ "), want)
+                             for r in (x.strip().upper() for x in rows) if r):
+                    log.warning(f"learn_policy chose {forget} but it is not "
+                                "on the forget menu (stale moveset?) -- "
+                                "falling back to auto")
+                    st["decision"] = forget = None
+            if forget is not None:
+                # confirm ONLY once the cursor row itself names the
+                # requested move (row-match tolerance); otherwise walk.
+                want = _norm_item(forget)
+                under = any(
+                    x >= 0 and _item_row_matches(r[x + 1:], want)
+                    for r, x in ((r, max(r.find("▶"), r.find("▷")))
+                                 for r in rows))
+                self.press("A:6 .:25" if under else "D:4 .:16")
+                return True
             target = next((m for m in self.FORGET_PRIORITY if m in joined),
                           None)
             if on_hm:
@@ -1436,17 +1504,50 @@ class Driver:
                 self.press("D:4 .:16")     # cursor toward the target (wraps)
             return True
         if "YES" in joined and "NO" in joined:
+            st["answered"] = True          # policy window is closed now
+            learn = (self.learn_moves if decision is None
+                     else decision != "DECLINE")
             if "STOP LEARNING" in joined:
                 # decline path confirm; in learn mode B loops back so the
                 # make-room prompt can be answered YES this time
-                self.press("B:6 .:20" if self.learn_moves else "A:6 .:20")
-            elif self.learn_moves:
+                self.press("B:6 .:20" if learn else "A:6 .:20")
+            elif learn:
                 self.press("A:6 .:25")     # YES: make room for the new move
             else:
                 self.press("B:6 .:20")     # NO: keep the current moveset
         else:
             self.press("A:4 .:16")         # advance the flow's text pages
         return True
+
+    def _consult_learn_policy(self, rows, st):
+        """Ask self.learn_policy about the learn flow on screen (once per
+        flow, before any YES/NO is answered; contract on the attribute).
+        Mon and move are parsed off the '<MON> is trying to/wants to learn
+        <MOVE>' page; a flow entered MID-WAY (the wedge-repair path) never
+        shows that page again, so the policy is skipped and auto applies.
+        A policy that raises is logged once and treated as None (auto):
+        a bad policy must never wedge a battle."""
+        policy = getattr(self, "learn_policy", None)
+        if policy is None:
+            st["consulted"] = True
+            return
+        text = re.sub(r"\s+", " ", " ".join(rows)).upper()
+        m = re.search(r"(\S+) (?:IS TRYING|WANTS) TO LEARN "
+                      r"([A-Z0-9♂♀'.\- ]+?)[!?.]", text)
+        if m is None:
+            return                     # page not up yet: retry next frame
+        st["consulted"] = True
+        mon, new_move = m.group(1), m.group(2).strip()
+        moves = next((list(mv) for label, mv in self._party_moves()
+                      if label.upper() == mon), [])
+        try:
+            decision = policy(mon, new_move, moves)
+        except Exception as e:
+            log.warning(f"learn_policy({mon!r}, {new_move!r}) raised "
+                        f"{e!r} -- falling back to auto")
+            return
+        if decision is not None:
+            st["decision"] = str(decision).strip().upper()
 
     def _resolve_learn_flow(self, max_frames=8000):
         """Drive any on-screen move-learning flow to completion. Used to
@@ -1466,6 +1567,7 @@ class Driver:
             self._battle_text_handler(rows)
         else:
             done = False
+        self._learn_flow = None    # never leak a decision into the next flow
         if before is not None:
             self._diff_learned_moves(before)
         return done
@@ -1570,6 +1672,7 @@ class Driver:
         if _balls() == 0:
             raise RuntimeError(f"catch_up: no {ball} in the bag")
         known = {m["name"] for m in game_state(self.emu, self.names)["party"]}
+        stall_cycles = 0
         encounters = used_total = 0
         while encounters < max_encounters:
             if self.battle():
@@ -1592,7 +1695,21 @@ class Driver:
                     raise RuntimeError(
                         f"catch_up: out of {ball} after {encounters} "
                         f"encounters, {used_total} thrown -- restock")
+                stall_cycles = 0
                 continue
+            # no battle this cycle: scene-sealed grass (R29 tutorial)
+            # or unreachable belt -- a plain retry loops FOREVER here
+            # (moss-run: ~4600 cycles until eval timeout killed the
+            # kernel), so count and raise with the goto diagnosis.
+            stall_cycles += 1
+            if stall_cycles >= 4:
+                raise RuntimeError(
+                    f"catch_up: {stall_cycles} pace cycles, zero "
+                    f"encounters on {self.map_name()} -- grass sealed "
+                    f"or unreachable? last_goto_reason="
+                    f"{self.last_goto_reason!r} last_choice_options="
+                    f"{self.last_choice_options} (resolve_choice the "
+                    f"box / d.trip_scenes the cell, then retry)")
             obs = self.observe()
             cx, cy = obs["x"], obs["y"]
             near = sorted(grass, key=lambda c: abs(c[0] - cx)
