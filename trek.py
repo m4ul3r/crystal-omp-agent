@@ -5,6 +5,7 @@ in a single persistent process (no per-command emulator reload).
 Usage: .venv/bin/python trek.py <leg> [args]   (see main() dispatch)
 """
 
+import contextlib
 import heapq
 import inspect
 import json
@@ -17,10 +18,13 @@ from io import BytesIO
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from crystalagent import paths
-from crystalagent.battle import Battle, BattleData, bag_item_index, bag_quantity, goto_pocket, _norm_item
+from crystalagent.battle import (Battle, BattleData, bag_item_index,
+                                 bag_quantity, cheapest_heal, goto_pocket,
+                                 _norm_item)
 from crystalagent.charmap import Charmap
 from crystalagent.emu import Crystal, parse_sequence, InputError
 from crystalagent import hookevents
+from crystalagent import missables
 from crystalagent.menus import Menus, battle_menu_up, dialog_press_safe, CURSORS
 from crystalagent.names import Names
 from crystalagent.nav import MapData, STEP, WARPS, WALKABLE, HOPS, CONN_NAME, ICE, COLL_PIT
@@ -590,27 +594,11 @@ NAME_GRIDS = None
 
 def _parse_event_flags(path):
     """constants/event_flags.asm -> {EVENT_NAME: bit index into wEventFlags}.
-    Handles const_def / const / const_skip / const_next like rgbds would."""
-    import re as _re
-    flags, idx = {}, None
-    for line in open(path, encoding="utf-8"):
-        s = line.strip()
-        if s.startswith("const_def"):
-            idx = 0
-            continue
-        m = _re.match(r"const_next\s+(\d+)$", s)
-        if m:
-            idx = int(m.group(1))
-            continue
-        m = _re.match(r"const_skip\b", s)
-        if m:
-            idx += 1
-            continue
-        m = _re.match(r"const\s+(\w+)$", s)
-        if m and idx is not None:
-            flags[m.group(1)] = idx
-            idx += 1
-    return flags
+
+    One `const` walker for the whole harness (crystalagent.missables reads
+    the same table to name the flag guarding each item gift); the local
+    copy this replaced silently ignored `const_skip N`'s count."""
+    return missables.event_bits(Path(path).parent.parent)
 
 
 _MOVE_LENGTH = 7    # battle_constants.asm move_struct
@@ -865,6 +853,88 @@ class Driver:
     # 'pocket-miss' | 'no-use-option' | 'target-miss' | 'not-consumed').
     # 'no-effect' is the engine's own legitimate no-op, NOT a failure.
     last_item_reason = None
+    # last_menu_reason: why the most recent menu primitive (pack, pocket,
+    # party list, START menu) answered False. Every one of those used to
+    # return a bare False, which is how "use_item did nothing" stayed
+    # undiagnosable for a whole session.
+    last_menu_reason = None
+    # last_step_reason: why a single step could not be modelled or taken
+    # (no decoded grid for this map, a blocked walk, a battle handoff).
+    last_step_reason = None
+    # last_tm_reason: teach_tm's machine-readable diagnosis.
+    last_tm_reason = None
+    # last_money_delta: money change observed across the last movement
+    # call (see _money_watch); non-zero means something SPENT while
+    # navigating -- the ¥1200 of ESCAPE ROPEs an A-mash once bought.
+    last_money_delta = 0
+
+    def _menu_fail(self, reason):
+        """Record why a menu primitive answered False, and say so once.
+
+        Mirrors _item_fail without touching the UI: these are the inner
+        primitives, and the caller (use_item, teach_tm) owns the exit."""
+        self.last_menu_reason = reason
+        log.info(f"  menu: {reason}")
+        return False
+
+    def _confirm_label(self, label, expect, **kw):
+        """``Menus.select_label`` with the reached-state check, tolerating
+        older or duck-typed Menus objects that predate `expect`.
+
+        The fallback does the SAME verification here rather than trusting
+        a cursor-glyph success -- that trust is the bug (gotcha 2: the A
+        pressed on the frame a menu is drawn is swallowed)."""
+        try:
+            return self.menu.select_label(label, expect=expect, **kw)
+        except TypeError:
+            pass
+        if not self.menu.select_label(label, **kw):
+            why = getattr(self.menu, "last_reason", None)
+            return self._menu_fail(
+                f"select_label({label}): row not confirmed"
+                + (f"; {why}" if why else ""))
+        for _ in range(3):
+            if expect(self.emu.screen_text()):
+                return True
+            self.press("A:2 .:10")
+            self.press(".:12")
+        return self._menu_fail(
+            f"select_label({label}): state not reached after 3 confirms")
+
+    @contextlib.contextmanager
+    def _money_watch(self, where):
+        """Log any money change across a MOVEMENT call.
+
+        Navigation must never spend money. It did once: an A-mash beside a
+        Poke Mart clerk bought ¥1200 of ESCAPE ROPEs one 200¥ press at a
+        time, and nothing noticed until the wallet was read hours later
+        (AGENTS.md gotcha 13). Clerk identity does not exist at runtime --
+        object_event sprite ids are not in WRAM -- so watch the symptom
+        instead: the wallet, around every movement entry point. Only the
+        OUTER call is wrapped, so a purchase during a nested dialog drain
+        is reported once, with the map and cell it happened on.
+
+        Only a DECREASE warns. Trainer winnings arrive mid-walk all the
+        time and `MONEY +216 ... movement must never spend money` was a
+        false alarm that trained the reader to ignore the line; the delta
+        is still recorded either way.
+        """
+        try:
+            before = self.emu.read_be("wMoney", 3)
+        except Exception:            # duck-typed fakes without a wallet
+            yield
+            return
+        try:
+            yield
+        finally:
+            after = self.emu.read_be("wMoney", 3)
+            if after != before:
+                self.last_money_delta = after - before
+            if after < before:
+                log.warning(
+                    f"  MONEY {after - before:+d} (now {after}) during "
+                    f"{where} at {self.map_name()} {self.pos()[2:]} -- "
+                    f"movement must never SPEND money")
 
     # -- observations ------------------------------------------------------
 
@@ -888,17 +958,171 @@ class Driver:
 
     def map_view(self, map_name=None):
         """ASCII view of the region reachable on foot/surf from the
-        player's cell (render_map_view); pass a CamelCase or CONST map
-        name to view another map from its origin cell (0,0)."""
+        player's cell, with an ANNOTATION BLOCK under the grid naming the
+        interesting cells by absolute coordinate.
+
+        **This is art for humans. Decisions must come from the structured
+        surface** -- `find_tiles`, `exits`, `tile_at`, `tiles_in`. The
+        grid has a 5-column row gutter and a two-row x ruler, so answering
+        "what is at x=15?" from it means counting characters in a
+        monospace row, and a driving model got that wrong three times in
+        one session (walked into an Ilex Forest wall 20x, put the Olivine
+        pier warp at x=2 when it is x=3, and could only find the Vermilion
+        Port Passage exit by grepping `warp_event`). The annotation block
+        exists so the art can never disagree with the data.
+
+        Pass a CamelCase or CONST map name to view another map from its
+        origin cell (0,0)."""
+        const = self._map_const()
         if map_name and map_name != self.map_name():
             const = next((c for c, camel in self.nav.camel.items()
                           if camel == map_name or c == map_name), None)
             if const is None:
                 raise SystemExit(f"unknown map {map_name!r}")
-            return render_map_view(self.nav, const, (0, 0))
-        return render_map_view(self.nav, self._map_const(),
-                               self.pos()[2:], npcs=self.npc_cells(),
-                               surf=bool(getattr(self.nav, "surf", False)))
+            art = render_map_view(self.nav, const, (0, 0))
+            npcs = ()
+        else:
+            npcs = sorted(self.npc_cells())
+            art = render_map_view(self.nav, const, self.pos()[2:],
+                                  npcs=npcs,
+                                  surf=bool(getattr(self.nav, "surf", False)))
+        return art + "\n" + self._map_annotations(const, art, npcs)
+
+    # -- the structured map interface (decisions come from HERE) -----------
+
+    def _grid_of(self, map_name=None):
+        """(grid, const) for a map name / the current map."""
+        const = self._map_const() if map_name is None else next(
+            (c for c, camel in self.nav.camel.items()
+             if camel == map_name or c == map_name), map_name)
+        return self.nav.grid(const), const
+
+    def tile_at(self, x, y, map_name=None):
+        """Terrain word for ONE cell -- the same classifier
+        `observe()['tiles']` uses, so the two can never disagree.
+        'off-map' outside the grid."""
+        grid, _ = self._grid_of(map_name)
+        if not (0 <= y < len(grid) and 0 <= x < len(grid[0])):
+            return "off-map"
+        return _tile_kind(grid[y][x])
+
+    def tiles_in(self, x0, y0, x1, y1, map_name=None):
+        """A rectangle as ``{(x, y): kind}`` -- absolute coordinates, no
+        gutters, no rulers, nothing to count. Bounds are inclusive and
+        may be given in either order."""
+        x0, x1 = sorted((int(x0), int(x1)))
+        y0, y1 = sorted((int(y0), int(y1)))
+        grid, _ = self._grid_of(map_name)
+        out = {}
+        for y in range(max(y0, 0), min(y1, len(grid) - 1) + 1):
+            for x in range(max(x0, 0), min(x1, len(grid[0]) - 1) + 1):
+                out[(x, y)] = _tile_kind(grid[y][x])
+        return out
+
+    def find_tiles(self, kind, map_name=None):
+        """Every cell of a terrain `kind`, sorted -- the call that removes
+        the character counting from the driving loop.
+
+        `kind`: any word `tile_at` returns ('warp', 'water', 'grass',
+        'floor', 'blocked', 'buoy', 'ice', 'pit', 'whirlpool',
+        'waterfall'), the FAMILY names 'ledge'/'sidewall' (which match
+        'ledge-up', 'sidewall-ur', ...), or 'npc' for live sprite cells.
+
+        `find_tiles('warp')` answers off the collision bytes; `exits()`
+        answers off the map's warp_events and edge connections. Both are
+        useful and they are not the same question -- a warp tile with no
+        event goes nowhere, and an event can sit on an odd byte."""
+        want = str(kind).strip().lower()
+        if want == "npc":
+            if map_name not in (None, self.map_name(), self._map_const()):
+                return []                 # live sprites are this map only
+            return sorted(self.npc_cells())
+        grid, _ = self._grid_of(map_name)
+        out = []
+        for y, row in enumerate(grid):
+            for x, byte in enumerate(row):
+                k = _tile_kind(byte)
+                if k == want or (want in ("ledge", "sidewall")
+                                 and k.startswith(want + "-")):
+                    out.append((x, y))
+        return sorted(out)
+
+    def exits(self, map_name=None):
+        """Every way OFF this map, with destinations -- the thing
+        `grep warp_event maps/Foo.asm` was being used for.
+
+        Warps come from the map's `warp_event`s and edge connections from
+        its `connection` lines (the same nav data `travel` routes on):
+
+            [{'kind': 'warp', 'x': 3, 'y': 14, 'to': 'VERMILION_PORT',
+              'warp_id': 1},
+             {'kind': 'connection', 'dir': 'north', 'to': 'ROUTE_6',
+              'edge': 'y=0'}]
+        """
+        grid, const = self._grid_of(map_name)
+        out = [{"kind": "warp", "x": x, "y": y, "to": dest, "warp_id": wid}
+               for (x, y), (dest, wid) in
+               sorted(self.nav.warps.get(const, {}).items())]
+        edges = {"north": "y=0", "south": f"y={len(grid) - 1}",
+                 "west": "x=0", "east": f"x={len(grid[0]) - 1}"}
+        for d, (dest, _off) in sorted(
+                self.nav.conns.get(const, {}).items()):
+            out.append({"kind": "connection", "dir": d, "to": dest,
+                        "edge": edges.get(d, "?")})
+        return out
+
+    def _map_annotations(self, const, art, npcs=()):
+        """The block printed under map_view's grid: every warp, NPC and
+        water span the ART shows, by absolute coordinate.
+
+        Built from the same calls a decision should use, so the picture
+        and the data cannot drift apart. Cells outside the rendered window
+        are counted, never silently dropped."""
+        window = set()
+        ox = self._view_origin(art)
+        for line in art.splitlines():
+            m = re.match(r"^(\s*\d+) (.*)$", line)
+            if not m:
+                continue
+            y = int(m.group(1))
+            for i, ch in enumerate(m.group(2)):
+                if ch != " ":
+                    window.add((ox + i, y))
+        dest = {(e["x"], e["y"]): e["to"] for e in self.exits(const)
+                if e["kind"] == "warp"}
+        warps = self.find_tiles("warp", const)
+        shown = [c for c in sorted(set(warps) | set(dest)) if c in window]
+        hidden = len(set(warps) | set(dest)) - len(shown)
+        lines = []
+        if shown:
+            lines.append("warps: " + "  ".join(
+                f"({x},{y})" + (f"->{dest[(x, y)]}" if (x, y) in dest
+                                else "->?")
+                for x, y in shown)
+                + (f"   (+{hidden} outside this view)" if hidden else ""))
+        elif hidden:
+            lines.append(f"warps: none in view (+{hidden} outside)")
+        for e in self.exits(const):
+            if e["kind"] == "connection":
+                lines.append(f"edge:  {e['dir']} {e['edge']} -> {e['to']}")
+        if npcs:
+            lines.append("npcs:  " + " ".join(f"({x},{y})" for x, y in npcs))
+        for word in ("water", "grass"):
+            cells = [c for c in self.find_tiles(word, const) if c in window]
+            if cells:
+                xs = [c[0] for c in cells]
+                ys = [c[1] for c in cells]
+                lines.append(f"{word}: rows {min(ys)}-{max(ys)}, "
+                             f"x {min(xs)}-{max(xs)} ({len(cells)} cells)")
+        lines.append("decide from find_tiles()/exits()/tiles_in(); "
+                     "the grid above is for humans")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _view_origin(art):
+        """The x of the leftmost rendered column, from map_view's header."""
+        m = re.search(r"origin=\((\d+),", art.splitlines()[0])
+        return int(m.group(1)) if m else 0
 
     def battle(self):
         return self.emu.read_u8("wBattleMode")
@@ -958,8 +1182,78 @@ class Driver:
         s = game_state(self.emu, self.names)
         return s["party"][0] if s["party"] else None
 
-    def status(self):
-        return status_line(game_state(self.emu, self.names))
+    def status(self, missing=True):
+        """One-line status. `missing=True` (default) appends a compact
+        `missing: FLY(CIANWOOD_CITY 10,46) ...` fragment.
+
+        This exists because a whole playthrough reached Champion without
+        HM02 FLY -- it sat with Chuck's wife in Cianwood from the Storm
+        Badge onward and NOTHING ever said so, so every journey of that
+        run was on foot. status() is printed after almost every command,
+        which makes it the one place a session cannot fail to look."""
+        line = status_line(game_state(self.emu, self.names))
+        if missing:
+            try:
+                frag = missables.status_fragment(self.missables())
+            except Exception as exc:          # never break status()
+                frag = f"missing: ? ({type(exc).__name__})"
+            if frag:
+                line += "  " + frag
+        return line
+
+    # -- missable items ----------------------------------------------------
+
+    _item_sources = None
+
+    def item_sources(self):
+        """Every place in the world an item can be obtained
+        (crystalagent.missables.parse_item_sources), parsed once."""
+        if Driver._item_sources is None:
+            Driver._item_sources = missables.parse_item_sources(
+                paths.REPO_ROOT, _file_const)
+        return Driver._item_sources
+
+    def missables(self, kind="key"):
+        """Items that are still out there, evaluated LIVE.
+
+        `kind='key'` (default) is the subset that changes what the player
+        can DO -- the game's own KEY_ITEM pocket plus the HMs;
+        `kind='all'` is every giveitem/verbosegiveitem/itemball site in
+        maps/. Each row is citable:
+
+            {'item': 'HM_FLY', 'have': False, 'map': 'CIANWOOD_CITY',
+             'x': 10, 'y': 46, 'event': 'EVENT_GOT_HM02_FLY',
+             'source': 'maps/CianwoodCity.asm:100', ...}
+
+        Obtained-ness comes from the guarding EVENT_GOT_* flag where the
+        script has one, and from the bag otherwise."""
+        def have_event(flag):
+            try:
+                return self._event_flag(flag)
+            except ValueError:
+                return None               # unknown flag: ask the bag
+        return missables.missing_items(
+            self.item_sources(), have_event=have_event, bag=self._bag(),
+            repo=paths.REPO_ROOT, kind=kind)
+
+    def field_moves(self):
+        """``{'CUT': 'GATOR', 'FLY': None, ...}`` -- for each HM move,
+        which party member can actually use it.
+
+        "HM in the bag" is not "I can use it", and `FLY: None` is the
+        single fact that would have saved an hour of walking."""
+        out = {}
+        for tag, const in sorted(missables.hm_moves(paths.REPO_ROOT).items()):
+            name = next((n for n in self.names.moves.values()
+                         if _norm_item(n) == _norm_item(const)),
+                        const.replace("_", " "))
+            knower = None
+            for mon in game_state(self.emu, self.names)["party"]:
+                if any(mv["name"] == name for mv in mon.get("moves", [])):
+                    knower = mon.get("nickname") or mon.get("name")
+                    break
+            out[name] = knower
+        return out
 
     # -- live sprites ------------------------------------------------------
     # Patience budget for an NPC squatting the only path: wanderers step
@@ -1172,12 +1466,23 @@ class Driver:
                 last, still = cur, 0
             self.press(f".:{spacing}")
 
+    def _grid_miss(self, what, exc):
+        """A cell question the decoded map cannot answer.
+
+        IndexError is ordinary (a coordinate one past the map edge); a
+        KeyError means this map has no decoded grid at all, which silently
+        turns every door on it into "not a warp cell" -- so say so."""
+        self.last_step_reason = f"{what}: {type(exc).__name__}: {exc}"
+        if isinstance(exc, KeyError):
+            log.info(f"  no decoded grid for {self.map_name()} ({what})")
+        return False
+
     def _is_warp_cell(self, x, y):
         try:
             grid = self.nav.grid(self.map_name())
             return grid[y][x] in WARPS
-        except (KeyError, IndexError):   # unknown map or off the map edge
-            return False
+        except (KeyError, IndexError) as exc:
+            return self._grid_miss(f"warp-cell({x},{y})", exc)
 
     def step_hold(self, mv, hold=80):
         """Hold the direction through the whole step AND the map
@@ -1200,8 +1505,8 @@ class Driver:
         try:
             grid = self.nav.grid(self.map_name())
             return grid[y][x] in _NAV_WATER
-        except (KeyError, IndexError):
-            return False
+        except (KeyError, IndexError) as exc:
+            return self._grid_miss(f"water-cell({x},{y})", exc)
 
     def _mount_surf(self, mv):
         """Face the water and start surfing: walking into water does NOT
@@ -1299,6 +1604,155 @@ class Driver:
                 return r
         r = self._step_warp_tap(mv)
         return r if r in ("warp", "battle") else None
+
+    # Distinct diagnosis for the last take_warp; None after a success.
+    last_warp_reason = None
+
+    def _warp_fail(self, reason):
+        self.last_warp_reason = reason
+        log.warning(f"  take_warp: {reason}")
+        return False
+
+    def take_warp(self, x, y, label=""):
+        """ENTER the warp at (x, y) -- and standing on it is not entering.
+
+        A warp fires when the player STEPS ONTO its tile with the key
+        still down; arriving on one never re-triggers it. So a leg that
+        ends standing on the tile (every door arrival) needs a step OFF
+        and back ON, which is what cost turns at the Ilex/Azalea gate, the
+        Union Cave north mouth, the Olivine pier and three ship cabins.
+        `travel` reported that as `warp D at (3,41) -- expected
+        ILEX_FOREST_AZALEA_GATE ... (step result: blocked)` when the real
+        answer was "you are already on it".
+
+        Order: step off if we are on it, walk adjacent if we are not, then
+        enter held (doors need the key down) with `_step_warp_tap`'s
+        phase-shifted taps as the fallback (staircases bounce held keys).
+        True only when the MAP CHANGED; every False sets
+        `last_warp_reason`."""
+        self.last_warp_reason = None
+        target = (int(x), int(y))
+        start_map = self.map_name()
+        if label:
+            log.info(f"[take_warp {target}] {label} from {start_map} "
+                     f"{self.pos()[2:]}")
+        # Coordinates belong to a MAP. A caller holding coords from the
+        # map it just left would otherwise be routed somewhere unrelated
+        # and warped into whatever is there (observed live: stale gym
+        # coords sent the walk into POKE_SEERS_HOUSE).
+        try:
+            const = self._map_const()
+            known = self.nav.warps.get(const, {})
+            checkable = True
+        except Exception:          # duck-typed driver with no map data
+            const, known, checkable = start_map, {}, False
+        if checkable and self.tile_at(*target) != "warp" \
+                and target not in known:
+            return self._warp_fail(
+                f"{target} is not a warp on {const} "
+                f"(tile={self.tile_at(*target)}); warps here: "
+                f"{[(e['x'], e['y'], e['to']) for e in self.exits() if e['kind'] == 'warp']}")
+        if self.pos()[2:] == target:
+            return self._reenter_warp(target, start_map)
+        px, py = self.pos()[2:]
+        aligned = ((px == target[0]) != (py == target[1])) and \
+            abs(px - target[0]) + abs(py - target[1]) <= 3
+        if not aligned:
+            for mv, (dx, dy) in STEP.items():
+                nx, ny = target[0] + dx, target[1] + dy
+                if self.tile_at(nx, ny) in ("blocked", "off-map"):
+                    continue
+                if self.goto(nx, ny, label or f"approach warp {target}"):
+                    break
+            else:
+                return self._warp_fail(
+                    f"no reachable cell adjacent to {target} "
+                    f"(last goto: {self.last_goto_reason})")
+        r = self._held_warp_entry({"kind": "warp", "cell": target})
+        if r == "battle":
+            if not self._on_battle(f"take_warp {target}"):
+                return self._warp_fail(
+                    f"battle entering {target} and auto_fight=manual -- "
+                    f"decide it, then retry")
+        self.settle()
+        if self.map_name() != start_map:
+            log.info(f"  -> {self.map_name()} {self.pos()[2:]}")
+            return True
+        if self.pos()[2:] == target:
+            # we are standing on it now: re-enter properly instead of
+            # reporting a failure the caller cannot act on
+            return self._reenter_warp(target, start_map)
+        return self._warp_fail(
+            f"entered {target} from {self.pos()[2:]} but the map is still "
+            f"{start_map} (entry result: {r})")
+
+    def _reenter_warp(self, target, start_map):
+        """Step off the warp we are standing on and back onto it, trying
+        every walkable side.
+
+        The side matters: a door only fires when entered along its own
+        axis (`CheckWarpFacingDown` and friends,
+        engine/overworld/tile_events.asm), so re-entering a south-wall
+        door sideways does nothing at all -- observed live on Cianwood
+        Gym's exit, where stepping off RIGHT and back LEFT left the map
+        unchanged."""
+        inv = {"U": "D", "D": "U", "L": "R", "R": "L"}
+        tried = []
+        for mv, (dx, dy) in STEP.items():
+            nx, ny = target[0] + dx, target[1] + dy
+            if self.tile_at(nx, ny) in ("blocked", "off-map"):
+                continue
+            if self.pos()[2:] != target:      # a previous side left us off
+                back = self._axis_move(target)
+                if back and self._step(back) == "battle":
+                    if not self._on_battle(f"take_warp {target}"):
+                        return self._warp_fail(
+                            f"battle re-entering {target} and "
+                            f"auto_fight=manual -- decide it, then retry")
+                if self.map_name() != start_map:
+                    self.settle()
+                    log.info(f"  -> {self.map_name()} {self.pos()[2:]}")
+                    return True
+                if self.pos()[2:] != target:
+                    continue
+            if self._step(mv) == "battle":
+                if not self._on_battle(f"take_warp {target}"):
+                    return self._warp_fail(
+                        f"battle stepping off {target} and "
+                        f"auto_fight=manual -- decide it, then retry")
+            if self.map_name() != start_map:
+                return True               # the step off was itself a warp
+            if self.pos()[2:] == target:
+                continue                  # could not step off this way
+            tried.append(mv)
+            r = self.step_hold(inv[mv])
+            if r == "battle":
+                if not self._on_battle(f"take_warp {target}"):
+                    return self._warp_fail(
+                        f"battle entering {target} and auto_fight=manual "
+                        f"-- decide it, then retry")
+            if self.map_name() == start_map:
+                r = self._step_warp_tap(inv[mv])
+            self.settle()
+            if self.map_name() != start_map:
+                log.info(f"  -> {self.map_name()} {self.pos()[2:]} "
+                         f"(entered {inv[mv]})")
+                return True
+        if not tried:
+            return self._warp_fail(
+                f"standing on {target} with no walkable neighbour to step "
+                f"off to")
+        return self._warp_fail(
+            f"stepped off {target} and back on from {'/'.join(tried)} and "
+            f"the map is still {start_map} -- not an active warp?")
+
+    def _axis_move(self, target):
+        """The move that steps from here onto `target`, when adjacent."""
+        px, py = self.pos()[2:]
+        for mv, (dx, dy) in STEP.items():
+            if (px + dx, py + dy) == tuple(target):
+                return mv
+        return None
 
     # -- actions -----------------------------------------------------------
 
@@ -1554,37 +2008,38 @@ class Driver:
                     f"with lo <= hi")
         taken = battles = blocked = 0
         stopped = "steps"
-        while taken < budget:
-            legal = self._pace_dirs(picks, box)
-            if not legal:
-                stopped = "boxed-in"
-                break
-            r = self.move_settled(random.choice(legal), fight=False)
-            if r == "battle":
-                battles += 1
-                if on_battle == "return":
-                    stopped = "battle"
+        with self._money_watch(f"pace {budget} steps"):
+            while taken < budget:
+                legal = self._pace_dirs(picks, box)
+                if not legal:
+                    stopped = "boxed-in"
                     break
-                if not self._on_battle(f"pace step {taken + 1}"):
-                    stopped = "declined"
+                r = self.move_settled(random.choice(legal), fight=False)
+                if r == "battle":
+                    battles += 1
+                    if on_battle == "return":
+                        stopped = "battle"
+                        break
+                    if not self._on_battle(f"pace step {taken + 1}"):
+                        stopped = "declined"
+                        break
+                    if self._whiteout_stop("pace"):
+                        stopped = "whiteout"
+                        break
+                    blocked = 0
+                    continue
+                if r == "warp":
+                    taken += 1
+                    stopped = "warp"   # off the map: the box means nothing
                     break
-                if self._whiteout_stop("pace"):
-                    stopped = "whiteout"
+                if r == "moved":
+                    taken += 1
+                    blocked = 0
+                    continue
+                blocked += 1
+                if blocked >= 8:
+                    stopped = "blocked"
                     break
-                blocked = 0
-                continue
-            if r == "warp":
-                taken += 1
-                stopped = "warp"      # off the map: the box means nothing
-                break
-            if r == "moved":
-                taken += 1
-                blocked = 0
-                continue
-            blocked += 1
-            if blocked >= 8:
-                stopped = "blocked"
-                break
         log.info(f"  pace: {taken}/{budget} steps, {battles} battles, "
                  f"stopped={stopped}")
         return {"steps": taken, "battles": battles, "stopped": stopped}
@@ -2049,13 +2504,16 @@ class Driver:
 
         Badge-boosted attacking types are read live, because the boost is
         worth +1/8 damage and depends on which badges this file has
-        (DoBadgeTypeBoosts, engine/battle/misc.asm:147)."""
+        (DoBadgeTypeBoosts, engine/battle/misc.asm:147). The ROM's heal
+        table goes in too, so a mid-battle status cure names a real item
+        at its real price instead of a guess."""
         if self._tactics is None:
             from crystalagent.tactics import Tactics, boosted_types
             self._tactics = Tactics(
                 self.bdata, self.names, paths.REPO_ROOT,
                 badge_types=boosted_types(self.emu, self.bdata,
-                                          paths.REPO_ROOT))
+                                          paths.REPO_ROOT),
+                heal_table=self._heal_items())
         return self._tactics
 
     def outlook(self):
@@ -2557,8 +3015,12 @@ class Driver:
     learn_moves = True   # accept level-up moves by default
 
     # learn_policy: optional per-driver hook that lets the driving model
-    # decide level-up learns instead of the AUTO policy below (which
-    # silently traded GATOR's BITE for SCARY FACE -- three whiteouts).
+    # decide level-up learns. None means default_learn_policy decides --
+    # power-aware, off the ROM's Moves table, and it never trades a
+    # damaging move for a status move (the old FORGET_PRIORITY default
+    # silently traded GATOR's BITE for SCARY FACE -- three whiteouts --
+    # and a Gyarados' HYDRO PUMP for RAIN DANCE). AUTO/FORGET_PRIORITY
+    # still runs when the default returns None or falls back.
     # Contract: callable(mon_name: str, new_move: str,
     #                    current_moves: list[str]) -> decision, where the
     # decision is one of
@@ -2730,10 +3192,8 @@ class Driver:
         A policy that raises is logged once -- exception text plus the
         args it was called with -- and treated as None (auto): a bad
         policy must never wedge a battle."""
-        policy = getattr(self, "learn_policy", None)
-        if policy is None:
-            st["consulted"] = True
-            return
+        policy = getattr(self, "learn_policy", None) \
+            or self.default_learn_policy
         text = re.sub(r"\s+", " ", " ".join(rows)).upper()
         m = re.search(r"(\S+) (?:IS TRYING|WANTS) TO LEARN", text)
         if m:
@@ -2757,7 +3217,75 @@ class Driver:
             return
         if decision is not None:
             st["decision"] = str(decision).strip().upper()
-            self._learn_source = "policy"
+            self._learn_source = ("policy" if getattr(self, "learn_policy",
+                                                      None) else "default")
+
+    _move_ids = None      # {'IRON TAIL': 231, ...}, lazily inverted
+
+    def move_id(self, name):
+        """Move id for a display name, or None. Inverted once from the
+        ROM's own MoveNames table."""
+        if self._move_ids is None:
+            self._move_ids = {_norm_item(n): i
+                              for i, n in self.names.moves.items()}
+        return self._move_ids.get(_norm_item(name))
+
+    def move_power(self, name):
+        """Base power of a move by display name (0 for status moves and
+        for anything the ROM table does not know)."""
+        mid = self.move_id(name)
+        rec = self.bdata.moves.get(mid) if mid else None
+        return (rec or {}).get("power", 0)
+
+    def default_learn_policy(self, mon, new_move, current):
+        """The learn decision made when no learn_policy is set: never
+        trade damage away for a status move.
+
+        Same contract as learn_policy (a move name to forget, 'DECLINE',
+        or None to fall through to AUTO). The old default was
+        FORGET_PRIORITY, a hand-ranked NAME list that contains damaging
+        moves and, on no match, confirmed slot 1 -- which is how a
+        Gyarados traded HYDRO PUMP for RAIN DANCE and GATOR's BITE became
+        SCARY FACE. Power comes from the ROM's Moves table, so nothing
+        here is a guess about the move list.
+
+        Rules, deterministic on (power, name) so the same flow always
+        decides the same way:
+
+        * a status move (power 0) being offered: with two or fewer
+          damaging moves left, sacrifice a status move if there is one and
+          otherwise DECLINE -- a moveset needs its damage; with three or
+          more, still prefer a status move, else the weakest attack.
+        * a damaging move being offered: prefer a status move, else the
+          weakest attack when it is strictly weaker than the new move,
+          else DECLINE (learning something worse is not an upgrade).
+
+        HM moves are never named: the game refuses to delete them and the
+        forget menu loops on the refusal.
+        """
+        try:
+            power = {m: self.move_power(m) for m in current}
+            new_power = self.move_power(new_move)
+        except Exception:
+            return None                       # no ROM data: let AUTO run
+        forgettable = [m for m in current
+                       if m.strip().upper() not in self.HM_MOVES]
+        status = sorted((m for m in forgettable if power.get(m, 0) == 0),
+                        key=lambda m: (power.get(m, 0), m))
+        attacks = sorted((m for m in forgettable if power.get(m, 0) > 0),
+                         key=lambda m: (power.get(m, 0), m))
+        damaging = [m for m in current if power.get(m, 0) > 0]
+        if new_power == 0:
+            if status:
+                return status[0]
+            if len(damaging) <= 2:
+                return "DECLINE"
+            return attacks[0] if attacks else "DECLINE"
+        if status:
+            return status[0]
+        if attacks and power[attacks[0]] < new_power:
+            return attacks[0]
+        return "DECLINE"
 
     def _resolve_learn_flow(self, max_frames=8000):
         """Drive any on-screen move-learning flow to completion. Used to
@@ -3229,96 +3757,116 @@ class Driver:
     def _teach_hm01(self, forget_move=None):
         return self.teach_hm("H1", "CUT", forget_move)
 
-    def teach_hm(self, hm_tag, move_name, forget_move=None):
-        """Teach the HM whose pocket row reads '<hm_tag> <move_name>'
-        (e.g. 'H3', 'SURF') to the first ABLE party member via PACK ->
-        TM/HM pocket. `forget_move` names the move to delete if the
-        learner already knows four (default: whatever the cursor starts
-        on, slot 1). Label/WRAM-driven throughout: menus remember their
-        last cursor slot, so blind press counts are never safe.
-        Raises RuntimeError (with menus closed) if the flow fails."""
-        def scr():
-            return "".join(self.emu.screen_text()).upper()
-        def bail(msg):
-            self.close_menus()
-            raise RuntimeError(f"teach_hm {move_name}: {msg}")
+    def _tmhm_pocket(self, max_presses=8):
+        """START -> PACK -> the TM/HM pocket (pack.asm jumptable state 8).
+        The pockets cycle on L, so at most 3 presses reach it."""
         self.press("START:4 .:40")
         if not self._wait_screen(lambda s: "EXIT" in s):
-            bail("START menu never opened")
+            return self._menu_fail("tmhm_pocket: START menu never opened")
         if not self.menu.select_label("PACK"):
-            bail("PACK entry not found in START menu")
-        for _ in range(8):
+            why = getattr(self.menu, "last_reason", None) or "no PACK row"
+            return self._menu_fail(f"tmhm_pocket: {why}")
+        for _ in range(max_presses):
             if self.emu.read_u8("wJumptableIndex") == 8:
-                break                                 # TM/HM pocket
+                self.press(".:35")
+                return True
             self.press("L:4 .:18")
-        else:
-            bail("TM/HM pocket never opened")
-        self.press(".:35")
-        # cursor onto the HM row: rendered e.g. "H1 CUT", NOT "HM01"
-        # (and "FURY CUTTER" contains "CUT" -- match the H prefix too)
-        def on_hm01():
-            return any(hm_tag in r and move_name in r
+        return self._menu_fail("tmhm_pocket: TM/HM pocket never opened "
+                               "(wJumptableIndex never reached 8)")
+
+    @staticmethod
+    def pocket_tag(tag):
+        """The text a TM/HM pocket ROW actually shows for 'TM01'/'HM03'.
+
+        The 'TM'/'HM' prefix is drawn in GRAPHICS tiles, so the decoded
+        row is '01 DYNAMICPUNCH' for a TM and 'H1 CUT' for an HM (live
+        screen dump, Olivine pack) -- matching on 'TM01' never hits.
+        """
+        tag = str(tag).strip().upper()
+        if tag.startswith("TM") and tag[2:].isdigit():
+            return tag[2:]                       # 'TM01' -> '01'
+        if tag.startswith("HM") and tag[2:].isdigit():
+            return f"H{int(tag[2:])}"            # 'HM03' -> 'H3'
+        return tag                               # already screen-shaped
+
+    def _tmhm_row(self, tag, move_name):
+        """Put the pocket cursor on the row naming this TM/HM.
+
+        Rows render as '<tag> <MOVE>' -- '01 DYNAMICPUNCH', 'H1 CUT' --
+        and a bare move match is not enough ('FURY CUTTER' contains
+        'CUT'), so both halves must be on the row. They are tested
+        SEPARATELY because the cursor glyph is painted between them
+        ('H3▶SURF'). The list is walked UP to the top first, because the
+        pocket remembers its cursor between opens."""
+        tag = self.pocket_tag(tag)
+
+        def on_row():
+            return any(tag in r and move_name in r
                        for r in self.cursor_rows())
-        for _ in range(10):                           # go to list top
-            if on_hm01():
-                break
+        for _ in range(10):
+            if on_row():
+                return True
             self.press("U:4 .:14")
-        for _ in range(12):
-            if on_hm01():
-                break
+        for _ in range(60):
+            if on_row():
+                return True
             self.press("D:4 .:16")
-        else:
-            bail("HM01 row never under cursor")
-        self.press("A:4 .:80")                        # submenu
-        use_up = False
+        return self._menu_fail(
+            f"tmhm_row: no row reading '{tag} {move_name}' came under the "
+            f"cursor")
+
+    def _tmhm_use(self):
+        """Confirm the pocket row, take USE, and answer the teach prompt's
+        YES -- ending on the party list."""
+        self.press("A:4 .:80")                        # item submenu
         for _ in range(6):                            # spin-up can be slow
-            if "USE" in scr():
-                use_up = True
+            if "USE" in "".join(self.emu.screen_text()).upper():
                 break
             self.emu.tick(30)
-        if not use_up:
-            bail("HM01 USE submenu not found")
+        else:
+            return self._menu_fail("tmhm_use: USE submenu never drawn")
         self.press(".:35")                            # gotcha 2: settle
         self.press("A:6 .:30")                        # USE
         for _ in range(20):                           # boot texts -> YES/NO
-            s = scr()
+            s = "".join(self.emu.screen_text()).upper()
             if "YES" in s and "NO" in s:
                 break
             self.press("A:4 .:45")
         else:
-            bail("teach prompt never appeared")
+            return self._menu_fail("tmhm_use: teach prompt never appeared")
         self.press("A:5 .:60")                        # YES: teach
         if not self._wait_screen(lambda s: "CANCEL" in s and "ABLE" in s):
-            bail("party list never opened")
-        # pick the first ABLE mon -- only the CURSOR mon matters; other
-        # party members legitimately show NOT ABLE. The ABLE tag renders
-        # on the row BELOW the cursor row ("▶ AA" / "L22 ABLE"). The
-        # D-scan wraps, so every row gets visited wherever it starts.
-        def able_under_cursor():
-            rows = self.emu.screen_text()
-            for i, r in enumerate(rows):
-                if "▶" in r or "▷" in r:
-                    tag = rows[i + 1].upper() if i + 1 < len(rows) else ""
-                    return "ABLE" in tag and "NOT ABLE" not in tag
-            return False
-        picked = False
-        for _ in range(8):
-            if able_under_cursor():
-                picked = True
-                break
-            self.press("D:4 .:15")
-        if not picked:
-            bail("no party member is ABLE to learn CUT")
-        self.press("A:5 .:80")                        # choose the mon
-        # either it learns outright (<4 moves) or asks to delete a move
+            return self._menu_fail("tmhm_use: party list never opened")
+        return True
+
+    def _able_under_cursor(self):
+        """Is the party row under the cursor ABLE to learn this TM/HM?
+        The tag renders on the row BELOW the cursor row ('▶ AA' /
+        'L22 ABLE'), and other party members legitimately show NOT ABLE --
+        only the cursor's mon matters."""
+        rows = self.emu.screen_text()
+        for i, r in enumerate(rows):
+            if "▶" in r or "▷" in r:
+                tag = rows[i + 1].upper() if i + 1 < len(rows) else ""
+                return "ABLE" in tag and "NOT ABLE" not in tag
+        return False
+
+    def _walk_forget_menu(self, move_name, forget=None):
+        """Drive whatever follows the party pick: an outright learn, or
+        the "delete a move?" YES plus the move list. `forget` names the
+        move to delete; without it the move already under the cursor goes
+        (the list opens on SLOT 1, so that is the mon's OLDEST move).
+
+        Shared by teach_hm and teach_tm: one implementation of the walk
+        that decides which move disappears."""
         for _ in range(20):
             if self._party_knows(move_name)[0]:
                 break
-            s = scr()
+            s = "".join(self.emu.screen_text()).upper()
             if "YES" in s and "NO" in s:
                 self.press("A:5 .:70")                # YES: delete one
-                if forget_move:                       # move list is up
-                    want = forget_move.upper()
+                if forget:                            # move list is up
+                    want = forget.upper()
                     self.press(".:30")
                     for _ in range(6):
                         if any(want in r for r in self.cursor_rows()):
@@ -3331,14 +3879,196 @@ class Driver:
             if not self.textbox():
                 break
             self.press("A:4 .:50")
+        return self._party_knows(move_name)[0]
+
+    def teach_hm(self, hm_tag, move_name, forget_move=None):
+        """Teach the HM whose pocket row reads '<hm_tag> <move_name>'
+        (e.g. 'H3', 'SURF') to the first ABLE party member via PACK ->
+        TM/HM pocket. `forget_move` names the move to delete if the
+        learner already knows four (default: whatever the cursor starts
+        on, slot 1). Label/WRAM-driven throughout: menus remember their
+        last cursor slot, so blind press counts are never safe.
+        Raises RuntimeError (with menus closed) if the flow fails.
+
+        For a NAMED party member and a machine-readable failure instead
+        of an exception, use teach_tm -- both drive the same steps."""
+        def bail(msg):
+            self.close_menus()
+            raise RuntimeError(f"teach_hm {move_name}: {msg}")
+        if not self._tmhm_pocket():
+            bail(self.last_menu_reason or "TM/HM pocket never opened")
+        if not self._tmhm_row(hm_tag, move_name):
+            bail(self.last_menu_reason or "HM row never under cursor")
+        if not self._tmhm_use():
+            bail(self.last_menu_reason or "USE flow failed")
+        # the D-scan wraps, so every row gets visited wherever it starts
+        for _ in range(8):
+            if self._able_under_cursor():
+                break
+            self.press("D:4 .:15")
+        else:
+            bail(f"no party member is ABLE to learn {move_name}")
+        self.press("A:5 .:80")                        # choose the mon
+        learned = self._walk_forget_menu(move_name, forget_move)
         # postcondition: overworld interactive again, move actually known
         if not self.close_menus():
             raise RuntimeError(f"teach_hm {move_name}: a menu is still "
                                "open after teaching")
-        knows, _idx = self._party_knows(move_name)
-        if not knows:
+        if not learned:
             raise RuntimeError(f"teach_hm {move_name}: teaching failed "
                                "verification")
+
+    _tmhm_table = None      # {'TM01': 'DYNAMICPUNCH', ...}, lazily parsed
+    _species_tmhm = None    # {SPECIES: [MOVE_CONST, ...]}
+
+    def tmhm_moves(self):
+        """``{'TM01': 'DYNAMICPUNCH', ..., 'HM07': 'WATERFALL'}`` -- which
+        move each TM/HM teaches, in TM/HM number order."""
+        if Driver._tmhm_table is None:
+            from crystalagent.tactics import parse_tmhm_moves
+            Driver._tmhm_table = parse_tmhm_moves(paths.REPO_ROOT)
+        return Driver._tmhm_table
+
+    def species_tmhm(self):
+        """``{SPECIES: [MOVE_CONST, ...]}`` TM/HM learnsets (base stats)."""
+        if Driver._species_tmhm is None:
+            from crystalagent.tactics import parse_species_tmhm
+            Driver._species_tmhm = parse_species_tmhm(paths.REPO_ROOT)
+        return Driver._species_tmhm
+
+    def tmhm_stock(self):
+        """``{'TM23': count}`` for every TM/HM actually held.
+
+        TMs do not live in the item pockets _bag() reads: wTMsHMs is a
+        flat count-per-TMNUM array (ram/wram.asm:3109), TM01..TM50 then
+        HM01..HM07, which is also the order the pocket lists them in."""
+        tags = list(self.tmhm_moves())
+        bank, addr = self.emu.sym["wTMsHMs"]
+        raw = self.emu.read((bank, addr), len(tags))
+        return {tag: n for tag, n in zip(tags, raw) if n}
+
+    def _tm_fail(self, reason):
+        self.last_tm_reason = reason
+        log.warning(f"  teach_tm: {reason}")
+        return False
+
+    def _resolve_tm(self, tm):
+        """'TM23' | 'IRON TAIL' | 'IRON_TAIL' -> (tag, move display name),
+        or (None, None)."""
+        table = self.tmhm_moves()
+        key = str(tm).strip().upper().replace(" ", "")
+        tag = key if key in table else next(
+            (t for t, mv in table.items()
+             if _norm_item(mv) == _norm_item(key)), None)
+        if tag is None:
+            return None, None
+        const = table[tag]
+        # the ROM's display name for that move constant ('IRON_TAIL' ->
+        # 'IRON TAIL'); compared normalised so spacing never matters
+        want = _norm_item(const)
+        name = next((n for n in self.names.moves.values()
+                     if _norm_item(n) == want), const.replace("_", " "))
+        return tag, name
+
+    def _party_row(self, mon):
+        """0-based party row of the member named `mon` -- NICKNAME first,
+        then species, since a model may say either. ValueError on an
+        unknown name: teaching the wrong mon is worse than stopping."""
+        want = _norm_name(mon)
+        party = game_state(self.emu, self.names)["party"]
+        for slot, m in enumerate(party):
+            if _norm_name(m.get("nickname") or "") == want:
+                return slot
+        for slot, m in enumerate(party):
+            if _norm_name(m.get("name") or m.get("species") or "") == want:
+                return slot
+        raise ValueError(
+            f"teach_tm: no party member named {mon!r} (party: "
+            f"{[m.get('nickname') for m in party]})")
+
+    def teach_tm(self, tm, mon, forget=None):
+        """Teach a TM (or HM) to a NAMED party member. True only when the
+        move is really on that mon afterwards.
+
+        `tm` is a tag or the move it teaches ('TM23', 'IRON TAIL');
+        `mon` is a nickname or species; `forget` names the move to delete
+        when the mon already knows four (default: the move the list opens
+        on, i.e. its oldest).
+
+        Everything checkable is checked BEFORE a single button is pressed,
+        because a refusal mid-flow leaves menus open (gotcha 7) and the
+        game's own "not compatible" path just wastes the TM's turn:
+
+          'unknown-tm'    no such TM/HM tag or move
+          'not-in-bag'    wTMsHMs holds none of that TM
+          'cannot-learn'  the species' tmhm learnset excludes the move
+          'already-knows' that mon already has it
+
+        An unknown `mon`, or a `forget` the mon does not know / an HM move
+        (the game refuses to delete those), raises ValueError.
+        """
+        self.last_tm_reason = None
+        tag, move_name = self._resolve_tm(tm)
+        if tag is None:
+            return self._tm_fail(f"unknown-tm: {tm!r} names no TM/HM")
+        slot = self._party_row(mon)
+        party = game_state(self.emu, self.names)["party"]
+        entry = party[slot]
+        label = entry.get("nickname") or entry.get("name")
+        stock = self.tmhm_stock()
+        if not stock.get(tag):
+            return self._tm_fail(f"not-in-bag: no {tag} ({move_name}) held")
+        const = self.tmhm_moves()[tag]
+        learnset = self.species_tmhm().get(entry.get("name")) \
+            or self.species_tmhm().get(entry.get("species")) or []
+        if const not in learnset:
+            return self._tm_fail(
+                f"cannot-learn: {entry.get('name')} cannot learn "
+                f"{move_name} ({tag})")
+        known = [m.get("name") for m in entry.get("moves", [])]
+        if move_name in known:
+            return self._tm_fail(f"already-knows: {label} already has "
+                                 f"{move_name}")
+        if forget is not None:
+            if forget.strip().upper() in self.HM_MOVES:
+                raise ValueError(
+                    f"teach_tm: the game refuses to delete HM move "
+                    f"{forget!r}")
+            if forget not in known:
+                raise ValueError(
+                    f"teach_tm: {label} does not know {forget!r} "
+                    f"(knows: {known})")
+        log.info(f"[teach_tm] {tag} {move_name} -> {label} (slot {slot})"
+                 + (f", forgetting {forget}" if forget else ""))
+        if not self._tmhm_pocket():
+            self.close_menus()
+            return self._tm_fail(self.last_menu_reason or "no TM/HM pocket")
+        if not self._tmhm_row(tag, move_name):
+            self.close_menus()
+            return self._tm_fail(self.last_menu_reason or "no TM row")
+        if not self._tmhm_use():
+            self.close_menus()
+            return self._tm_fail(self.last_menu_reason or "USE flow failed")
+        if not self._party_cursor_to(slot + 1):
+            self.close_menus()
+            return self._tm_fail(
+                f"target-miss: could not put the party cursor on row "
+                f"{slot + 1} ({label})")
+        if not self._able_under_cursor():
+            self.close_menus()
+            return self._tm_fail(
+                f"not-able: the game reports {label} NOT ABLE to learn "
+                f"{move_name}")
+        self.press("A:5 .:80")                        # choose the mon
+        learned = self._walk_forget_menu(move_name, forget)
+        self.close_menus()
+        if not learned:
+            return self._tm_fail(f"not-learned: {label} does not know "
+                                 f"{move_name} after the flow")
+        self.last_tm_reason = "learned"
+        log.info(f"  {label} learned {move_name}")
+        return True
+
     def _party_cursor_to(self, row, max_steps=12):
         """Move the party-menu cursor to 1-based `row` using the live
         wMenuCursorY (the menu wraps, so press counts from an unknown
@@ -3487,6 +4217,11 @@ class Driver:
         # the party list stays visible behind the submenu box and field
         # moves sit ABOVE STATS/SWITCH, so steer by row TEXT (wren pt6)
         if not self.select_menu_row("CUT", confirm=False, max_presses=10):
+            # a field move refused (wrong mon, indoors, "Can't use that
+            # here") leaves the party menu + submenu OPEN, and an open
+            # menu eats every movement input afterwards (gotcha 7). Every
+            # field-move failure path must close its own UI.
+            self.close_menus()
             raise RuntimeError("use_cut: CUT row missing from the "
                                "POKéMON submenu")
         self.press("A:6 .:50")                        # use CUT
@@ -3568,17 +4303,22 @@ class Driver:
         leftovers that shadowed 'SUPER POTION' in wren pt4)."""
         want = _norm_item(item_name)
         last, stuck = None, 0
+        cur = None
         for _ in range(max_steps):
             cur = self.menu.scroll_abs()
             if cur == idx:
                 break
             stuck = stuck + 1 if cur == last else 0
             if stuck >= 3:
-                return False    # cursor pinned: list edge or wrong menu
+                return self._menu_fail(
+                    f"pocket_select({item_name}): cursor pinned at {cur} "
+                    f"short of row {idx} -- list edge or wrong menu")
             last = cur
             self.press("D:6 .:4" if cur < idx else "U:6 .:4")
         else:
-            return False
+            return self._menu_fail(
+                f"pocket_select({item_name}): stopped at {cur} after "
+                f"{max_steps} steps, wanted row {idx}")
         self.press(".:10")      # let the row repaint before scraping
         # text-targeted verify + confirm: the helper re-checks the row
         # under the ACTIVE cursor and can correct a small WRAM/screen
@@ -3598,9 +4338,12 @@ class Driver:
         elif self.select_menu_row(item_name, max_presses=4,
                                   match=lambda t: _item_row_matches(t, want)):
             return True
-        log.info(f"  pocket row mismatch: want {item_name!r} "
-                 f"(norm {want}), cursor row {self.menu.cursor_row()!r}")
-        return False        # WRAM/screen disagree: never blind-A
+        # WRAM/screen disagree: never blind-A
+        return self._menu_fail(
+            f"pocket_select({item_name}): row mismatch (norm {want}), "
+            f"cursor row {self.menu.cursor_row()!r}"
+            + (f"; {self.menu.last_reason}"
+               if getattr(self.menu, "last_reason", None) else ""))
 
     def _party_target(self, slot, max_steps=12):
         """Steer the field party menu to row `slot` (0-based; eggs count
@@ -3625,6 +4368,7 @@ class Driver:
         # live evidence: a D press left wMenuCursorY unchanged at 1.
         self.press(".:16")
         last, stuck = None, 0
+        cur = None
         for _ in range(max_steps):
             cur = self.emu.read_u8("wMenuCursorY") - 1
             if cur == slot:
@@ -3632,10 +4376,13 @@ class Driver:
                 return True
             stuck = stuck + 1 if cur == last else 0
             if stuck >= 3:
-                return False    # cursor pinned: wrong menu / list edge
+                return self._menu_fail(
+                    f"party_target({slot}): cursor pinned at row {cur} -- "
+                    f"wrong menu or list edge")
             last = cur
             self.press("D:6 .:6" if cur < slot else "U:6 .:6")
-        return False
+        return self._menu_fail(f"party_target({slot}): stopped at row {cur} "
+                               f"after {max_steps} steps")
 
     def _items_pocket_by_screen(self):
         """Fallback pack detection when goto_pocket's wJumptableIndex gate
@@ -3658,9 +4405,14 @@ class Driver:
                     log.info("  pack quantity rows on screen despite "
                              "jumptable mismatch; proceeding")
                     return True
-                return False        # nothing pack-like drawn: real miss
+                # nothing pack-like drawn: real miss
+                return self._menu_fail(
+                    "items_pocket: no pack banner and no quantity rows "
+                    "on screen")
             self.press("L:4 .:12")  # cycle pockets toward ITEM POCKET
-        return False
+        return self._menu_fail(
+            f"items_pocket: pocket banner still {banner!r} after 4 "
+            f"L presses")
 
     def _start_menu_pack_row(self):
         """Get the START menu open with its PACK row drawn, and say so.
@@ -3684,10 +4436,24 @@ class Driver:
         if self.textbox():
             self.flush_dialog()
         self.press("START:4 .:25")
-        return self._wait_screen(_pack_row, 120)
+        if self._wait_screen(_pack_row, 120):
+            return True
+        return self._menu_fail("start_menu: no PACK row drawn after two "
+                               "START presses")
 
     # pack.asm jumptable states for the four pockets (goto_pocket's gate)
     _PACK_STATES = (2, 4, 6, 8)
+
+    def _pack_up(self, rows=None):
+        """Is the pack REALLY drawn? The jumptable's pocket state is the
+        primary signal; field context can leave it stale, in which case
+        the drawn pocket banner or the 'x N' quantity column proves it
+        (wren pt6)."""
+        if self.emu.read_u8("wJumptableIndex") in self._PACK_STATES:
+            return True
+        rows = self.emu.screen_text() if rows is None else rows
+        return _pack_pocket_banner(rows) is not None or \
+            bool(_pack_quantity_rows(rows))
 
     def _open_pack(self, max_confirms=3):
         """START -> PACK -> items pocket, with the pack open PROVED.
@@ -3714,20 +4480,29 @@ class Driver:
         (jumptable pocket state, or the drawn pocket banner / quantity
         column when field context leaves the jumptable stale -- wren
         pt6). Re-pressing A on an already-open pack only re-opens the
-        item submenu, which _pocket_select re-drives, so it is safe."""
+        item submenu, which _pocket_select re-drives, so it is safe.
+
+        The confirm now goes through select_label's `expect` gate, so the
+        primitive's own answer means "the pack is up" -- and when it is
+        not, the retry loop below is what recovers."""
         if not self._start_menu_pack_row():
-            log.warning("  START menu did not open")
-            return False
+            why = self.last_menu_reason or "START menu did not open"
+            return self._menu_fail(f"open_pack: {why}")
         self.press(".:20")          # gotcha 2: let the input loop start
-        if not self.menu.select_label("PACK", max_presses=8):
-            log.info("  no PACK row to confirm")
-            return False
+        if not self._confirm_label("PACK", self._pack_up, max_presses=8):
+            reason = (getattr(self.menu, "last_reason", None)
+                      or self.last_menu_reason or "PACK confirm unverified")
+            if "state not reached" not in reason:
+                return self._menu_fail(f"open_pack: {reason}")
+            log.info(f"  {reason}; retrying the confirm")
         for _ in range(max_confirms):
             if goto_pocket(self.menu, "items") or \
                     self._items_pocket_by_screen():
                 return True
             self.press("A:8 .:24")      # swallowed confirm: press again
-        return False
+        return self._menu_fail(
+            f"open_pack: items pocket never came up in {max_confirms} "
+            f"confirms")
 
     def _field_ui_clear(self):
         """Nothing modal is left on screen AND the pack's own jumptable is
@@ -3889,39 +4664,6 @@ class Driver:
                                                  self.names)
         return _field_heal_table
 
-    @staticmethod
-    def _cheapest_heal(table, bag, allow, need_hp, status, fainted):
-        """Cheapest item IN THE BAG that helps this mon, or None.
-
-        Order of business, which is what keeps a 3000¥ FULL RESTORE off a
-        mon a 300¥ POTION would fix: a fainted mon needs a revive and
-        nothing else can touch it; a status is cleared by the cheapest
-        item whose cure mask COVERS it (an ANTIDOTE, not a FULL HEAL);
-        HP is topped up by the cheapest item that covers the WHOLE
-        shortfall. Only when nothing in the bag covers it does the
-        biggest heal on offer get used, and the caller loops on that.
-        A status with no cure in the bag still gets its HP topped up
-        instead of the mon being written off."""
-        def stocked(pred):
-            return [it for key, it in table.items()
-                    if bag.get(key) and (allow is None or key in allow)
-                    and pred(it)]
-
-        if fainted:
-            picks = stocked(lambda it: it["revives"])
-        else:
-            picks = stocked(lambda it: status
-                            and it["cures"] & status == status)
-            if not picks and need_hp:
-                picks = stocked(lambda it: it["hp"] >= need_hp)
-            if not picks and need_hp:
-                best = max((it["hp"] for it in stocked(
-                    lambda it: it["hp"] > 0)), default=0)
-                picks = stocked(lambda it: it["hp"] == best) if best else []
-        if not picks:
-            return None
-        return min(picks, key=lambda it: (it["price"], it["name"]))["name"]
-
     def heal_party(self, items=None, max_items_per_mon=6):
         """Top every damaged/statused party member back up out of the bag,
         cheapest sufficient item first. Returns {mon label: outcome}:
@@ -3956,8 +4698,8 @@ class Driver:
                 if not need_hp and not status:
                     out[label] = ", ".join(spent) if spent else "already full"
                     break
-                pick = self._cheapest_heal(table, self._bag(), allow, need_hp,
-                                           status, mon["hp"] == 0)
+                pick = cheapest_heal(table, self._bag(), allow, need_hp,
+                                     status, mon["hp"] == 0)
                 if pick is None:
                     out[label] = ", ".join(spent) + " (still hurt)" \
                         if spent else "no item"
@@ -3983,34 +4725,49 @@ class Driver:
 
     def walk(self, path, label=""):
         """Walk a path like 'L*12 U*3 D'. Handles battles, NPC dialogs, and
-        map transitions along the way; reports blocks instead of looping."""
+        map transitions along the way; reports blocks instead of looping.
+
+        Every False return leaves the reason on `last_step_reason`."""
         if label:
             log.info(f"[{label}] from {self.map_name()} {self.pos()[2:]}")
-        for token in path.split():
-            d, _, n = token.partition("*")
-            d, n = d[0].upper(), int(n or 1)
-            done = stuck = 0
-            while done < n:
-                r = self._step(d)
-                if r == "battle":
-                    if not self._on_battle(f"walk '{path}'"):
-                        return False
-                    if self._whiteout_stop(f"walk '{path}'"):
-                        return False
-                elif r == "moved":
-                    done += 1
-                    stuck = 0
-                else:
-                    if self.textbox():
-                        self.flush_dialog()
-                        continue
-                    stuck += 1
-                    if stuck == 2:
-                        self.press("B:4 .:10")  # close a stray menu, then retry
-                    if stuck >= 4:
-                        log.warning(f"  BLOCKED {d} at {self.map_name()} {self.pos()[2:]}",
-                              )
-                        return False
+        self.last_step_reason = None
+        with self._money_watch(f"walk '{path}'"):
+            for token in path.split():
+                d, _, n = token.partition("*")
+                d, n = d[0].upper(), int(n or 1)
+                done = stuck = 0
+                while done < n:
+                    r = self._step(d)
+                    if r == "battle":
+                        if not self._on_battle(f"walk '{path}'"):
+                            self.last_step_reason = (
+                                f"walk '{path}': battle handed to the "
+                                f"caller at {self.map_name()} "
+                                f"{self.pos()[2:]}")
+                            return False
+                        if self._whiteout_stop(f"walk '{path}'"):
+                            self.last_step_reason = (
+                                f"walk '{path}': whiteout during the walk")
+                            return False
+                    elif r == "moved":
+                        done += 1
+                        stuck = 0
+                    else:
+                        if self.textbox():
+                            self.flush_dialog()
+                            continue
+                        stuck += 1
+                        if stuck == 2:
+                            # close a stray menu, then retry
+                            self.press("B:4 .:10")
+                        if stuck >= 4:
+                            self.last_step_reason = (
+                                f"walk '{path}': blocked stepping {d} at "
+                                f"{self.map_name()} {self.pos()[2:]}"
+                                f" (last step: {r})")
+                            log.warning(f"  BLOCKED {d} at "
+                                        f"{self.map_name()} {self.pos()[2:]}")
+                            return False
         return True
 
     def _resolve_map(self, name):
@@ -4041,19 +4798,15 @@ class Driver:
             raise TravelError(f"goto: {reason}")
         return False
 
-    def goto(self, x, y, label="", map_name=None, strict=False):
-        """BFS-pathfind to (x,y) and walk it. Defaults to the current map;
-        pass map_name (CONST_NAME or CamelCase) to route across maps via
-        warp events and edge connections. Replans around NPC bumps; fights
-        encounters on the way.
+    def _goto_walk(self, x, y, label="", map_name=None, strict=False):
+        """One walking attempt at (x,y): plan, walk, replan around NPC
+        bumps, fight encounters on the way.
 
-        Failure is loud, never silent: every False return sets
-        d.last_goto_reason first ('outside-bounds: ...' /
-        'unreachable: ...' / 'target-occupied: ...' / the give-up
-        diagnoses). strict=True upgrades those navigation failures to
-        TravelError; interactive handoffs (manual battle, choice menu,
-        whiteout recovery) still return False under strict so the
-        decider can take over."""
+        This is `goto` minus the savestate escalation; every failure sets
+        d.last_goto_reason ('outside-bounds: ...' / 'unreachable: ...' /
+        'target-occupied: ...' / the give-up diagnoses). Callers other
+        than `goto` should not use it -- goto is what decides whether a
+        failure is worth escalating."""
         self._refresh_nav_blocks()
         goal_map = self._resolve_map(map_name)
         goal = (x, y)
@@ -4288,6 +5041,105 @@ class Driver:
         return self._goto_fail(
             reason, strict,
             f"{self.map_name()} {self.pos()[2:]} -> {goal_map} {goal}")
+
+    # Escalation budget for goto's savestate search. Deliberately about a
+    # third of reach()'s 200/140: one explore_bfs node costs a savestate
+    # restore plus a settle of up to 1200 frames -- roughly a thousand
+    # times a goto pass -- so this is a last resort, not a default.
+    GOTO_ESCALATE_MOVES = 60
+    GOTO_ESCALATE_NODES = 40
+    # Failure classes where the decoded MAP is the suspect, so a
+    # savestate search of the real geometry can still get there. The
+    # Indigo Plateau Pokecenter renders (3,8) as wall while the avatar
+    # walks it; that is a static-data lie, not a blocked route.
+    GOTO_ESCALATE_ON = ("no-path", "unreachable", "replan-storm",
+                        "no-progress", "pass-cap", "outside-bounds")
+    # ... and classes where it CANNOT: a live actor, a running scene or an
+    # open menu is not geometry, and burning minutes of savestate search
+    # on one is worse than reporting it.
+    GOTO_NO_ESCALATE_ON = ("npc", "target-occupied", "script-scene-active",
+                           "choice menu", "whiteout", "manual",
+                           "waited-for-wanderer")
+    # Interactive handoffs: the caller (a model) is supposed to take over,
+    # so these return False even under strict -- raising would stop the
+    # very decision loop that can answer them.
+    GOTO_HANDOFF = ("manual", "choice menu", "whiteout")
+    _escalating = False
+
+    def _should_escalate(self, reason):
+        """Is this goto failure the kind a savestate search can fix?"""
+        if not reason:
+            return False
+        low = reason.lower()
+        if any(k in low for k in self.GOTO_NO_ESCALATE_ON):
+            return False
+        return any(k in low for k in self.GOTO_ESCALATE_ON)
+
+    def goto(self, x, y, label="", map_name=None, strict=False,
+             escalate=True):
+        """BFS-pathfind to (x,y) and walk it. Defaults to the current map;
+        pass map_name (CONST_NAME or CamelCase) to route across maps via
+        warp events and edge connections. Replans around NPC bumps; fights
+        encounters on the way.
+
+        When the walk fails because the decoded MAP is wrong -- no path,
+        replan storm, no progress -- goto escalates by itself to the
+        savestate search (explore_bfs), which walks the real geometry
+        instead of the parsed grid. That is what `reach` used to be for,
+        and nothing called it: the Indigo Plateau Pokecenter renders (3,8)
+        as wall while the avatar stands on it, so 20 replans burned and
+        the leg was hand-driven with step_hold. Failures that a search
+        cannot fix (an NPC in the way, a live scene, a choice menu, a
+        whiteout) are reported immediately instead.
+
+        `escalate`: True for the default budget, False to refuse, or a
+        (max_moves, max_nodes) tuple to raise it (what reach does).
+
+        Failure is loud, never silent: every False return sets
+        d.last_goto_reason first. strict=True upgrades navigation
+        failures to TravelError; interactive handoffs (manual battle,
+        choice menu, whiteout recovery) still return False under strict
+        so the decider can take over."""
+        with self._money_watch(f"goto {(x, y)}"):
+            if self._goto_walk(x, y, label, map_name, strict=False):
+                return True
+            reason = self.last_goto_reason
+            if escalate and not self._escalating and \
+                    self._should_escalate(reason):
+                if isinstance(escalate, (tuple, list)):
+                    moves, nodes = escalate
+                else:
+                    moves, nodes = (self.GOTO_ESCALATE_MOVES,
+                                    self.GOTO_ESCALATE_NODES)
+                goal, goal_map = (x, y), self._resolve_map(map_name)
+                log.warning(f"  goto ({reason}) -- escalating to a "
+                            f"savestate search ({moves} moves, {nodes} "
+                            f"nodes): the decoded grid may be wrong")
+                self._escalating = True
+                try:
+                    found = self.explore_bfs(
+                        lambda dr: dr.pos()[2:] == goal
+                        and dr.map_name() == goal_map,
+                        max_moves=moves, max_nodes=nodes,
+                        on_battle="fight")
+                except Exception as exc:
+                    # The search needs savestates; where they are not
+                    # available the WALK's failure is still the answer.
+                    log.warning(f"  savestate search unavailable "
+                                f"({type(exc).__name__}: {exc})")
+                    found = None
+                finally:
+                    self._escalating = False
+                if (found or {}).get("found"):
+                    self.last_goto_reason = None
+                    log.info(f"  -> reached {goal} via savestate search")
+                    return True
+                reason = f"{reason}; search exhausted ({nodes} nodes)"
+                self.last_goto_reason = reason
+            if strict and reason and not any(
+                    k in reason.lower() for k in self.GOTO_HANDOFF):
+                raise TravelError(f"goto: {reason}")
+            return False
 
     # Deliberate-trip opt-in (FABLE_FEEDBACK failure pattern 5): after
     # confirming from maps/<Map>.asm that a scene script is safe
@@ -4545,30 +5397,63 @@ class Driver:
                                      st["offset"] or 0, x, y)
 
     def reach(self, x, y, label="", budget=200, nodes=140):
-        """Walk to (x, y) on THIS map, falling back to explore_bfs when
-        the static collision grid is wrong about the geometry.
+        """Walk to (x, y) on THIS map with a BIGGER savestate-search
+        budget than goto's default.
 
         Victory Road (and the Rocket base, and Ice Path) have floors whose
-        decoded grid disagrees with the live map: goto reports
+        decoded grid disagrees with the live map: the walk reports
         'unexplained blocked step' / 'unreachable' for cells the avatar
-        can plainly walk to. goto is still tried first -- it is far
-        cheaper -- and only its failure pays for a savestate search.
+        can plainly walk to. That escalation now lives in `goto` itself,
+        so this is just goto with the budget raised -- the walk is still
+        tried first, and only its failure pays for a search.
         Returns True when standing on (x, y)."""
-        target = (x, y)
-        if self.pos()[2:] == target:
+        if self.pos()[2:] == (x, y):
             return True
         try:
-            if self.goto(x, y, label):
-                return True
-        except Exception:
-            pass
-        if self.pos()[2:] == target:
-            return True
-        log.info(f"  reach: goto failed ({self.last_goto_reason}); "
-                 f"searching for {target}")
-        res = self.explore_bfs(lambda dr: dr.pos()[2:] == target,
-                               max_moves=budget, max_nodes=nodes)
-        return bool(res["found"])
+            return self.goto(x, y, label, escalate=(budget, nodes))
+        except TravelError:
+            return self.pos()[2:] == (x, y)
+
+    # How far along a map edge to search for the row/column that actually
+    # crosses. Live misses were off by exactly one, but ledges and fences
+    # can push the real band several cells away.
+    EDGE_SLIDE = 6
+
+    def _slide_edge(self, st, dest=""):
+        """Cross a map-edge connection whose planned row/column does not
+        fire, by sliding ALONG the edge and re-trying the held step.
+
+        `travel` used to fail the whole leg here: Azalea Town's east edge
+        crosses at y=14 while the plan said y=13, and Route 32 -> Violet
+        at x=8. A hand-written `cross()` helper doing exactly this slide
+        was what got a live session through both, so it belongs inside
+        travel. Returns True when the map changed."""
+        d = st["dir"]
+        start_map = self.map_name()
+        # slide perpendicular to the crossing direction: out one way,
+        # back to the start, then out the other. Alternating U/D on the
+        # spot just oscillates around the row that does not work.
+        pairs = (("U", "D"), ("D", "U")) if d in ("L", "R") \
+            else (("L", "R"), ("R", "L"))
+        for mv, back in pairs:
+            moved = 0
+            for _ in range(self.EDGE_SLIDE):
+                if self._step(mv) != "moved":
+                    break
+                moved += 1
+                r = self.step_hold(d)
+                if r == "battle":
+                    if not self._on_battle(f"travel -> {dest}"):
+                        return False
+                if self.map_name() != start_map:
+                    log.info(f"  edge slide: crossed {d} after {moved} "
+                             f"{mv}-step(s) -- the planned row did not fire")
+                    return True
+            for _ in range(moved):        # back to the planned row
+                if self._step(back) != "moved":
+                    break
+
+        return False
 
     def travel(self, dest_map, label=""):
         """Execute route(<dest_map>) leg by leg with the existing walk/
@@ -4640,44 +5525,65 @@ class Driver:
             px, py = self.pos()[2:]
             expected = self._landing(st, px, py)
             r = None
-            for _attempt in range(4):
-                r = self._step(st["dir"])
-                if r == "battle":
-                    # encounter mid-transition; then retry
-                    if not self._on_battle("travel"):
-                        raise TravelError(
-                            f"leg {i}: battle mid-travel with "
-                            f"auto_fight=manual -- decide it "
-                            f"(fight()/catch()), then relaunch travel()")
-                    if self._whiteout_stop("travel"):
-                        raise TravelError(
-                            f"leg {i}: wiped mid-travel, auto-healed at "
-                            f"{self.map_name()} -- relaunch travel()")
-                elif r == "blocked":
-                    if self.textbox():
-                        # scripted scene on the transition cell: page it
-                        # out (bounded); a battle it starts is caught by
-                        # the next attempt's _step -> the fight path above
-                        self._drain_scene()
+            # Already standing ON the warp tile: a warp only fires on the
+            # step that enters it, so stepping `dir` from here just walks
+            # away. take_warp steps off and back on.
+            if st["kind"] == "warp" and \
+                    tuple(st.get("cell") or ()) == (px, py):
+                if self.take_warp(px, py, f"travel -> {dest}"):
+                    r = "warp"
+                elif self.map_name() == st["from"]:
+                    raise TravelError(
+                        f"leg {i}: standing on warp {(px, py)} and could "
+                        f"not enter it ({self.last_warp_reason})")
+            if r is None:
+                for _attempt in range(4):
+                    r = self._step(st["dir"])
+                    if r == "battle":
+                        # encounter mid-transition; then retry
+                        if not self._on_battle("travel"):
+                            raise TravelError(
+                                f"leg {i}: battle mid-travel with "
+                                f"auto_fight=manual -- decide it "
+                                f"(fight()/catch()), then relaunch travel()")
+                        if self._whiteout_stop("travel"):
+                            raise TravelError(
+                                f"leg {i}: wiped mid-travel, auto-healed at "
+                                f"{self.map_name()} -- relaunch travel()")
+                    elif r == "blocked":
+                        if self.textbox():
+                            # scripted scene on the transition cell: page
+                            # it out (bounded); a battle it starts is
+                            # caught by the next attempt's _step -> the
+                            # fight path above
+                            self._drain_scene()
+                        else:
+                            break
+                    elif r != "warp" and self.map_name() == st["from"]:
+                        # stepped but the warp didn't fire. On a multi-warp
+                        # door row (Sprout Tower 1F's double door) the held
+                        # step GLIDES across every door tile without firing
+                        # (gotcha 12); each retry then re-crosses the row
+                        # from the other side -- the observed (8,15)<->
+                        # (11,15) ping-pong. take_warp drives back onto the
+                        # tile properly, including from ON it.
+                        if st["kind"] == "warp" and st.get("cell"):
+                            if self.take_warp(*st["cell"],
+                                              f"travel -> {dest}"):
+                                r = "warp"
+                                break
+                        continue
                     else:
                         break
-                elif r != "warp" and self.map_name() == st["from"]:
-                    # stepped but the warp didn't fire. On a multi-warp
-                    # door row (Sprout Tower 1F's double door) the held
-                    # step GLIDES across every door tile without firing
-                    # (gotcha 12); each retry then re-crosses the row
-                    # from the other side -- the observed (8,15)<->(11,15)
-                    # ping-pong. We are off the modeled approach now, so
-                    # drive straight back onto the warp tile instead.
-                    if st["kind"] == "warp":
-                        fr = self._held_warp_entry(st)
-                        if fr == "warp":
-                            r = "warp"
-                            break
-                    continue
-                else:
-                    break
             self.settle()
+            if self.map_name() == st["from"] and st["kind"] == "connection":
+                # Map-edge connections are a BAND, and the planned row can
+                # be off by one (Azalea's east edge fires at y=14, the plan
+                # said 13; Route 32 -> Violet at x=8). Slide along the edge
+                # and retry with a held step rather than failing the leg.
+                if self._slide_edge(st, dest):
+                    r = "warp"
+                self.settle()
             mx, my = self.pos()[2:]
             here = self.map_name()
             if here != st["to"]:
@@ -4971,7 +5877,18 @@ class Driver:
         from it): the game must be a clean interactable overworld --
         wScriptMode 0, no textbox, no menu cursor, not in battle. Dirty
         screens get a bounded B-press auto-recovery first; force=True
-        bypasses the check entirely."""
+        bypasses the check but LOGS what it is overriding."""
+        if force:
+            # force is legitimate (rolling back a fork on purpose), but it
+            # must never be QUIET: a state baked with a menu open reloads
+            # with dead movement, because the open menu eats every input
+            # (AGENTS.md gotcha 7), and every fork made from it inherits it.
+            blockers = self._save_blockers()
+            if blockers:
+                log.warning(
+                    f"  saving OVER blockers ({', '.join(blockers)}) because "
+                    f"force=True -- a reloaded state with an open menu has "
+                    f"dead movement (gotcha 7)")
         if not force:
             # legit saves happen right AFTER dialogs: settle before the
             # first check so a closing box isn't judged mid-fade

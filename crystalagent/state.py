@@ -3,6 +3,8 @@
 Party/enemy struct offsets are derived from the labels the disassembly
 gives every field (wPartyMon1HP - wPartyMon1, etc.) -- no magic numbers.
 """
+from . import paths
+from .asmconst import parse_const_defs, parse_defs
 from .schemas import validate_game_state
 
 MON_NAME_LENGTH = 11
@@ -12,7 +14,15 @@ MON_NAME_LENGTH = 11
 JOHTO_BADGES = ["ZEPHYR", "HIVE", "PLAIN", "FOG", "MINERAL", "STORM", "GLACIER", "RISING"]
 KANTO_BADGES = ["BOULDER", "CASCADE", "THUNDER", "RAINBOW", "SOUL", "MARSH", "VOLCANO", "EARTH"]
 
-_STATUS_BITS = [(0x08, "PSN"), (0x10, "BRN"), (0x20, "FRZ"), (0x40, "PAR")]
+# Status bits and the sleep-counter mask come from the game's own
+# constants (constants/battle_constants.asm:162): SLP is the low 3 bits
+# as a turn counter, then PSN/BRN/FRZ/PAR at bits 3-6. Everything that
+# reasons about status -- game_state, battle_frame, the mid-battle cure
+# in tactics.recommend -- reads the same numbers as the engine.
+_BATTLE_CONSTANTS = paths.REPO_ROOT / "constants" / "battle_constants.asm"
+_STATUS_BITS = [(1 << parse_const_defs(_BATTLE_CONSTANTS)[n], n)
+                for n in ("PSN", "BRN", "FRZ", "PAR")]
+SLP_MASK = parse_defs(_BATTLE_CONSTANTS)["SLP_MASK"]
 EGG = 0xFD  # wPartySpecies entry for an egg (the mon struct holds the real species)
 
 
@@ -36,8 +46,8 @@ def _unown_letter(b):
 
 def _status(byte):
     out = [name for bit, name in _STATUS_BITS if byte & bit]
-    if byte & 0x07:
-        out.append(f"SLP:{byte & 0x07}")
+    if byte & SLP_MASK:
+        out.append(f"SLP:{byte & SLP_MASK}")
     return out
 
 

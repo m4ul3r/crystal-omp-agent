@@ -16,6 +16,7 @@ import logging
 import re
 from pathlib import Path
 
+from .asmconst import parse_const_defs
 from .menus import (Menus, battle_menu_up, naming_keyboard_up, _cursor_x,
                     _cursor_xs)
 from .state import EGG, MON_NAME_LENGTH, _status
@@ -28,23 +29,14 @@ MOVE_LENGTH = 7  # animation, effect, power, type, accuracy, pp, effect chance
 def _parse_types(path):
     """``{TYPE_NAME: id}`` matching the game's real type ids.
 
-    ``const_next N`` resets the counter (constants/type_constants.asm:22
-    jumps the unused block to 19, so FIRE is 20 and DARK is 27). Ignoring
-    it shifted every SPECIAL type down by 9, which silently turned every
-    matchup lookup made with a real id -- ROM move types and the WRAM type
-    bytes are real ids -- into a 1.0 "no interaction" miss.
+    Parsed with the shared ``const`` walker, which honours ``const_next N``
+    (constants/type_constants.asm:22 jumps the unused block to 19, so FIRE
+    is 20 and DARK is 27). Ignoring it shifted every SPECIAL type down by
+    9, which silently turned every matchup lookup made with a real id --
+    ROM move types and the WRAM type bytes are real ids -- into a 1.0 "no
+    interaction" miss.
     """
-    types = {}
-    tid = 0
-    for line in Path(path).read_text().splitlines():
-        nxt = re.match(r"\s+const_next (\d+)", line)
-        if nxt:
-            tid = int(nxt.group(1))
-            continue
-        m = re.match(r"\s+const (\w+)", line)
-        if m:
-            types[m.group(1)] = tid
-            tid += 1
+    types = dict(parse_const_defs(path))
     # The engine's constant is PSYCHIC_TYPE; every caller says PSYCHIC.
     if "PSYCHIC_TYPE" in types:
         types.setdefault("PSYCHIC", types["PSYCHIC_TYPE"])
@@ -88,6 +80,10 @@ class BattleData:
                 # (really 75) and DYNAMICPUNCH (really 50) looked perfectly
                 # reliable to move-choosing policies.
                 "accuracy": max(1, round(rec[4] * 100 / 255)),
+                # The engine's accuracy/evasion-stage math runs on the RAW
+                # byte (CheckHit.StatModifiers), so the percentage above
+                # cannot be re-scaled without drift: keep both.
+                "accuracy_raw": rec[4],
             }
 
     def effectiveness(self, atk_type, def_types):
@@ -115,6 +111,45 @@ def norm_item(name):
 
 
 _norm_item = norm_item   # legacy import name (trek.py)
+
+
+def cheapest_heal(table, bag, allow, need_hp, status, fainted):
+    """Cheapest item IN THE BAG that helps this mon, or None.
+
+    Order of business, which is what keeps a 3000¥ FULL RESTORE off a
+    mon a 300¥ POTION would fix: a fainted mon needs a revive and
+    nothing else can touch it; a status is cleared by the cheapest
+    item whose cure mask COVERS it (an ANTIDOTE, not a FULL HEAL);
+    HP is topped up by the cheapest item that covers the WHOLE
+    shortfall. Only when nothing in the bag covers it does the
+    biggest heal on offer get used, and the caller loops on that.
+    A status with no cure in the bag still gets its HP topped up
+    instead of the mon being written off.
+
+    ``table`` is _load_heal_table's ROM-derived properties, ``bag`` is
+    keyed by normalised item name. Shared by ``heal_party`` (out of
+    battle) and ``Tactics.recommend`` (the mid-battle cure), so the two
+    can never disagree about what the cheapest cure is.
+    """
+    def stocked(pred):
+        return [it for key, it in table.items()
+                if bag.get(key) and (allow is None or key in allow)
+                and pred(it)]
+
+    if fainted:
+        picks = stocked(lambda it: it["revives"])
+    else:
+        picks = stocked(lambda it: status
+                        and it["cures"] & status == status)
+        if not picks and need_hp:
+            picks = stocked(lambda it: it["hp"] >= need_hp)
+        if not picks and need_hp:
+            best = max((it["hp"] for it in stocked(
+                lambda it: it["hp"] > 0)), default=0)
+            picks = stocked(lambda it: it["hp"] == best) if best else []
+    if not picks:
+        return None
+    return min(picks, key=lambda it: (it["price"], it["name"]))["name"]
 
 
 def bag_item_index(emu, names, item_name, pocket="items"):
@@ -180,6 +215,9 @@ def cancel_pack(menu):
 
 class Battle:
     """One battle session. Construct while wBattleMode != 0."""
+
+    # Why the last falsy return from a menu-driving helper was falsy.
+    last_reason = None
 
     def __init__(self, emu, names, bdata):
         self.emu = emu
@@ -289,10 +327,10 @@ class Battle:
         names = [n for n in names if n]
         if not names:
             return False
-        from .menus import _cursor_x
         for r in rows:
-            x = _cursor_x(r)
-            if x >= 0:
+            # every glyph on the row: a submenu box painted over a list
+            # puts its ▶ to the right of the list's own ▷ (gotcha 1)
+            for x in _cursor_xs(r):
                 label = r[x + 1:].strip()
                 if any(label.startswith(n) for n in names):
                     return True
@@ -466,8 +504,7 @@ class Battle:
 
         def pred(rows):
             for r in rows:
-                x = _cursor_x(r)
-                if x >= 0:
+                for x in _cursor_xs(r):     # every glyph (gotcha 1)
                     label = r[x + 1:].strip()
                     if any(mv and label.startswith(mv) for mv in my_moves):
                         return True
@@ -580,6 +617,16 @@ class Battle:
             return True
         return self._bail_pack()
 
+    def _fail(self, reason):
+        """Record why a battle-menu primitive answered False.
+
+        The item and party flows have a dozen distinct dead ends that all
+        used to look like a bare `False` to the caller; `last_reason` is
+        what turns "the item didn't get used" into a diagnosis."""
+        self.last_reason = reason
+        log.info("  battle-menu: %s", reason)
+        return False
+
     def _pocket_select(self, idx, item_name, max_steps=40):
         """Steer the pack-pocket cursor to absolute index `idx` on the
         live WRAM position (wMenuScrollPosition + wMenuCursorY), in BOTH
@@ -589,21 +636,31 @@ class Battle:
         pressing A (select_abs desyncs once burned ~9 potions blind)."""
         want = norm_item(item_name)
         last, stuck = None, 0
+        cur = None
         for _ in range(max_steps):
             cur = self.menu.scroll_abs()
             if cur == idx:
                 break
             stuck = stuck + 1 if cur == last else 0
             if stuck >= 3:
-                return False    # cursor pinned: list edge or wrong menu
+                return self._fail(
+                    f"pocket_select({item_name}): cursor pinned at {cur} "
+                    f"short of row {idx} -- list edge or wrong menu")
             last = cur
             self.menu.press("D:6 .:4" if cur < idx else "U:6 .:4")
         else:
-            return False
+            return self._fail(
+                f"pocket_select({item_name}): stopped at {cur} after "
+                f"{max_steps} steps, wanted row {idx}")
         self.menu.press(".:10")     # let the row repaint before scraping
         got = self.menu.cursor_row()
-        if not got or not norm_item(got[1]).startswith(want):
-            return False            # WRAM/screen disagree: never blind-A
+        if not got:
+            # WRAM/screen disagree: never blind-A
+            return self._fail(
+                f"pocket_select({item_name}): no cursor row painted")
+        if not norm_item(got[1]).startswith(want):
+            return self._fail(
+                f"pocket_select({item_name}): row {idx} reads {got[1]!r}")
         self.menu.press("A:6 .:18")
         return True
 
@@ -614,6 +671,7 @@ class Battle:
         holds the pocket's scroll offset here, so neither blind press
         counts nor scroll_abs are safe for this list."""
         last, stuck = None, 0
+        cur = None
         for _ in range(max_steps):
             cur = self.emu.read_u8("wMenuCursorY") - 1
             if cur == slot:
@@ -621,10 +679,13 @@ class Battle:
                 return True
             stuck = stuck + 1 if cur == last else 0
             if stuck >= 3:
-                return False    # cursor pinned: wrong menu / list edge
+                return self._fail(
+                    f"party_target({slot}): cursor pinned at row {cur} -- "
+                    f"wrong menu or list edge")
             last = cur
             self.menu.press("D:6 .:6" if cur < slot else "U:6 .:6")
-        return False
+        return self._fail(f"party_target({slot}): stopped at row {cur} "
+                          f"after {max_steps} steps")
 
     @staticmethod
     def _party_pick_up(rows):

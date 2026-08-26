@@ -1,3 +1,105 @@
+## session claude-missables - un-collected items + a map DATA interface (Aug 26 2026)
+
+Harness-only: no game progress, no milestone saved, `saves/` untouched.
+Closes both gaps in `BRIEF_missables_and_mapview.md` plus its BONUS.
+Tests: **553 -> 593 green** (`.venv/bin/python -m pytest tests -q`, ~7 s).
+
+### [feat] GAP 1 -- nothing ever said HM02 FLY was still in Cianwood
+
+New `crystalagent/missables.py` parses every item source in `maps/*.asm`
+and all three giver forms: `verbosegiveitem`, plain `giveitem`, and
+`itemball` (HM07 WATERFALL is an itemball -- a gift-only parser would
+lose an HM). 322 sources, 164 distinct items, 144 gifts + 178 itemballs.
+
+Coordinates are the hard part: the give sits in a named script, and that
+label is the second-to-last field of an `object_event`. Resolved
+directly, then through up to 3 hops of `iftrue`/`sjump` callers -- which
+is what turns the S.S. Ticket (`ElmGiveTicketScript`, reached from
+`ProfElmScript`) from "somewhere in ELMS_LAB" into "Elm at (5,2)", and
+the MASTER BALL too (two hops, via `ElmCheckMasterBall`). 25 of 322 stay
+unresolved (vending machines, cutscenes) and are REPORTED as x=y=None,
+never guessed.
+
+New surfaces:
+- `d.missables(kind='key'|'all')` -- live rows
+  `{item, have, map, x, y, event, source}`. Obtained = the guarding
+  `EVENT_GOT_*` flag, or the bag (bag wins either way: never nag about
+  something already held). `kind='key'` is the game's own KEY_ITEM pocket
+  (`data/items/attributes.asm`) plus the HMs.
+- `d.field_moves()` -> `{'CUT': 'GATOR', 'FLY': None, ...}`.
+- `d.status()` now ends with e.g.
+  `missing: FLY(CIANWOOD_CITY 10,46) WATERFALL(ICE_PATH_1F 31,7) +18 more`.
+- `crystal missables [--all]`.
+
+**Live proof on a fork of `wren-storm-badge` (Cianwood Gym, the exact
+moment the run walked away from Fly):**
+
+```
+missing: FLY(CIANWOOD_CITY 10,46) WATERFALL(ICE_PATH_1F 31,7) ... +18 more
+field moves: CUT=GATOR FLY=- SURF=GATOR STRENGTH=GATOR ...
+HM_FLY  CIANWOOD_CITY  10,46  EVENT_GOT_HM02_FLY  maps/CianwoodCity.asm:100
+```
+
+Poking `EVENT_GOT_HM02_FLY` on the fork made the row disappear, so both
+directions are confirmed. Also confirmed by accident: `wren-champion`,
+`wren-postgame` and `wren-rematch-clear` ALL have that flag clear -- the
+Champion runs never had Fly at all.
+
+### [feat] GAP 2 -- stop making the model count characters
+
+`map_view()`'s grid sits behind a 5-column gutter and a two-row ruler, so
+reading a coordinate off it means counting monospace characters; that was
+miscounted three times in one session (Ilex wall x20, Olivine pier x=2 vs
+x=3, Vermilion Port Passage exit found only by grepping `warp_event`).
+
+- `d.tile_at(x,y)` -- one cell, through the SAME `_tile_kind` classifier
+  `observe()['tiles']` uses (verified live: all four neighbours agree).
+- `d.tiles_in(x0,y0,x1,y1)` -- a rect keyed by absolute coords.
+- `d.find_tiles(kind)` -- every warp/water/grass/ledge/sidewall/blocked/
+  floor/npc cell, sorted. This is the call that was missing.
+- `d.exits()` -- warps AND edge connections with destinations. Live:
+  VERMILION_PORT_PASSAGE returns (15,0) and (16,0) -> VERMILION_CITY,
+  exactly the pair that needed a grep (maps/VermilionPortPassage.asm:23-24).
+- `map_view()` keeps the art but prints an annotation block under it
+  (`warps: (0,7)->POKECENTER_2F (3,7)->OLIVINE_CITY`, `edge:`, `npcs:`,
+  `water:`, and a line saying to decide from the structured calls).
+  Warps outside the cropped window are counted, never dropped.
+
+### [feat] BONUS -- entering warps, crossing edges, money noise
+
+- `d.take_warp(x, y)`: standing ON a warp never fires it. Steps off,
+  re-enters, and **tries each side** -- a south-wall door only fires when
+  entered going DOWN, and re-entering Cianwood Gym's exit sideways
+  (off RIGHT, back LEFT) left the map unchanged live. Refuses up front
+  when (x,y) is not a warp on the CURRENT map, listing the map's real
+  warps: stale coords from the map you just left had otherwise routed the
+  walk into POKE_SEERS_HOUSE. `travel` now uses it, including for the
+  "already standing on it" case that used to fail the leg with
+  `warp D at (3,41) ... (step result: blocked)`.
+- `Driver._slide_edge`: when a map-edge connection's planned row does not
+  fire (Azalea's east edge crosses at y=14, the plan said 13; Route 32 ->
+  Violet at x=8), travel slides along the edge up to 6 cells each way and
+  retries with a held step instead of failing the leg.
+- The money guard now warns only on a DECREASE. `MONEY +216 ... movement
+  must never spend money` on trainer winnings was a false alarm.
+- `use_cut`'s "CUT row missing" path now `close_menus()` before raising:
+  a refused field move leaves the party menu open and an open menu eats
+  all movement input (gotcha 7).
+
+### Live vs unit-tested
+
+Live on forks (`claude_saves/miss-check.state`, `warp-check.state`, both
+deleted): the status line, `missables()` both directions, `field_moves()`,
+`crystal missables`, `exits()`/`find_tiles()`/`tile_at()` agreement,
+`map_view()` annotations, `take_warp` from a distance, on-tile re-entry,
+and the stale-coordinate refusal.
+Unit-tested only: `_slide_edge` (needs a real off-by-one edge to walk),
+the money-guard polarity, and the itemball/caller-hop parser rows (those
+assert against the real .asm, so they are disassembly-verified rather
+than emulator-verified).
+
+---
+
 ## session claude-wren pt12 - FLY, the S.S. Aqua, and KANTO (Aug 26 2026)
 
 Actual gameplay session. **WREN is in Kanto.** Milestones:

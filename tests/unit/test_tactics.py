@@ -55,19 +55,33 @@ def _eff(atk, dfn):
     return m
 
 
-def _tactics(badges=()):
+def _tactics(badges=(), heal_table=None):
     names = SimpleNamespace(moves=NAMES, items={}, species={})
-    return Tactics(_bdata(), names, REPO_ROOT, badge_types=badges)
+    return Tactics(_bdata(), names, REPO_ROOT, badge_types=badges,
+                   heal_table=heal_table)
+
+
+# Prices and cure masks as the ROM lists them (see test_parser_values.py:
+# PARLYZ HEAL 200 / PAR only, FULL HEAL 600 / everything).
+HEAL_TABLE = {
+    "POTION": {"name": "POTION", "hp": 20, "cures": 0, "revives": False,
+               "price": 300},
+    "PARLYZHEAL": {"name": "PARLYZ HEAL", "hp": 0, "cures": 0x40,
+                   "revives": False, "price": 200},
+    "FULLHEAL": {"name": "FULL HEAL", "hp": 0, "cures": 0xFF,
+                 "revives": False, "price": 600},
+}
 
 
 def _mon(level=50, hp=100, max_hp=100, types=("DRAGON", "FLYING"),
          attack=100, defense=100, speed=100, spatk=100, spdef=100,
-         moves=(1, 2, 3, 4)):
+         moves=(1, 2, 3, 4), acc_level=7, eva_level=7, sub3=0):
     t = [TYPES[x] for x in types]
     return {"level": level, "hp": hp, "max_hp": max_hp, "types": t,
             "type1": t[0], "type2": t[1], "attack": attack,
             "defense": defense, "speed": speed, "spatk": spatk,
-            "spdef": spdef, "moves": list(moves), "status": 0}
+            "spdef": spdef, "moves": list(moves), "status": 0,
+            "acc_level": acc_level, "eva_level": eva_level, "sub3": sub3}
 
 
 def t_analysis(t, me, foe):
@@ -140,24 +154,109 @@ def test_stab_is_one_and_a_half_and_type_multiplier_stacks():
     assert doubled[1] == plain[1] * 2
 
 
-# -- accuracy is a 0-255 byte, not a percentage -------------------------
+# -- accuracy after the accuracy/evasion STAGES -------------------------
+# (the 0-255 decode itself is pinned by value in test_parser_values.py)
 
-def test_rom_accuracy_is_decoded_off_the_255_scale():
-    """`percent` is "* $ff / 100" (macros/data.asm:23), so IRON TAIL's 75%
-    is stored as 191. Reading it as min(byte, 100) reported EVERY move above
-    ~39% as a flat 100% -- which is how a 75% IRON TAIL and a 50%
-    DYNAMICPUNCH looked perfectly reliable while whiffing live."""
-    from crystalagent.battle import BattleData
-    from crystalagent.paths import ROM, SYM
-    from crystalagent.symfile import Symbols
-    bdata = BattleData(REPO_ROOT, Symbols(SYM), ROM)
-    acc = {}
-    for mid, rec in bdata.moves.items():
-        acc[mid] = rec["accuracy"]
-    # every accuracy must be a sane percentage
-    assert all(1 <= v <= 100 for v in acc.values())
-    # and they must not all be pinned at 100
-    assert len({v for v in acc.values()}) > 3
+def test_evasion_stages_cut_the_accuracy_a_move_is_reported_at():
+    """Two MINIMIZEs (evasion stage 9) turn a listed-100% move into a real
+    60%, exactly as CheckHit computes it (effect_commands.asm:1758). Koga's
+    Muk blanking two "100%" attacks in a row is what the old, stage-blind
+    number looked like live."""
+    t = _tactics()
+    me = _mon()
+    slippery = _mon(types=("NORMAL", "NORMAL"), eva_level=9)
+    v = t.outlook(2, me, slippery)               # DRAGONBREATH, listed 100
+    assert v["accuracy"] == 100
+    assert v["effective_accuracy"] == 60
+    # at neutral stages the two numbers agree
+    assert t.outlook(2, me, _mon(types=("NORMAL", "NORMAL")))[
+        "effective_accuracy"] == 100
+
+
+def test_never_miss_moves_ignore_the_evasion_stack():
+    t = _tactics()
+    me = _mon()
+    slippery = _mon(types=("NORMAL", "NORMAL"), eva_level=13)
+    faint = t.outlook(9, me, slippery)           # FAINT ATTACK
+    assert faint["never_misses"] is True
+    assert faint["effective_accuracy"] == 100
+
+
+def test_a_minimize_stack_flips_which_move_scores_best():
+    """DRAGONBREATH out-damages FAINT ATTACK here, but against +3 evasion
+    the unmissable move is worth more expected damage."""
+    t = _tactics()
+    me = _mon(moves=(2, 9))
+    plain = _mon(types=("NORMAL", "NORMAL"), hp=300, spdef=60, defense=60)
+    assert t.my_moves(me, plain)[0]["move"] == "DRAGONBREATH"
+    slippery = _mon(types=("NORMAL", "NORMAL"), hp=300, spdef=60,
+                    defense=60, eva_level=10)
+    assert t.my_moves(me, slippery)[0]["move"] == "FAINT ATTACK"
+
+
+def test_explain_shows_both_the_effective_and_the_listed_accuracy():
+    t = _tactics()
+    me = _mon(moves=(2,))
+    slippery = _mon(types=("NORMAL", "NORMAL"), eva_level=9)
+    text = t.explain(t_analysis(t, me, slippery))
+    assert "acc  60 (listed 100)" in text
+
+
+# -- status costs TURNS, and the model must be told ---------------------
+
+def test_paralysis_and_confusion_report_the_turns_they_cost():
+    """25% full paralysis (effect_commands.asm:323) compounded with a 50%
+    confusion self-hit (ibid.:494); sleep and freeze cost the whole turn."""
+    t = _tactics()
+    par = t.status_bits["PAR"]
+    assert t.turn_loss({"status": 0}) == 0
+    assert t.turn_loss({"status": par}) == 0.25
+    assert t.turn_loss({"status": 0, "confused": True}) == 0.5
+    assert t.turn_loss({"status": par, "confused": True}) == 0.625
+    assert t.turn_loss({"status": 2}) == 1.0                  # SLP:2
+    assert t.turn_loss({"status": t.status_bits["FRZ"]}) == 1.0
+    # PSN and BRN cost HP, not turns
+    assert t.turn_loss({"status": t.status_bits["PSN"]}) == 0
+
+
+def test_a_turn_eating_status_is_cured_from_the_bag():
+    """PAR throws away a quarter of my turns; with nothing lethal incoming
+    and no kill available, the cheapest cure in the bag is the play. The
+    item is named from the ROM's heal table, so it is PARLYZ HEAL (¥200)
+    and not FULL HEAL (¥600)."""
+    t = _tactics(heal_table=HEAL_TABLE)
+    me = _mon(hp=90, moves=(2,))
+    me["status"] = t.status_bits["PAR"]
+    foe = _mon(types=("NORMAL", "NORMAL"), hp=300, defense=200, spdef=200,
+               attack=5, spatk=5, moves=(10,))
+    analysis = t_analysis(t, me, foe)
+    frame = {"bag": {"PARLYZ HEAL": 2, "FULL HEAL": 1, "POTION": 3}}
+    action, why = t.recommend(analysis, frame)
+    assert action == ("item", "PARLYZ HEAL"), why
+    assert "25% of my turns" in why
+
+
+def test_a_status_with_no_cure_in_the_bag_just_attacks():
+    t = _tactics(heal_table=HEAL_TABLE)
+    me = _mon(hp=90, moves=(2,))
+    me["status"] = t.status_bits["PAR"]
+    foe = _mon(types=("NORMAL", "NORMAL"), hp=300, defense=200, spdef=200,
+               attack=5, spatk=5, moves=(10,))
+    action, _ = t.recommend(t_analysis(t, me, foe), {"bag": {"POTION": 3}})
+    assert action == ("attack", 0)
+
+
+def test_a_lethal_threat_outranks_curing_the_status():
+    """A cure is a lost turn: if their best move kills me this turn, it is
+    not the play."""
+    t = _tactics(heal_table=HEAL_TABLE)
+    me = _mon(hp=10, moves=(2,))
+    me["status"] = t.status_bits["PAR"]
+    killer = _mon(types=("NORMAL", "NORMAL"), hp=300, attack=300,
+                  moves=(10,))
+    action, _ = t.recommend(t_analysis(t, me, killer),
+                            {"bag": {"PARLYZ HEAL": 2}})
+    assert action != ("item", "PARLYZ HEAL")
 
 
 def test_never_miss_moves_are_flagged_and_preferred():
@@ -319,13 +418,19 @@ def test_read_side_decodes_big_endian_and_drops_empty_move_slots():
             "wBattleMonSpeed": [0, 130], "wBattleMonSpclAtk": [0, 160],
             "wBattleMonSpclDef": [0, 120], "wBattleMonType1": 26,
             "wBattleMonType2": 2, "wBattleMonMoves": [17, 225, 86, 0],
-            "wBattleMonPP": [35, 20, 20, 0]}
+            "wBattleMonPP": [35, 20, 20, 0],
+            # accuracy/evasion stages and SubStatus3 (confusion) --
+            # CheckHit reads these live, nothing else in WRAM carries them
+            "wPlayerAccLevel": 7, "wPlayerEvaLevel": 9,
+            "wPlayerSubStatus3": 0x80}
     side = read_side(FakeEmu(vals), "me")
     assert side["hp"] == 211 and side["max_hp"] == 256
     assert side["moves"] == [17, 225, 86]          # empty 4th slot dropped
     assert side["pp"] == [35, 20, 20]
     assert side["slots"] == [(0, 17, 35), (1, 225, 20), (2, 86, 20)]
     assert side["types"] == [26, 2]
+    assert side["acc_level"] == 7 and side["eva_level"] == 9
+    assert side["sub3"] == 0x80
 
 
 # -- the recommendation ------------------------------------------------

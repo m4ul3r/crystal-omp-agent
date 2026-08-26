@@ -245,3 +245,96 @@ def test_decision_state_cleared_between_flows():
     assert d._resolve_learn_flow() is True
     assert d._learn_flow is None
     assert world["moves"][2] == NEW
+
+
+# -- the DEFAULT policy: never trade damage for a status move ----------------
+#
+# With no learn_policy set, the old default was FORGET_PRIORITY -- a
+# hand-ranked NAME list that contains damaging moves (TACKLE, BUBBLE,
+# EMBER, SWIFT) and, on no match, confirmed slot 1. That is how a
+# Gyarados traded HYDRO PUMP for RAIN DANCE. default_learn_policy reads
+# base power out of the ROM instead.
+
+POWERS = {"HYDRO PUMP": 120, "SURF": 95, "BITE": 60, "TACKLE": 35,
+          "RAIN DANCE": 0, "LEER": 0, "SCARY FACE": 0, "FLASH": 0,
+          "IRON TAIL": 100, "WATER GUN": 40}
+
+
+def power_driver():
+    """A Driver with just the ROM tables default_learn_policy reads."""
+    from types import SimpleNamespace
+    d = Driver.__new__(Driver)
+    ids = {i: name for i, name in enumerate(POWERS, 1)}
+    d.names = SimpleNamespace(moves=ids, items={}, species={})
+    d.bdata = SimpleNamespace(moves={i: {"power": POWERS[n]}
+                                     for i, n in ids.items()})
+    return d
+
+
+def decide(new_move, current):
+    return power_driver().default_learn_policy("GATOR", new_move, current)
+
+
+def test_default_declines_a_status_move_that_would_cost_damage():
+    """Two attacks and nothing expendable: RAIN DANCE is not worth
+    HYDRO PUMP (or anything else)."""
+    assert decide("RAIN DANCE", ["HYDRO PUMP", "SURF"]) == "DECLINE"
+
+
+def test_default_sacrifices_a_status_move_for_a_status_move():
+    assert decide("RAIN DANCE", ["HYDRO PUMP", "SURF", "LEER"]) == "LEER"
+
+
+def test_default_sacrifices_the_weakest_attack_for_a_stronger_one():
+    got = decide("IRON TAIL", ["HYDRO PUMP", "SURF", "BITE", "TACKLE"])
+    assert got == "TACKLE"
+
+
+def test_default_declines_a_move_weaker_than_everything_it_knows():
+    """Learning something worse is not an upgrade."""
+    assert decide("TACKLE", ["HYDRO PUMP", "SURF", "BITE"]) == "DECLINE"
+
+
+def test_default_gives_up_the_weakest_attack_only_when_damage_is_deep():
+    """Three attacks and no filler: a status move can have the weakest
+    one."""
+    assert decide("SCARY FACE", ["HYDRO PUMP", "SURF", "BITE"]) == "BITE"
+
+
+def test_default_never_names_an_hm_move():
+    """The game refuses to delete HM moves and the forget menu loops on
+    the refusal, so FLASH is invisible to the policy even though it is
+    the obvious 0-power sacrifice."""
+    assert decide("RAIN DANCE", ["HYDRO PUMP", "SURF", "FLASH"]) == "DECLINE"
+    assert decide("IRON TAIL", ["FLASH", "SURF"]) == "DECLINE"
+
+
+def test_default_is_deterministic_on_ties():
+    """Equal power ties break on the name, so the same flow always makes
+    the same sacrifice however the moveset is ordered."""
+    a = decide("IRON TAIL", ["LEER", "SCARY FACE", "HYDRO PUMP"])
+    b = decide("IRON TAIL", ["SCARY FACE", "LEER", "HYDRO PUMP"])
+    assert a == b == "LEER"
+
+
+def test_default_falls_through_to_auto_without_rom_data():
+    """A bare/duck-typed driver has no Moves table; the AUTO policy must
+    still run rather than the flow wedging."""
+    d = Driver.__new__(Driver)
+    assert d.default_learn_policy("GATOR", "RAIN DANCE", ["SURF"]) is None
+
+
+def test_the_default_decides_the_real_flow_and_is_credited(caplog):
+    """End to end through _resolve_learn_flow with no learn_policy set:
+    the status move goes, NOT slot 1, and move_changes says who chose."""
+    moves = ["BITE", "WATER GUN", "LEER", "SURF"]
+    d, world = flow_driver(moves, new_move="IRON TAIL")
+    ref = power_driver()
+    d.names, d.bdata = ref.names, ref.bdata
+    with caplog.at_level(logging.WARNING, logger="trek"):
+        assert d._resolve_learn_flow() is True
+    assert world["confirm_rows"] == ["LEER"]
+    assert world["moves"] == ["BITE", "WATER GUN", "IRON TAIL", "SURF"]
+    assert d.move_changes == [{"mon": MON, "forgot": "LEER",
+                               "learned": "IRON TAIL", "slot": 3,
+                               "source": "default"}]

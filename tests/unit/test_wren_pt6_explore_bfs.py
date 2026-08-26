@@ -400,33 +400,86 @@ def test_plain_wall_still_blocked_after_tap_retry():
     assert d.pos() == (0, 0, 1, 1)        # start state restored
 
 
-# -- reach(): goto first, savestate search when the grid lies ----------------
+# -- goto escalation: walk first, savestate search when the grid lies -------
+#
+# reach() is now goto() with a bigger search budget: the escalation lives
+# in goto itself, because nothing ever called reach and the Indigo
+# Plateau Pokecenter's decoded grid calls (3,8) a wall while the avatar
+# walks it -- 20 replans burned, then the leg was hand-driven.
 
-def test_reach_prefers_goto_and_skips_the_search():
+def test_a_successful_walk_never_pays_for_a_search():
     d, _ = bfs_driver(["###", "#.#", "###"], (0, 1, 1))
-    calls = {"goto": 0, "bfs": 0}
+    calls = {"walk": 0, "bfs": 0}
 
-    def goto(x, y, label=""):
-        calls["goto"] += 1
+    def walk(x, y, label="", map_name=None, strict=False):
+        calls["walk"] += 1
         return True
-    d.goto = goto
-    d.explore_bfs = lambda *a, **k: calls.__setitem__("bfs", 1) or {"found": False}
+    d._goto_walk = walk
+    d.explore_bfs = lambda *a, **k: calls.__setitem__("bfs", 1) or \
+        {"found": False}
     assert d.reach(2, 1) is True
-    assert calls == {"goto": 1, "bfs": 0}
+    assert calls == {"walk": 1, "bfs": 0}
+    assert d.goto(2, 1) is True
+    assert calls == {"walk": 2, "bfs": 0}
 
 
-def test_reach_falls_back_to_search_when_goto_lies():
-    """goto reports failure (wrong static grid) but the cell IS walkable:
-    the savestate search finds it and reach() returns True."""
+def test_goto_escalates_when_the_grid_lies_about_the_geometry():
+    """The walk reports failure (wrong static grid) but the cell IS
+    walkable: the search finds it and goto returns True with the failure
+    reason cleared."""
     d, _ = bfs_driver(["#####", "#...#", "#####"], (0, 1, 1))
-    d.goto = lambda x, y, label="": False
-    d.last_goto_reason = "unexplained blocked step"
-    assert d.reach(3, 1) is True
+
+    def walk(x, y, label="", map_name=None, strict=False):
+        d.last_goto_reason = "unreachable: no path from (1,1) to (3,1)"
+        return False
+    d._goto_walk = walk
+    assert d.goto(3, 1) is True
     assert d.pos() == (0, 0, 3, 1)
+    assert d.last_goto_reason is None
 
 
-def test_reach_reports_false_when_truly_unreachable():
+def test_reach_only_raises_the_budget():
+    d, _ = bfs_driver(["#####", "#...#", "#####"], (0, 1, 1))
+    budgets = []
+
+    def walk(x, y, label="", map_name=None, strict=False):
+        d.last_goto_reason = "unreachable"
+        return False
+    d._goto_walk = walk
+    real = d.explore_bfs
+
+    def spy(goal, **kw):
+        budgets.append((kw.get("max_moves"), kw.get("max_nodes")))
+        return real(goal, **kw)
+    d.explore_bfs = spy
+    assert d.reach(3, 1, budget=200, nodes=140) is True
+    assert budgets == [(200, 140)]
+
+
+def test_an_npc_block_is_reported_instead_of_searched():
+    """A savestate search cannot move a live actor, and spending minutes
+    of one on it is worse than saying so."""
+    d, _ = bfs_driver(["#####", "#...#", "#####"], (0, 1, 1))
+    calls = {"bfs": 0}
+
+    def walk(x, y, label="", map_name=None, strict=False):
+        d.last_goto_reason = ("blocked-by-stationary-npc: (2,1) severs the "
+                              "only path")
+        return False
+    d._goto_walk = walk
+    d.explore_bfs = lambda *a, **k: calls.__setitem__("bfs", 1) or \
+        {"found": False}
+    assert d.goto(3, 1) is False
+    assert calls["bfs"] == 0
+    assert "stationary-npc" in d.last_goto_reason
+
+
+def test_an_exhausted_search_says_so_on_the_reason():
     d, _ = bfs_driver(["###", "#.#", "###"], (0, 1, 1))
-    d.goto = lambda x, y, label="": False
-    d.last_goto_reason = "unreachable"
+
+    def walk(x, y, label="", map_name=None, strict=False):
+        d.last_goto_reason = "unreachable"
+        return False
+    d._goto_walk = walk
     assert d.reach(9, 9, budget=12, nodes=8) is False
+    assert "search exhausted (8 nodes)" in d.last_goto_reason

@@ -7,9 +7,12 @@ the same screen text we already decode. Scrolling lists additionally track
 their absolute position in WRAM (wMenuScrollPosition + wMenuCursorY).
 """
 
+import logging
 import re
 
 from .emu import parse_sequence
+
+log = logging.getLogger("trek")
 
 
 CURSOR = "▶"
@@ -30,8 +33,39 @@ def _cursor_xs(row):
 
 
 class Menus:
+    # Why the last falsy return was falsy. A menu primitive that answers
+    # False without saying what it was looking for is the failure mode
+    # that cost a live session an hour: use_item kept "succeeding" into a
+    # closed pack because nothing downstream could say what went wrong.
+    last_reason = None
+
     def __init__(self, emu):
         self.emu = emu
+
+    def _fail(self, reason):
+        """Record why a primitive is returning False, and say so once."""
+        self.last_reason = reason
+        log.info("  menu: %s", reason)
+        return False
+
+    def _expect_state(self, pred, what, tries=3, seq="A:2 .:10",
+                      settle=".:12"):
+        """Confirm until the screen actually REACHES the expected state.
+
+        The frame a menu is drawn its input loop is not running yet, so the
+        first A is swallowed (AGENTS.md gotcha 2). A single press plus a
+        cursor-glyph check is how ``select_label('PACK')`` reported success
+        with the pack never opened; the answer is to press, settle, and
+        re-read until the target screen is really up."""
+        if pred(self.screen()):
+            return True
+        for _ in range(tries):
+            self.press(seq)
+            if settle:
+                self.press(settle)
+            if pred(self.screen()):
+                return True
+        return self._fail(f"{what}: state not reached after {tries} confirms")
 
     def press(self, seq):
         self.emu.run_sequence(parse_sequence(seq))
@@ -50,12 +84,12 @@ class Menus:
         return None
 
     def cursor_labels(self):
-        """Text right of the arrow for every highlighted possibility (the
-        BG shadow tilemap can lag a frame behind; callers poll)."""
+        """Text right of EVERY highlighted possibility (the BG shadow
+        tilemap can lag a frame behind; callers poll). Nested menus paint
+        two glyphs at once, so every glyph on a row counts."""
         seen = []
-        for y, row in enumerate(self.screen()):
-            x = _cursor_x(row)
-            if x >= 0:
+        for row in self.screen():
+            for x in _cursor_xs(row):
                 seen.append(row[x + 1:].lstrip(" "))
         return seen
 
@@ -68,39 +102,59 @@ class Menus:
 
     def wait_for(self, predicate, timeout_frames=600):
         """Tick until predicate(screen_text) is true; returns success."""
+        self.last_reason = None
         start = self.emu.frame
         while self.emu.frame - start < timeout_frames:
             if predicate(self.screen()):
                 return True
             self.press(".:4")
-        return False
+        return self._fail(f"wait_for: predicate never true in "
+                          f"{timeout_frames} frames")
 
     def has_label(self, rows, label):
-        """Is the cursor sitting immediately before `label` on any row?"""
+        """Is a cursor sitting immediately before `label` on any row?
+        EVERY glyph on the row is checked: a battle party list keeps its
+        own ▷ painted while a submenu draws ▶ over it, so a leftmost-only
+        read answers about the wrong list (AGENTS.md gotcha 1)."""
         for row in rows:
-            x = _cursor_x(row)
-            if x >= 0 and row[x + 1:].strip().startswith(label):
-                return True
+            for x in _cursor_xs(row):
+                if row[x + 1:].strip().startswith(label):
+                    return True
         return False
 
     def select_label(self, label, max_presses=14, confirm=True,
-                     timeout_frames=400):
+                     timeout_frames=400, expect=None, expect_tries=3):
         """In the current vertical menu, press DOWN until the arrow sits on
         `label`, then press A. Works across menus because every static menu
-        paints ▶ next to its entries. Returns True if confirmed."""
+        paints ▶ next to its entries.
+
+        `expect` is a predicate on the screen rows describing where the
+        confirm is supposed to LAND (`lambda rows: pack_open(rows)`). With
+        it, the return value means "that screen is up"; without it, it only
+        means "A was pressed on the right row" -- which is exactly how a
+        swallowed A (gotcha 2) got reported as a successful PACK open.
+        Failures leave `last_reason` set."""
+        self.last_reason = None
         pressed = 0
         start = self.emu.frame
         while self.emu.frame - start < timeout_frames:
             rows = self.screen()
             if self.has_label(rows, label):
-                if confirm:
+                if not confirm:
+                    return True
+                if expect is None:
                     self.press("A:2 .:10")
-                return True
+                    return True
+                return self._expect_state(expect, f"select_label({label})",
+                                          tries=expect_tries)
             if pressed >= max_presses:
-                return False
+                return self._fail(
+                    f"select_label({label}): cursor never reached it in "
+                    f"{max_presses} DOWN presses")
             self.press("D:6 .:4")
             pressed += 1
-        return False
+        return self._fail(f"select_label({label}): timed out after "
+                          f"{timeout_frames} frames")
 
     def select_row_text(self, label, max_presses=14, confirm=True,
                         match=None, confirm_seq="A:2 .:10"):
@@ -119,7 +173,9 @@ class Menus:
         DOWN, then UP once the list pins. Returns True only when the
         cursor verifiably sits on the matching row (A pressed when
         `confirm`; `confirm_seq` lets callers use a longer press for
-        menus that swallow the short one)."""
+        menus that swallow the short one). Failures leave `last_reason`
+        set."""
+        self.last_reason = None
         up = label.strip().upper()
         pat = re.compile(r"(?<![A-Z0-9])" + re.escape(up) + r"(?![A-Z0-9])")
         if match is None:
@@ -143,8 +199,11 @@ class Menus:
         search_dir, flipped = "D", False
         while True:
             rows = self.screen()
-            curs = [(y, _cursor_x(r)) for y, r in enumerate(rows)
-                    if _cursor_x(r) >= 0]
+            # EVERY glyph, not the leftmost one: a submenu box painted over
+            # the party list puts its ▶ to the RIGHT of the list's ▷, and
+            # the band filter below is what picks the right menu's column.
+            curs = [(y, x) for y, r in enumerate(rows)
+                    for x in _cursor_xs(r)]
             tgt = target(rows)
             if tgt is not None:
                 y_tgt, x_tgt = tgt
@@ -157,13 +216,17 @@ class Menus:
                         self.press(confirm_seq)
                     return True
             if presses >= max_presses:
-                return False
+                return self._fail(
+                    f"select_row_text({label}): not selected in "
+                    f"{max_presses} presses")
             if tgt is None:
                 # off-screen (scrolled list): identical rows after a
                 # press mean the window pinned -- reverse once
                 if last_rows is not None and rows == last_rows:
                     if flipped:
-                        return False
+                        return self._fail(
+                            f"select_row_text({label}): not on any row and "
+                            f"the list pinned scrolling both ways")
                     search_dir, flipped = "U", True
                 last_rows = rows
                 self.press(f"{search_dir}:6 .:8")
@@ -173,13 +236,17 @@ class Menus:
             if ref is None:
                 stuck += 1
                 if stuck >= 4:
-                    return False   # no cursor painted: wrong screen
+                    return self._fail(
+                        f"select_row_text({label}): row found but no cursor "
+                        f"glyph painted -- wrong screen")
                 self.press(".:6")  # tilemap paint lag: poll, don't press
                 continue
             key = (ref[0], ref[1], y_tgt)
             stuck = stuck + 1 if key == prev else 0
             if stuck >= 3:
-                return False       # cursor pinned: wrong menu or edge
+                return self._fail(
+                    f"select_row_text({label}): cursor pinned at row "
+                    f"{ref[0]} short of row {y_tgt} -- wrong menu or edge")
             prev = key
             self.press("D:6 .:8" if y_tgt > ref[0] else "U:6 .:8")
             presses += 1
@@ -188,7 +255,9 @@ class Menus:
         """Navigate a scrolling list until the absolute selection index is
         `target`, then A. Uses WRAM position, not the text layer, so it
         works for entries scrolled off-screen."""
+        self.last_reason = None
         steps = 0
+        cur = None
         while steps < max_steps:
             cur = self.scroll_abs()
             if cur == target:
@@ -197,7 +266,8 @@ class Menus:
                 return True
             self.press("D:6 .:4")
             steps += 1
-        return False
+        return self._fail(f"select_abs({target}): stopped at index {cur} "
+                          f"after {max_steps} steps")
 
     def wait_for_label(self, label, timeout_frames=300):
         """Tick until some row has the cursor sitting on `label`."""

@@ -105,6 +105,35 @@ stored as **191**. Reading it as `min(byte, 100)` reports every move above
 Real values: WING ATTACK 100, IRON TAIL **75**, DYNAMICPUNCH **50**,
 HYDRO PUMP 80, BLIZZARD 70, THUNDER 70.
 
+### The listed number is not the number: accuracy/evasion STAGES
+
+`BattleCommand_CheckHit.StatModifiers`
+(`engine/battle/effect_commands.asm:1758`) runs the move's raw accuracy byte
+through `AccuracyLevelMultipliers` (`data/battle/accuracy_multipliers.asm`)
+**twice**: once with the attacker's accuracy stage, once with
+`MAX_STAT_LEVEL + 1 - the target's evasion stage`. Each pass multiplies, then
+integer-divides, then floors at 1; the result is capped at `$ff`. Stages run
+1..13 with **7 neutral** (`BASE_STAT_LEVEL`/`MAX_STAT_LEVEL`,
+`constants/battle_constants.asm:10`), and live in `wPlayerAccLevel` /
+`wPlayerEvaLevel` / `wEnemyAccLevel` / `wEnemyEvaLevel`.
+
+`outlook()` reports this as `effective_accuracy` beside the listed
+`accuracy`, and `_score`, `recommend()`'s KO tie-break and `explain()` all
+rank on it:
+
+```
+  KO SURF   WATER  spec x1  219-258 (568.8%) acc  60 (listed 100) STAB
+  KO CUT    NORMAL phys x1  120-142 (308.7%) acc  57 (listed 95)
+```
+
+That is a live read with the enemy at evasion stage 9 (two MINIMIZEs): a
+"100%" move really lands 60% of the time. Two more consequences worth knowing:
+
+- **+2 accuracy does not cancel +2 evasion.** The engine truncates after each
+  pass (255 → 423 → 253), so the honest answer is 99%, not 100%.
+- **Foresight, X ACCURACY and rain-Thunder are not modelled.** The only
+  error is over-reporting evasion against a Foresighted target.
+
 ### Never-miss moves
 
 `EFFECT_ALWAYS_HIT` (`data/moves/moves.asm` — SWIFT :145, FAINT ATTACK :201)
@@ -216,6 +245,32 @@ Koga and Lance FULL HEAL + FULL RESTORE (`data/trainers/attributes.asm`), used
 only on their **highest-level** mon. Expect the ace to be healed once, and
 prefer burst over chip against it.
 
+### Status costs TURNS, and the harness now says how many
+
+`outlook()` carries `my_status` / `their_status` (`_status` names -- `PAR`,
+`SLP:3`, ...), `my_confused` / `their_confused` (SUBSTATUS_CONFUSED, bit 7 of
+`wPlayerSubStatus3`), and `turn_loss`: the share of my turns the status is
+expected to eat.
+
+| state | turn_loss | source |
+|---|---|---|
+| PAR | 0.25 | `cp 25 percent` (`effect_commands.asm:323`) |
+| confusion | 0.5 | self-hit roll (`effect_commands.asm:494`) |
+| PAR + confusion | 0.625 | compounded |
+| SLP / FRZ | 1.0 | the engine returns before the move runs |
+| PSN / BRN | 0 | they cost HP, not turns |
+
+`recommend()` spends the cheapest ROM-priced cure (PARLYZ HEAL ¥200 before
+FULL HEAL ¥600) on PAR/SLP/FRZ when nothing lethal is incoming and no KO is
+available. PSN/BRN are deliberately left to the potion branch and
+`heal_party()`.
+
+**Do not halve speed for paralysis yourself.** `ApplyPrzEffectOnSpeed`
+(`engine/battle/core.asm:6585`) writes the halved value straight into
+`wBattleMonSpeed`/`wEnemyMonSpeed` when the paralysis lands, so
+`outlook()['faster']` -- a raw compare of those words -- already accounts for
+it. Halving again double-counts.
+
 ---
 
 ## 11. Items, mine
@@ -262,7 +317,9 @@ actually resist?), then queue exactly one action.
 ## 13. Pre-flight checklist
 
 1. `d.tactics` badge types match the save's badges (damage is +1/8 per boosted type).
-2. Accuracies are real (`IRON TAIL` must read 75, not 100).
+2. Accuracies are real (`IRON TAIL` must read 75, not 100) — and read
+   `effective_accuracy`, not `accuracy`, once anything has used MINIMIZE,
+   DOUBLE TEAM, SAND-ATTACK or SMOKESCREEN.
 3. `DARK -> PSYCHIC` is 2.0 (proves the type ids are the game's).
 4. Party healed and de-statused; `heal_party()` then verify HP/status.
 5. Fork the save before a gauntlet: `claude_saves/<agent>-pre-<thing>.state` + `.meta`.

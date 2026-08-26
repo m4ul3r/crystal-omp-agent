@@ -183,8 +183,21 @@ practice, so **`goto` should escalate to the savestate search automatically
 instead of giving up 20 replans later**, and the "NPC in the way" case should
 wait/route rather than storm.
 
+**Audited and partly WRONG (2026-08-25 hardening session).** `goto` now
+escalates to the savestate search by itself (`GOTO_ESCALATE_ON` vs
+`GOTO_NO_ESCALATE_ON` split the two causes), and `reach` is that same call with
+a bigger budget. But `INDIGO_PLATEAU_POKECENTER_1F (3,8)` is **not** a case of
+wrong static data: a live savestate search from `(3,9)` explored every one of
+the 25 reachable states within 60 moves and never reached it, so that cell
+really is a wall and the storm was the harness asking for the impossible. The
+escalation's value is that it now PROVES that ("search exhausted (40 nodes)")
+instead of guessing. `(16,1)` is likewise not a grid lie: it is in the map's
+top-right region, reachable only through the warp at `(14,3)` — a `travel`/
+`route` job, not a same-map `goto`.
+
 Also: `travel()` refused the Plateau→Will corridor entirely
 ("no path from (16,5) to (16,1)") where a plain `step_hold("U")` walks it.
+*(Same correction: `(16,1)` is across a region seam. Route data, not geometry.)*
 
 ### 2.5 Wedges: spinning on an unchanged screen
 
@@ -202,6 +215,12 @@ never re-send an action that changed nothing; never report an unresolved battle
 as finished; cap repeated diagnostics.** Apply that rule to every other
 input-driving loop in the harness, not just `fight()`.
 
+*Correction (audited): `fight()` never returns `'timeout'` -- it returns the
+lead mon dict (`self.lead()`). `'timeout'`/`'stuck'`/`'stalled'` are
+`Battle.play()`'s outcome strings, which `fight()` inspects to decide whether
+to log `UNRESOLVED ... battle is STILL LIVE`. A caller checking the return
+value for `'timeout'` will never see it; check `d.battle()` instead.*
+
 ### 2.6 `tactics.py` gaps (the engine is good; these are missing)
 
 - **No accuracy/evasion stage modelling.** `outlook()` reports listed accuracy;
@@ -209,10 +228,15 @@ input-driving loop in the harness, not just `fight()`.
   the stages, so a "100%" move silently becomes ~75% or worse. The stage bytes
   are at `wPlayerStatLevels` / `wEnemyStatLevels` (accuracy and evasion are the
   last two of the seven). **This is the highest-value tactics improvement.**
-- **No status/volatile awareness in scoring.** Paralysis (halved speed + ~25%
-  lost turns) and confusion are invisible to `recommend()`; `faster` is read
-  from raw speed. Live cost: Lance's Thunder Wave paralysed both my mons and
-  the fight went 12 → 17 turns.
+- **No status/volatile awareness in scoring.** Paralysis (~25% lost turns) and
+  confusion are invisible to `recommend()`. Live cost: Lance's Thunder Wave
+  paralysed both my mons and the fight went 12 → 17 turns.
+  *Correction (audited): paralysis' HALF SPEED is already in the number
+  `faster` reads -- `ApplyPrzEffectOnSpeed` (engine/battle/core.asm:6585)
+  writes it straight into `wBattleMonSpeed` when the paralysis lands, so a raw
+  speed compare is correct and must NOT halve it again. What was missing is the
+  lost-TURN model and confusion; both now ship as `turn_loss` /
+  `my_confused` on `outlook()`.*
 - **No multi-turn planning.** `recommend()` is single-turn greedy. It cannot
   reason "chip with a doomed mon, then take the free switch on the faint",
   which was the winning line against Lance's ace twice.
@@ -232,9 +256,19 @@ input-driving loop in the harness, not just `fight()`.
   (¥1219 → ¥19). Gotcha 13 says "never blind-A near a shop list" but the
   navigation code can still emit presses there. Money changes should be
   logged, and ideally navigation should refuse to press A near a known clerk.
+  *Correction (audited): the "refuse near a clerk" half is not implementable as
+  written -- clerk identity does not exist at runtime. `object_event`
+  coordinates are parsed by `scripts/build_mapgraph.py` and then discarded, and
+  `wObjectStructs` carries no sprite id. The symptom is watched instead:
+  `Driver._money_watch` wraps `goto`/`walk`/`pace` and logs any wallet change
+  during movement (`last_money_delta`).*
 - `d.save(force=True)` happily persists an open START menu; after reload,
   movement is dead (gotcha 7) and `move_settled` reports `blocked` on four
   floor tiles. `save()` should warn (or refuse) when UI is open.
+  *Correction (audited): `save()` already REFUSES a dirty screen --
+  `_save_blockers` (battle / wScriptMode / textbox / menu cursor) plus a
+  bounded B-press recovery, then `RuntimeError`. Only the `force=True` bypass
+  was silent; it now logs what it is overriding.*
 
 ### 2.8 Structural
 
@@ -291,54 +325,77 @@ These generalise beyond the individual bugs.
 
 ## 4. Prioritised backlog with acceptance criteria
 
+**Status line (2026-08-25 hardening session): P0 1-3, P1 4-6, P2 7-8 and
+P3 9-10 are DONE — see the section below each item and the newest PROGRESS.md
+section for the live evidence. P3 11-12 and P4 13 remain open.**
+
 ### P0 — correctness of what the model is told
 
-1. **Accuracy/evasion stages in `outlook()`.** Read `wPlayerStatLevels` /
-   `wEnemyStatLevels`; expose `effective_accuracy` alongside listed accuracy,
-   and make `_score`/`recommend()` use it. *Accept:* a fake with the enemy at
-   +2 evasion shows a listed-100% move below 100 and ranks a `never_misses`
-   move above it; live check against Koga's Muk after it Minimizes.
-2. **Audit-by-value of every parser** (§2.1). *Accept:* each parsed table has
-   at least one test asserting a specific value cross-checked against the
-   disassembly, with the file:line in the test docstring.
-3. **Status in the decision surface.** Surface paralysis/sleep/freeze/confusion
-   and make `faster` account for paralysis' halved speed. *Accept:* a paralysed
-   fake reports `faster=False` against a slower enemy, and `recommend()`
-   prefers curing when a cheap cure exists and the enemy is weak.
+1. ~~**Accuracy/evasion stages in `outlook()`.**~~ **DONE.** `effective_accuracy`
+   ships beside listed `accuracy`, computed by `tactics.effective_accuracy` --
+   an exact port of `BattleCommand_CheckHit.StatModifiers`
+   (effect_commands.asm:1758) over `AccuracyLevelMultipliers` with the engine's
+   own per-pass truncation. `_score`, `recommend()`'s KO tie-break and
+   `explain()` all use it. Stage bytes come from `wPlayerAccLevel`/
+   `wPlayerEvaLevel`/`wEnemyAccLevel`/`wEnemyEvaLevel` (NOT the StatLevels
+   array). Live: a wild at `wEnemyEvaLevel=9` turned SURF 100 -> 60 and CUT
+   95 -> 57.
+2. ~~**Audit-by-value of every parser** (§2.1).~~ **DONE.**
+   `tests/unit/test_parser_values.py` -- 19 tests, each citing the
+   disassembly file:line it was cross-checked against (type ids, status bits,
+   accuracy table, ROM accuracy/power/PP, heal prices/cure masks, name tables,
+   charmap cursors, badge boosts, species types, TM/HM tables, warps).
+3. ~~**Status in the decision surface.**~~ **DONE**, with one correction:
+   `outlook()` now carries `my_status`/`their_status`/`my_confused`/
+   `turn_loss`, and `recommend()` spends the cheapest ROM-priced cure on
+   PAR/SLP/FRZ when nothing lethal is incoming and no KO is available.
+   `faster` deliberately stays a RAW speed compare (see the §2.6 correction:
+   the engine already halved it).
 
 ### P1 — stop the silent failures
 
-4. **No unexplained falsy returns.** Sweep `trek.py`/`crystalagent` for
-   `return False`/`return None` on failure paths; attach a reason and log it.
-   *Accept:* a test asserts each menu primitive's failure returns/records a
-   distinct non-empty reason.
-5. **`_expect_state` helper** and migrate menu primitives to verify reached
-   state (§2.2/2.3). *Accept:* `select_label` cannot report success unless the
-   target screen/WRAM state is observed; a fake that swallows the A returns
-   failure with a reason.
-6. **`save()` refuses/warns on open UI.** *Accept:* saving with a drawn START
-   menu either errors or logs loudly; a test covers it.
+4. ~~**No unexplained falsy returns.**~~ **DONE** for the menu/nav/step
+   primitives: `Menus.last_reason`, `Battle.last_reason`,
+   `Driver.last_menu_reason`/`last_step_reason`/`last_tm_reason`, covered by
+   `tests/unit/test_failure_reasons.py` (which also asserts the reasons are
+   distinct from each other).
+5. ~~**`_expect_state` helper**~~ **DONE.** `Menus._expect_state` plus
+   `select_label(..., expect=<predicate>)`: with `expect` the return value
+   means "that screen is up", and `Driver._confirm_label` adapts it for
+   duck-typed Menus fakes without losing the verification. `_open_pack` uses
+   it with `Driver._pack_up`.
+6. ~~**`save()` refuses/warns on open UI.**~~ **DONE** (it already refused;
+   `force=True` now logs the blockers it overrides).
 
 ### P2 — navigation ergonomics
 
-7. **`goto` auto-escalates to `reach`** instead of storming 20 replans, and
-   distinguishes "static grid wrong" from "NPC in the way". *Accept:* the
-   Plateau nurse route `(3,9) -> (3,8)` succeeds without a replan-storm line;
-   the corridor `(16,5) -> (16,1)` resolves without manual `step_hold`.
-8. **Navigation must not press A near shop clerks / known script NPCs.**
-   *Accept:* a regression test proving no A is emitted while adjacent to a
-   clerk object; money-delta logging on any purchase.
+7. ~~**`goto` auto-escalates**~~ **DONE.** `goto(..., escalate=True)` runs
+   `explore_bfs` itself when the reason is grid-distrust
+   (`GOTO_ESCALATE_ON`), and refuses to for live actors/scenes/menus
+   (`GOTO_NO_ESCALATE_ON`); `reach` is the same call with a bigger budget.
+   Live: with the decoded grid made to lie about a wall column, the walk
+   failed and the search reached the cell in 3 steps / 17 states / 3,889
+   frames. The acceptance criterion itself was wrong -- see the §2.4
+   correction: `(3,8)` is a real wall and `(16,1)` is across a region seam.
+8. ~~**Money-delta logging**~~ **DONE**; the "refuse to press A near a clerk"
+   half is NOT implementable as written (§2.7 correction). `_money_watch`
+   wraps `goto`/`walk`/`pace`.
 
 ### P3 — capability gaps worth closing
 
-9. **A real `teach_tm(tm, mon, forget)`** in the harness, cursor-row driven,
-   handling pocket re-indexing and the two-glyph cursor. *Accept:* teaches a TM
-   over a chosen move on a fake and refuses cleanly when the mon can't learn it.
-10. **`learn_policy` default should not trade damage for status.** The default
-    accepted every level-up move and cost a Gyarados its Hydro Pump for Rain
-    Dance. Ship the rule (never replace a damaging move with a status move when
-    ≤2 damaging moves remain) as the default. *Accept:* test with a fake
-    level-up offering a 0-power move.
+9. ~~**A real `teach_tm(tm, mon, forget)`**~~ **DONE.** Data-first refusals
+   (`unknown-tm`/`not-in-bag`/`cannot-learn`/`already-knows`) happen before a
+   single button press, off `parse_tmhm_moves` (add_tm order in
+   constants/item_constants.asm -- data/moves/tmhm_moves.asm is an rgbds
+   `for` loop with no literal list), the species `tmhm` learnset, and the live
+   `wTMsHMs` counts. The pocket row renders `01 DYNAMICPUNCH`, not `TM01`
+   (`Driver.pocket_tag`). teach_hm and teach_tm now share every step
+   including the forget walk. Live: GATOR learned DYNAMICPUNCH over FURY
+   CUTTER; SHADOW BALL refused as `cannot-learn` with the UI untouched.
+10. ~~**`learn_policy` default should not trade damage for status.**~~
+    **DONE.** `Driver.default_learn_policy` decides when `learn_policy` is
+    None, ranking by ROM base power with `(power, name)` tie-breaks, never
+    naming an HM move, and stamping `source='default'` on `move_changes`.
 11. **Multi-turn/sacrifice planning in `recommend()`** (§2.6) — at minimum,
     recognise "this mon is dead next turn regardless; maximise damage now, the
     replacement enters free".

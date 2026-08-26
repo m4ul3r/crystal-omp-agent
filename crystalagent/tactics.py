@@ -30,6 +30,9 @@ reflects Screech, Swords Dance and friends.
 import re
 from pathlib import Path
 
+from .asmconst import parse_const_defs, parse_defs, parse_ratio_table
+from .state import _status
+
 MIN_DAMAGE = 2        # DamageCalc's floor
 MAX_DAMAGE = 999      # DamageCalc's cap
 VARIATION_LO = 217    # `85 percent` in DamageVariation
@@ -38,6 +41,10 @@ VARIATION_HI = 255
 # Two-byte big-endian in-battle stats, per side. wBattleMon* is bank 0,
 # wEnemyMon* is bank 1 (see pokecrystal.sym).
 _U16 = ("hp", "max_hp", "attack", "defense", "speed", "spatk", "spdef")
+# ``acc_level``/``eva_level`` are the accuracy and evasion STAGES (1..13,
+# 7 neutral) that CheckHit reads live, and ``sub3`` carries
+# SUBSTATUS_CONFUSED. Unlike the stat words, these are NOT baked into
+# anything else: nothing else in the harness could see a MINIMIZE stack.
 _SYMS = {
     "me": {"level": "wBattleMonLevel", "status": "wBattleMonStatus",
            "hp": "wBattleMonHP", "max_hp": "wBattleMonMaxHP",
@@ -45,14 +52,16 @@ _SYMS = {
            "speed": "wBattleMonSpeed", "spatk": "wBattleMonSpclAtk",
            "spdef": "wBattleMonSpclDef", "type1": "wBattleMonType1",
            "type2": "wBattleMonType2", "moves": "wBattleMonMoves",
-           "pp": "wBattleMonPP"},
+           "pp": "wBattleMonPP", "acc_level": "wPlayerAccLevel",
+           "eva_level": "wPlayerEvaLevel", "sub3": "wPlayerSubStatus3"},
     "enemy": {"level": "wEnemyMonLevel", "status": "wEnemyMonStatus",
               "hp": "wEnemyMonHP", "max_hp": "wEnemyMonMaxHP",
               "attack": "wEnemyMonAttack", "defense": "wEnemyMonDefense",
               "speed": "wEnemyMonSpeed", "spatk": "wEnemyMonSpclAtk",
               "spdef": "wEnemyMonSpclDef", "type1": "wEnemyMonType1",
               "type2": "wEnemyMonType2", "moves": "wEnemyMonMoves",
-              "pp": "wEnemyMonPP"},
+              "pp": "wEnemyMonPP", "acc_level": "wEnemyAccLevel",
+              "eva_level": "wEnemyEvaLevel", "sub3": "wEnemySubStatus3"},
 }
 
 # Effects whose damage does NOT come from the formula.
@@ -118,15 +127,21 @@ def boosted_types(emu, bdata, repo):
             if on and name in bdata.types}
 
 
-def parse_species_types(repo):
-    """``{SPECIES_NAME: [type1, type2], dex_no: [...]}`` from
-    data/pokemon/base_stats/*.asm. The frame's party entries carry a species
-    name and id but no types, and a switch cannot be judged without them.
-    Keyed both ways because game_state names the species while read_party
-    keeps the id."""
-    out = {}
+def parse_species_data(repo):
+    """``(types, tmhm)`` parsed from data/pokemon/base_stats/*.asm in ONE
+    walk of the ~250 files.
+
+    ``types``: ``{SPECIES_NAME: [type1, type2], dex_no: [...]}`` -- the
+    frame's party entries carry a species name and id but no types, and a
+    switch cannot be judged without them, so it is keyed both ways.
+    ``tmhm``: ``{SPECIES_NAME: [MOVE_CONST, ...]}`` from the ``tmhm`` line
+    -- the learnset the game itself checks, so "can this mon learn this
+    TM?" is answered before a single button is pressed.
+    """
+    types, tmhm = {}, {}
     for path in sorted((Path(repo) / "data/pokemon/base_stats").glob("*.asm")):
-        name = dex = types = None
+        name = dex = mytypes = None
+        learns = []
         for line in path.read_text().splitlines():
             m = re.match(r"\s+db (\w+) ; (\d+)\s*$", line)
             if m and name is None:
@@ -134,12 +149,57 @@ def parse_species_types(repo):
                 continue
             m = re.match(r"\s+db (\w+), (\w+) ; type", line)
             if m:
-                types = [m.group(1), m.group(2)]
-                break
-        if name and types:
-            out[name] = types
+                mytypes = [m.group(1), m.group(2)]
+                continue
+            m = re.match(r"\s+tmhm (.+?)\s*$", line)
+            if m:
+                learns = [t.strip() for t in m.group(1).split(",")
+                          if t.strip()]
+        if name and mytypes:
+            types[name] = mytypes
             if dex is not None:
-                out[dex] = types
+                types[dex] = mytypes
+        if name:
+            tmhm[name] = learns
+            if dex is not None:
+                tmhm[dex] = learns
+    return types, tmhm
+
+
+def parse_species_types(repo):
+    """``{SPECIES_NAME: [type1, type2], dex_no: [...]}``."""
+    return parse_species_data(repo)[0]
+
+
+def parse_species_tmhm(repo):
+    """``{SPECIES_NAME: [MOVE_CONST, ...]}`` TM/HM learnsets."""
+    return parse_species_data(repo)[1]
+
+
+def parse_tmhm_moves(repo):
+    """``{'TM01': 'DYNAMICPUNCH', ..., 'HM07': 'WATERFALL'}`` in TM/HM
+    number order, from the ``add_tm``/``add_hm`` lines of
+    constants/item_constants.asm.
+
+    That file is the source: data/moves/tmhm_moves.asm builds its table
+    with an rgbds ``for`` loop over the ``TM##_MOVE`` constants defined
+    here, so there is no literal list to read there. Item ids interleave
+    non-TM entries (``const ITEM_C3`` sits between TM04 and TM05), which
+    is exactly why the numbering has to come from counting add_tm lines
+    rather than from item ids.
+    """
+    path = Path(repo) / "constants/item_constants.asm"
+    tms, hms = [], []
+    for line in path.read_text().splitlines():
+        m = re.match(r"\s+add_tm\s+(\w+)", line)
+        if m:
+            tms.append(m.group(1))
+            continue
+        m = re.match(r"\s+add_hm\s+(\w+)", line)
+        if m:
+            hms.append(m.group(1))
+    out = {f"TM{i:02d}": mv for i, mv in enumerate(tms, 1)}
+    out.update({f"HM{i:02d}": mv for i, mv in enumerate(hms, 1)})
     return out
 
 
@@ -194,6 +254,33 @@ def damage_span(level, power, atk, dfn, *, stab, mult,
             min(d, MAX_DAMAGE))
 
 
+def effective_accuracy(raw, acc_stage, eva_stage, table, *, base=7, top=13):
+    """Accuracy byte after accuracy/evasion stages, exactly as the engine
+    computes it (``BattleCommand_CheckHit.StatModifiers``,
+    engine/battle/effect_commands.asm:1758).
+
+    Two passes over ``AccuracyLevelMultipliers``: one with the attacker's
+    accuracy stage, one with ``MAX_STAT_LEVEL + 1 - the target's evasion
+    stage``. Each pass multiplies then integer-divides and floors at 1;
+    the result is capped at $ff. Stages run 1..13 with 7 neutral
+    (BASE_STAT_LEVEL / MAX_STAT_LEVEL, constants/battle_constants.asm:10).
+
+    This is the number a policy actually needs: a listed-100% move against
+    two MINIMIZEs really lands 60% of the time, and Koga's Muk blanking
+    two "100%" attacks in a row is what that looks like live.
+    """
+    val = int(raw)
+    for stage in (acc_stage or base, top + 1 - (eva_stage or base)):
+        num, den = table[min(max(int(stage), 1), top) - 1]
+        val = max(1, val * num // den)
+    return min(val, 0xff)
+
+
+def acc_percent(byte):
+    """0-255 accuracy byte -> percentage, scaled like BattleData's."""
+    return max(1, min(100, round(int(byte) * 100 / 255)))
+
+
 class Tactics:
     """Damage/type analysis for one live battle.
 
@@ -202,7 +289,7 @@ class Tactics:
     never gets the boost (``hBattleTurn`` check, misc.asm:157).
     """
 
-    def __init__(self, bdata, names, repo, badge_types=()):
+    def __init__(self, bdata, names, repo, badge_types=(), heal_table=None):
         self.bdata = bdata
         self.names = names
         self.effects = parse_effects(repo)
@@ -210,6 +297,28 @@ class Tactics:
         self.special_from = bdata.types["FIRE"]   # DEF SPECIAL EQU (line 26)
         self.badge_types = set(badge_types)
         self.species_types = parse_species_types(repo)
+        # Accuracy/evasion stage table and the stage bounds, straight out
+        # of the files the engine itself is built from.
+        repo = Path(repo)
+        self.acc_mults = parse_ratio_table(
+            repo / "data/battle/accuracy_multipliers.asm",
+            "AccuracyLevelMultipliers")
+        defs = parse_defs(repo / "constants/battle_constants.asm")
+        self.base_stage = defs["BASE_STAT_LEVEL"]
+        self.max_stage = defs["MAX_STAT_LEVEL"]
+        self.slp_mask = defs["SLP_MASK"]
+        consts = parse_const_defs(repo / "constants/battle_constants.asm")
+        self.status_bits = {n: 1 << consts[n]
+                            for n in ("PSN", "BRN", "FRZ", "PAR")}
+        self.confused_bit = 1 << consts["SUBSTATUS_CONFUSED"]
+        # PAR/SLP/FRZ are the ones that cost TURNS, which is what a
+        # mid-battle cure is worth spending an item on. PSN/BRN cost HP,
+        # which the potion branch and heal_party already answer.
+        self.turn_status = (self.status_bits["PAR"] | self.status_bits["FRZ"]
+                            | self.slp_mask)
+        # {normalised item: curative properties} from the ROM's own tables,
+        # so `recommend` can name a real cure instead of guessing one.
+        self.heal_table = heal_table or {}
 
     # -- categories ------------------------------------------------------
 
@@ -236,11 +345,19 @@ class Tactics:
         if not rec:
             view = {"move": name, "id": move_id, "kind": "unknown",
                     "min": 0, "max": 0, "mult": 1.0, "accuracy": 0,
+                    "effective_accuracy": 0,
                     "type": None, "type_name": "?", "power": 0,
                     "effect": "?", "stab": False, "category": "physical",
                     "note": "no move data"}
             return self._summarise(view, defender)
         mtype, power, acc = rec["type"], rec["power"], rec["accuracy"]
+        # The stage math runs on the ROM's 0-255 byte. A record without it
+        # gets the percentage scaled back up rather than a free 255: an
+        # assumed "always hits" is exactly the bug this whole path exists
+        # to kill.
+        raw = rec.get("accuracy_raw")
+        if raw is None:
+            raw = min(0xff, round(acc * 255 / 100))
         eff = self.by_effect_id.get(rec["effect"], "?")
         mult = self.bdata.effectiveness(mtype, defender["types"])
         stab = mtype in attacker["types"]
@@ -249,6 +366,12 @@ class Tactics:
             "type_name": self._type_name(mtype), "power": power,
             "accuracy": acc, "effect": eff, "mult": mult, "stab": stab,
             "category": self.category(mtype), "note": "",
+            # What the move ACTUALLY lands at, after the attacker's
+            # accuracy stage and the target's evasion stage.
+            "effective_accuracy": acc_percent(effective_accuracy(
+                raw,
+                attacker.get("acc_level"), defender.get("eva_level"),
+                self.acc_mults, base=self.base_stage, top=self.max_stage)),
         }
         # Immunity beats everything, including fixed damage.
         if mult == 0:
@@ -278,6 +401,7 @@ class Tactics:
                            + RISKY[eff]
         if eff in NEVER_MISS:
             view["never_misses"] = True
+            view["effective_accuracy"] = 100
             view["note"] = (view["note"] + "; " if view["note"] else "") \
                            + "never misses (ignores evasion)"
         else:
@@ -348,15 +472,44 @@ class Tactics:
         moves both kill, the bigger number is worth nothing and the miss
         chance is worth everything -- a whiff on Gengar hands it the turn it
         needs to DESTINY BOND. `never_misses` beats even 100% listed
-        accuracy, because listed accuracy still loses to MINIMIZE."""
+        accuracy, because listed accuracy still loses to MINIMIZE -- and
+        against a MINIMIZE stack the EFFECTIVE accuracy is what a listed
+        100% is really worth."""
         if v.get("pp") == 0:          # None means "PP unknown", 0 means empty
             return -1
         if v["kind"] in ("immune", "status", "unknown"):
             return 0
-        hit = 1.0 if v.get("never_misses") else v["accuracy"] / 100
+        hit = (1.0 if v.get("never_misses")
+               else v.get("effective_accuracy", v["accuracy"]) / 100)
         if v["ko_certain"]:
             return 2_000 + 100 * hit
         return v["min"] * hit
+
+    def turn_loss(self, side):
+        """Fraction of this side's turns its status is expected to eat.
+
+        1.0 while asleep or frozen (the engine returns before the move
+        runs at all), otherwise 25% for full paralysis
+        (effect_commands.asm:323 `cp 25 percent`) compounded with 50% for
+        a confusion self-hit (ibid.:494). Paralysis' half-SPEED is NOT
+        here: the engine writes it straight into wBattleMonSpeed
+        (ApplyPrzEffectOnSpeed, core.asm:6585), so a speed read already
+        has it."""
+        status = side.get("status") or 0
+        if status & (self.slp_mask | self.status_bits["FRZ"]):
+            return 1.0
+        act = 1.0
+        if status & self.status_bits["PAR"]:
+            act *= 0.75
+        if side.get("confused"):
+            act *= 0.5
+        return round(1.0 - act, 3)
+
+    def _decode_state(self, side):
+        """Status names and confusion, added to a side in place."""
+        side["status_names"] = _status(side.get("status") or 0)
+        side["confused"] = bool((side.get("sub3") or 0) & self.confused_bit)
+        return side
 
     def read(self, emu, pp=None):
         """Live analysis of the current battle, or None before the battle
@@ -370,8 +523,12 @@ class Tactics:
         me, enemy = sides["me"], sides["enemy"]
         if not me["level"] or not me["max_hp"] or not enemy["max_hp"]:
             return None
+        self._decode_state(me)
+        self._decode_state(enemy)
         mine = self.my_moves(me, enemy, pp)
         threats = self.enemy_threats(me, enemy)
+        # Raw speed compare on purpose: paralysis' halving is already in
+        # the WRAM word (ApplyPrzEffectOnSpeed, core.asm:6585).
         faster = me["speed"] > enemy["speed"]
         best = mine[0] if mine else None
         worst = threats[0] if threats else None
@@ -379,6 +536,11 @@ class Tactics:
             "me": me, "enemy": enemy, "moves": mine, "threats": threats,
             "faster": faster,
             "my_best": best, "their_best": worst,
+            "my_status": me["status_names"], "my_confused": me["confused"],
+            "their_status": enemy["status_names"],
+            "their_confused": enemy["confused"],
+            "turn_loss": self.turn_loss(me),
+            "their_turn_loss": self.turn_loss(enemy),
             "i_die_next_turn": bool(worst and worst["min"] >= me["hp"]),
             "i_can_ko": bool(best and best["ko_certain"]),
             "turns_i_need": best["hits_to_ko"] if best else None,
@@ -425,12 +587,14 @@ class Tactics:
         """``(action, reason)`` for this turn -- the whole point of the
         module. Order of preference:
 
-        1. a certain KO (highest accuracy wins), because a dead enemy
+        1. a certain KO (the most RELIABLE one wins), because a dead enemy
            deals no damage;
         2. healing, if I am about to be out-damaged and carry a potion;
-        3. switching, if their best move kills me, I cannot kill them, and
+        3. curing PAR/SLP/FRZ, which cost whole TURNS, when nothing is
+           about to kill me and the bag holds the cure;
+        4. switching, if their best move kills me, I cannot kill them, and
            a party member resists what is coming;
-        4. otherwise the best expected damage, ignoring immunities and
+        5. otherwise the best expected damage, ignoring immunities and
            empty slots.
         """
         moves = [m for m in analysis["moves"] if m.get("pp") != 0]
@@ -439,13 +603,16 @@ class Tactics:
         their = analysis["their_best"]
         kos = [m for m in live if m["ko_certain"]]
         if kos:
-            # Reliability first: an unmissable kill beats a listed-100% kill
-            # (evasion still applies to the latter), which beats a bigger
-            # but chancier one.
-            pick = max(kos, key=lambda m: (bool(m.get("never_misses")),
-                                           m["accuracy"], m["min"]))
+            # Reliability first: an unmissable kill beats a 100%-listed kill
+            # (which a MINIMIZE stack has already devalued -- rank on the
+            # EFFECTIVE number), which beats a bigger but chancier one.
+            pick = max(kos, key=lambda m: (
+                bool(m.get("never_misses")),
+                m.get("effective_accuracy", m["accuracy"]), m["min"]))
+            eff = pick.get("effective_accuracy", pick["accuracy"])
             hits = ("unmissable" if pick.get("never_misses")
-                    else f"{pick['accuracy']}% acc")
+                    else f"{eff}% acc" if eff == pick["accuracy"]
+                    else f"{eff}% acc (listed {pick['accuracy']}%)")
             return ("attack", pick["slot"]), (
                 f"{pick['move']} KOs now ({pick['min']}-{pick['max']} vs "
                 f"{analysis['enemy']['hp']} HP, x{pick['mult']:g}, {hits})")
@@ -463,6 +630,22 @@ class Tactics:
             return ("item", potion), (
                 f"{me['hp']}/{me['max_hp']} HP with {potion} in the bag and "
                 f"nothing lethal incoming")
+        # A turn-eating status is worth an item when nothing is about to
+        # kill me and no kill is available: PAR alone throws away a quarter
+        # of my turns, SLP/FRZ all of them. PSN/BRN cost HP, not turns --
+        # the potion branch above and heal_party already answer those.
+        cure_mask = (me.get("status") or 0) & self.turn_status
+        if cure_mask and not lethal:
+            from .battle import cheapest_heal
+            cure = cheapest_heal(self.heal_table, bag, None, 0,
+                                 cure_mask, False)
+            if cure:
+                names = "/".join(analysis.get("my_status")
+                                 or _status(cure_mask)) or "status"
+                loss = analysis.get("turn_loss", self.turn_loss(me))
+                return ("item", cure), (
+                    f"{names} costs me ~{loss:.0%} of my turns and nothing "
+                    f"lethal is incoming; {cure} clears it")
         if lethal and not analysis["i_can_ko"]:
             best_switch = next(
                 (s for s in self.switch_options(analysis, frame)
@@ -492,18 +675,23 @@ class Tactics:
         lines = [
             f"me L{me['level']} {me['hp']}/{me['max_hp']} "
             f"{self._types_text(me['types'])} spd {me['speed']}"
+            f"{self._state_text(me)}"
             f"  vs  enemy L{en['level']} {en['hp']}/{en['max_hp']} "
             f"{self._types_text(en['types'])} spd {en['speed']}"
+            f"{self._state_text(en)}"
             f"   [{'I move first' if analysis['faster'] else 'they move first'}]"
         ]
         for v in analysis["moves"]:
             flag = ("KO" if v["ko_certain"] else
                     "ko?" if v["ko_possible"] else "  ")
+            eff = v.get("effective_accuracy", v["accuracy"])
+            listed = ("" if eff == v["accuracy"]
+                      else f" (listed {v['accuracy']})")
             lines.append(
                 f"  {flag} {v['move']:<13s} {v['type_name']:<8s}"
                 f" {v['category'][:4]:<4s} x{v['mult']:<4g}"
                 f" {v['min']:>3d}-{v['max']:<3d} ({v['pct_max']:>5.1f}%)"
-                f" acc {v['accuracy']:>3d}"
+                f" acc {eff:>3d}{listed}"
                 f"{' STAB' if v['stab'] else '     '}"
                 f" {v['note']}")
         for v in analysis["threats"][:4]:
@@ -512,3 +700,13 @@ class Tactics:
                 f" {v['min']:>3d}-{v['max']:<3d} on me"
                 f"{'  LETHAL' if v['min'] >= analysis['me']['hp'] else ''}")
         return "\n".join(lines)
+
+    def _state_text(self, side):
+        """`` PAR -25% turns`` for a side that is losing turns, else ''."""
+        names = list(side.get("status_names") or [])
+        if side.get("confused"):
+            names.append("CNF")
+        if not names:
+            return ""
+        loss = self.turn_loss(side)
+        return f" {'/'.join(names)}" + (f" -{loss:.0%} turns" if loss else "")

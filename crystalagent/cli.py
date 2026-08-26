@@ -164,6 +164,33 @@ def cmd_sym(args):
         print(f"{bank:02x}:{addr:04x} {name}")
 
 
+def cmd_missables(args):
+    """Un-collected item sources, evaluated against the live save.
+
+    Exists because a full playthrough reached Champion without HM02 FLY
+    (maps/CianwoodCity.asm:100) and nothing ever said so.
+    """
+    from . import missables
+    emu, names, _ = _open(args)
+    try:
+        import trek                       # Driver owns the live evaluation
+        d = trek.Driver.__new__(trek.Driver)
+        d.emu, d.names = emu, names
+        rows = d.missables(kind="all" if args.all else "key")
+        moves = d.field_moves()
+    finally:
+        emu.stop()
+    print(f"{'ITEM':<18} {'MAP':<28} {'AT':>9}  EVENT / SOURCE")
+    for r in rows:
+        at = f"{r['x']},{r['y']}" if r["x"] is not None else "-"
+        print(f"{r['item']:<18} {r['map']:<28} {at:>9}  "
+              f"{r['event'] or '-'}  {r['source']}")
+    print(f"\n{len(rows)} missing "
+          f"({'all givers' if args.all else 'key items + HMs'})")
+    usable = " ".join(f"{mv}={who or '-'}" for mv, who in moves.items())
+    print(f"field moves: {usable}")
+
+
 def _copy_state(src, dst):
     shutil.copyfile(src, dst)
     meta = Path(f"{src}.meta")
@@ -212,6 +239,13 @@ def main():
     q = sub.add_parser("saves", help="list savestate checkpoints")
     _quiet_opt(q)
     q.set_defaults(fn=cmd_saves)
+
+    q = sub.add_parser("missables",
+                       help="items you have NOT collected yet (HMs first)")
+    q.add_argument("--all", action="store_true",
+                   help="every giver, not just key items and HMs")
+    _quiet_opt(q)
+    q.set_defaults(fn=cmd_missables)
 
     q = sub.add_parser("mash", help="press a button repeatedly until text appears")
     q.add_argument("button", nargs="?", default="A")

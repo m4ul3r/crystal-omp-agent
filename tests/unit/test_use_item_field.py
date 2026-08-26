@@ -26,6 +26,7 @@ import pytest
 import trek
 from trek import (Driver, _field_clear, _no_effect_message,
                   _party_target_list, _norm_item)
+from crystalagent.battle import cheapest_heal
 
 pytestmark = pytest.mark.unit
 
@@ -377,7 +378,7 @@ TABLE = {
 
 
 def cheapest(bag, need_hp=0, status=0, fainted=False, allow=None):
-    return Driver._cheapest_heal(TABLE, bag, allow, need_hp, status, fainted)
+    return cheapest_heal(TABLE, bag, allow, need_hp, status, fainted)
 
 
 def test_cheapest_heal_never_burns_a_full_restore_on_a_potion_wound():
