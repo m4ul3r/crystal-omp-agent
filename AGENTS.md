@@ -189,6 +189,11 @@ ROM's `Moves` table via `pokecrystal.sym`. Don't hardcode game data.
 4. work toward the stated objective (fork for risky attempts)
 5. save checkpoints at meaningful boundaries: ./crystal save saves/<name>.state
 6. update PROGRESS.md         # position, checkpoints, next objective, gotchas
+7. before yielding harness changes: `.venv/bin/python -m pytest tests`
+   (unit lane, fast) and, when navigation/battle/map-interface behavior
+   changed, `.venv/bin/python -m pytest -m integration` (drives the
+   emulator on FORKED milestone savestates; never mutates
+   `claude_saves/`).
 ```
 
 Pre-flight before any long journey (the FLY lesson): `d.field_moves()` —

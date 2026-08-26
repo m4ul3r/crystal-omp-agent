@@ -361,3 +361,45 @@ def status_fragment(rows, limit=3):
 def event_bits(repo):
     """``{EVENT_NAME: bit index into wEventFlags}``."""
     return parse_const_defs(Path(repo) / "constants/event_flags.asm")
+
+
+# -- which maps are pitch dark (the FLASH gate) -------------------------
+#
+# `data/maps/maps.asm` carries one `map` line per map:
+#     map <Name>, <TILESET_*>, <ENV>, <LANDMARK_*>, <MUSIC_*>, <phone>,
+#         <PALETTE_*>, <FISHGROUP_*>
+#
+# The FLASH requirement tracks the PALETTE, not the tileset. Checked
+# against the source: RockTunnel1F is TILESET_DARK_CAVE *and*
+# PALETTE_DARK, but MountMortar1FInside is TILESET_DARK_CAVE with
+# PALETTE_NITE and needs no FLASH, and the whole IcePath is
+# TILESET_ICE_PATH/PALETTE_NITE. Keying on the tileset would invent
+# requirements that the game does not have.
+DARK_PALETTE = "PALETTE_DARK"
+
+_map_flag_cache = {}
+
+
+def parse_map_flags(repo):
+    """``{CamelCaseMapName: {"tileset", "environment", "palette"}}`` from
+    data/maps/maps.asm."""
+    key = str(repo)
+    if key in _map_flag_cache:
+        return _map_flag_cache[key]
+    out = {}
+    path = Path(repo) / "data/maps/maps.asm"
+    for line in path.read_text().splitlines():
+        m = re.match(r"\s*map\s+(\w+),\s*(\w+),\s*(\w+),\s*\w+,\s*\w+,"
+                     r"\s*\w+,\s*(\w+)", line)
+        if m:
+            out[m.group(1)] = {"tileset": m.group(2),
+                               "environment": m.group(3),
+                               "palette": m.group(4)}
+    _map_flag_cache[key] = out
+    return out
+
+
+def dark_map_names(repo):
+    """CamelCase names of every map that is pitch dark without FLASH."""
+    return {name for name, f in parse_map_flags(repo).items()
+            if f["palette"] == DARK_PALETTE}

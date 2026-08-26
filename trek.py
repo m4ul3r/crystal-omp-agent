@@ -1255,6 +1255,41 @@ class Driver:
             out[name] = knower
         return out
 
+    def dark_maps(self):
+        """Map CONSTs that are pitch dark without FLASH (13 of them:
+        ROCK_TUNNEL, DARK_CAVE, the WHIRL_ISLANDS, SILVER_CAVE_ROOM_1).
+
+        Keyed on the map's PALETTE, not its tileset -- MOUNT_MORTAR and the
+        ICE_PATH are TILESET_DARK_CAVE / ICE_PATH but PALETTE_NITE, and
+        need no FLASH (see missables.DARK_PALETTE)."""
+        camel_to_const = {c: k for k, c in self.nav.camel.items()}
+        out = set()
+        for camel in missables.dark_map_names(paths.REPO_ROOT):
+            const = camel_to_const.get(camel)
+            if const:
+                out.add(const)
+        return out
+
+    def needs_flash(self, map_name=None):
+        """Is this map unusable without FLASH? Defaults to the current map."""
+        return self._resolve_map(map_name) in self.dark_maps()
+
+    def blocked_by(self):
+        """Field-move gates I cannot currently pass, as
+        ``{'FLASH': [MAP_CONST, ...]}``.
+
+        `missables()` says what I do not HAVE; this says what that
+        COSTS me. Live example that motivated it: a party with
+        ``FLASH: None`` cannot use ROCK_TUNNEL (the Kanto shortcut),
+        SILVER_CAVE_ROOM_1 (Red) or the WHIRL_ISLANDS (Lugia) -- three
+        objectives gated by one uncollected HM."""
+        out = {}
+        if self.field_moves().get("FLASH") is None:
+            dark = sorted(self.dark_maps())
+            if dark:
+                out["FLASH"] = dark
+        return out
+
     # -- live sprites ------------------------------------------------------
     # Patience budget for an NPC squatting the only path: wanderers step
     # off on their own, so waiting beats storming 20 replans. Stationary
@@ -1714,7 +1749,21 @@ class Driver:
                     log.info(f"  -> {self.map_name()} {self.pos()[2:]}")
                     return True
                 if self.pos()[2:] != target:
-                    continue
+                    # `_axis_move` is a single step and cannot always get
+                    # back (a south-wall door's only step-off is vertical,
+                    # so the horizontal attempts leave us one cell away on
+                    # the wrong axis). Falling through with `continue` here
+                    # silently ATE the remaining sides, so U/D were never
+                    # tried and the caller stranded off-target -- found by
+                    # tests/integration/test_take_warp_entry.py on Kurt's
+                    # house exit (3,7). Walk back properly instead: the
+                    # docstring promises every walkable side, so try them.
+                    try:
+                        self.goto(*target)
+                    except Exception:
+                        pass
+                    if self.pos()[2:] != target:
+                        continue
             if self._step(mv) == "battle":
                 if not self._on_battle(f"take_warp {target}"):
                     return self._warp_fail(

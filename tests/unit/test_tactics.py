@@ -5,13 +5,15 @@ harness's own parsers, so these tests fail if the chart is ever misread. Only
 the ROM `Moves` table and the live WRAM are faked.
 """
 
+import re
 from types import SimpleNamespace
 
 import pytest
 
 from crystalagent.battle import _parse_matchups, _parse_types
 from crystalagent.paths import REPO_ROOT
-from crystalagent.tactics import (MAX_DAMAGE, Tactics, damage_span, read_side)
+from crystalagent.tactics import (MAX_DAMAGE, Tactics, damage_span,
+                                  parse_trainer_items, read_side)
 
 pytestmark = pytest.mark.unit
 
@@ -451,15 +453,18 @@ def test_a_certain_ko_is_taken_over_a_bigger_but_uncertain_hit():
     assert "KOs now" in why
 
 
-def test_it_switches_away_from_a_lethal_hit_to_a_resistant_bench_mon():
-    """The live danger for a DRAGON/FLYING mon: ICE is 4x on it. If the
-    incoming ICE BEAM kills and I cannot kill first, leave -- and leave to
-    the mon that actually resists ICE (WATER), not merely a healthy one."""
+def test_a_doomed_mon_attacks_instead_of_switching_and_names_the_free_entry():
+    """BATTLE.md §9, now enforced by recommend(): a faint lets the
+    replacement enter FREE; a voluntary switch concedes the hit. So when
+    ICE BEAM kills on its minimum roll and nothing KOs first, the doomed
+    DRAGON/FLYING mon spends its last turns on damage -- and the reason
+    says who arrives free and that they resist what killed me."""
     t = _tactics()
     me = _mon(hp=15, types=("DRAGON", "FLYING"))
     foe = _mon(types=("ICE", "ICE"), attack=300, spatk=300, moves=(8,))
     analysis = t_analysis(t, me, foe)
     assert analysis["their_best"]["mult"] == 4.0
+    assert analysis["their_best"]["min"] >= me["hp"]
     frame = {"can_switch": [1, 2], "party": [
         {"index": 0, "nickname": "BROOK", "species": "DRAGONITE",
          "hp": 15, "max_hp": 200},
@@ -468,8 +473,135 @@ def test_it_switches_away_from_a_lethal_hit_to_a_resistant_bench_mon():
         {"index": 2, "nickname": "SNAG", "species": "SUDOWOODO",
          "hp": 130, "max_hp": 130}]}
     action, why = t.recommend(analysis, frame)
-    assert action == ("switch", 1), why
-    assert "GATOR" in why and "resists" in why
+    assert action[0] == "attack", why          # never a voluntary switch
+    assert "doomed" in why and "FREE" in why
+    assert "GATOR" in why and "x0.5" in why    # the resisting successor
+
+
+def test_the_sacrifice_line_prefers_fixed_damage_over_resisted_stab():
+    """RIPTIDE vs Lance's L50 Dragonite ace (live, both clears): STAB Surf
+    was resisted to ~20-24 while EFFECT_STATIC_DAMAGE Dragon Rage is a flat
+    40 (data/moves/moves.asm), so the doomed ranking must take the fixed
+    move, name BROOK's free entry, and count whether BROOK finishes the
+    chipped HP."""
+    t = _tactics()
+    me = _mon(level=38, hp=30, max_hp=118, types=("WATER", "WATER"),
+              speed=95, attack=90, spatk=90, moves=(6, 3))
+    foe = _mon(level=50, hp=122, max_hp=162, types=("DRAGON", "FLYING"),
+               speed=110, attack=140, spatk=140, defense=120, spdef=120,
+               moves=(2,))
+    analysis = t_analysis(t, me, foe)
+    by_name = {v["move"]: v for v in analysis["moves"]}
+    surf, rage = by_name["SURF"], by_name["DRAGON RAGE"]
+    assert surf["mult"] == 0.5 and rage["kind"] == "fixed"
+    assert rage["max"] > surf["max"]
+    assert analysis["their_best"]["min"] >= me["hp"]      # doomed
+    frame = {"can_switch": [1], "party": [
+        {"index": 0, "nickname": "RIPTIDE", "species": "FERALIGATR"},
+        {"index": 1, "nickname": "BROOK", "species": "FERALIGATR",
+         "level": 42, "hp": 150, "max_hp": 152,
+         "attack": 110, "defense": 100, "speed": 98,
+         "spatk": 105, "spdef": 100, "moves": [8]}]}
+    action, why = t.recommend(analysis, frame)
+    assert action == ("attack", 1), why        # DRAGON RAGE's slot
+    assert "doomed" in why and "DRAGON RAGE" in why
+    assert "BROOK" in why and "FREE" in why
+    assert "finish" in why                     # the successor assessment
+
+
+def test_outspeeding_a_certain_ko_means_not_doomed():
+    """§8 speed-rule guard: if I outspeed and certainly KO, the enemy's
+    scariest move never resolves -- no sacrifice line, just the kill."""
+    t = _tactics()
+    me = _mon(hp=10, speed=200, moves=(10,))     # WING ATTACK certainly KOs
+    foe = _mon(hp=20, max_hp=20, types=("GRASS", "GRASS"), defense=5,
+               attack=300, speed=50, moves=(2,))
+    threat = t.outlook(2, foe, me)
+    assert threat["min"] >= me["hp"]             # looks lethal
+    ko = t.outlook(10, me, foe)
+    assert ko["ko_certain"] and me["speed"] > foe["speed"]
+    action, why = t.recommend(t_analysis(t, me, foe))
+    assert action[0] == "attack" and "KOs now" in why, why
+    assert "doomed" not in why
+
+
+
+def test_against_a_healer_ace_it_bursts_instead_of_chipping():
+    """Koga healed his Crobat 10 -> 26 mid-fight: AI_TryItem gates items
+    behind .IsHighestLevel (engine/battle/ai/items.asm:167) and heal items
+    fire at half HP (.HealItem, ibid.:346). So when the class carries an
+    HP restorer (data/trainers/attributes.asm) and the front mon IS the
+    highest-level one, prefer fewer hits-to-KO over bigger expected chip:
+    IRON TAIL lands less per roll but needs 2 hits where Surf needs 3."""
+    t = _tactics()
+    me = _mon(level=50, hp=200, max_hp=200, types=("WATER", "WATER"),
+              attack=160, spatk=180, defense=100, spdef=100, moves=(6, 1))
+    foe = _mon(level=50, hp=200, max_hp=200, types=("NORMAL", "NORMAL"),
+               attack=40, defense=50, spdef=100, moves=(4,))
+    surf, iron = t.my_moves(me, foe)
+    assert surf["hits_to_ko"] == 3 and iron["hits_to_ko"] == 2
+    assert t._score(surf) > t._score(iron)       # chip-greedy pick is SURF
+    analysis = t_analysis(t, me, foe)
+    assert t.recommend(analysis)[0] == ("attack", surf["slot"])
+    items = parse_trainer_items(REPO_ROOT)
+    koga_id = next(c for c, v in items.items() if v["class"] == "KOGA")
+    analysis["trainer"] = {
+        "class": koga_id, "class_name": "KOGA",
+        "items": items[koga_id]["items"],
+        "source": f"data/trainers/attributes.asm:{items[koga_id]['line']}",
+        "enemy_levels": [foe["level"]]}
+    action, why = t.recommend(analysis)
+    assert action == ("attack", iron["slot"]), why
+    assert "burst" in why and "FULL RESTORE" in why and "healed" in why
+
+
+def test_expects_heal_flags_only_the_hp_healers_ace():
+    """attributes.asm: Koga (:90) and Champion (:96) carry FULL_HEAL +
+    FULL_RESTORE; Will (:66) MAX_POTION; Chuck (:42) FULL_HEAL only -- no
+    chip to erase, so no burst bias."""
+    t = _tactics()
+    items = parse_trainer_items(REPO_ROOT)
+
+    def analysis_for(class_name, level, levels):
+        cls = next(c for c, v in items.items() if v["class"] == class_name)
+        return {"trainer": {"class": cls, "class_name": class_name,
+                            "items": items[cls]["items"],
+                            "source": f"data/trainers/attributes.asm:"
+                                      f"{items[cls]['line']}",
+                            "enemy_levels": levels},
+                "enemy": {"level": level}}
+
+    hit = t.expects_heal(analysis_for("KOGA", 44, [40, 44]))
+    assert hit and hit["heal_items"] == ["FULL RESTORE"]
+    koga_id = next(c for c, v in items.items() if v["class"] == "KOGA")
+    assert hit["source"] == (f"data/trainers/attributes.asm:"
+                             f"{items[koga_id]['line']}")
+    assert not t.expects_heal(analysis_for("KOGA", 40, [40, 44]))
+    assert t.expects_heal(analysis_for("WILL", 40, [38, 40]))
+    assert not t.expects_heal(analysis_for("CHUCK", 42, [42]))
+    assert not t.expects_heal({"enemy": {"level": 30}})          # wild
+    tr = dict(analysis_for("KOGA", 44, [44])["trainer"])
+    assert not t.expects_heal({"trainer": tr})                   # no levels
+
+
+def test_parse_trainer_items_reads_the_rom_table_with_provenance():
+    """Every `db X, Y ; items` row of data/trainers/attributes.asm, keyed by
+    the trainerclass id constants/trainer_constants.asm assigns in the same
+    order (TRAINER_NONE has no entry); line numbers point at the db row."""
+    items = parse_trainer_items(REPO_ROOT)
+    by_name = {v["class"]: v for v in items.values()}
+    assert by_name["FALKNER"] == {"class": "FALKNER", "items": [],
+                                  "line": 6}
+    assert by_name["KOGA"]["items"] == ["FULL_HEAL", "FULL_RESTORE"]
+    assert by_name["KOGA"]["line"] == 90
+    assert by_name["CHAMPION"] == {"class": "CHAMPION",
+                                   "items": ["FULL_HEAL", "FULL_RESTORE"],
+                                   "line": 96}
+    assert by_name["RED"]["items"] == ["FULL_RESTORE", "FULL_RESTORE"]
+    consts = re.findall(r"^\ttrainerclass (\w+)",
+                        (REPO_ROOT / "constants/trainer_constants.asm")
+                        .read_text(), re.M)
+    assert set(by_name) == {c for c in consts if c != "TRAINER_NONE"}
 
 
 def test_switch_scoring_reads_types_from_the_base_stats_data():

@@ -148,5 +148,10 @@ Malformed requests get structured `ok:false`, never a dead pipe.
   build-coupled.
 - Input/text event hooks are live by default (`CRYSTAL_HOOKS=0` disables).
   After a ROM rebuild they self-disable with a warning until re-pinned.
-- Keep `.venv/bin/python -m pytest tests` green; run `trek gc --keep 3`
-  occasionally (dry-run default; protects milestones).
+- Keep `.venv/bin/python -m pytest tests` green (unit lane; the
+  emulator-in-the-loop scenarios in `tests/integration/` are excluded
+  from the default run). Run them explicitly: `.venv/bin/python -m
+  pytest -m integration` -- each scenario forks a milestone savestate
+  (+ `.meta`) into a temp path and never mutates `claude_saves/`.
+  Run `trek gc --keep 3` occasionally (dry-run default; protects
+  milestones).

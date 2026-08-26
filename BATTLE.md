@@ -213,9 +213,20 @@ check `faster` before spending a turn on healing or switching.
   (MEAN LOOK / SPIDER WEB). Same shape blocks RUN.
 - **A switch costs a free hit; a faint does not.** When a mon faints, the
   replacement enters *without* being hit. Use this: if a mon is dead anyway,
-  spend its last turns on damage and let the next mon arrive free. Live: RIPTIDE
-  chipped Lance's ace 162 → 82 with two Dragon Rages, fainted, and BROOK
-  entered free and one-shot it.
+  spend its last turns on damage and let the next mon arrive free. Live:
+  RIPTIDE chipped Lance's ace 162 → 82 with two Dragon Rages, fainted, and
+  BROOK entered free and one-shot it.
+  `recommend()` now enforces this as the **sacrifice line**: when the
+  enemy's best move kills my active mon on its *minimum* roll and I cannot
+  certainly KO first (respecting `faster` -- §8), it attacks for maximum
+  expected damage (fixed-damage moves compete on their flat number, so
+  Dragon Rage beat a resisted STAB Surf) and NEVER voluntarily switches --
+  a switch would concede exactly the hit the faint avoids. `outlook()`
+  consumers get `tactics.sacrifice_line(analysis, frame)`:
+  `{pick, chip_min, enemy_hp_after_chip, successor, successor_finishes}`
+  where the successor is the top `switch_options` entry and
+  `successor_finishes` is its best move's `hits_to_ko` against the chipped
+  HP (needs the frame roster's moves/stats, which `read_party` provides).
 - **Switching resets a badly-poisoned mon to ordinary poison** (Toxic's
   escalating counter clears), which is sometimes reason enough to rotate.
 - Switch *to* the mon that **resists** what is incoming, not merely the
@@ -244,6 +255,17 @@ Trainer AI carries items: Will/Bruno MAX POTION, Karen FULL HEAL + MAX POTION,
 Koga and Lance FULL HEAL + FULL RESTORE (`data/trainers/attributes.asm`), used
 only on their **highest-level** mon. Expect the ace to be healed once, and
 prefer burst over chip against it.
+Both halves are now disassembly-verified and implemented:
+`AI_TryItem` refuses every enemy item unless the active mon is the
+highest-level one (`.IsHighestLevel`, `engine/battle/ai/items.asm:167`
+and :242), and HP heals fire once that mon drops to half HP (`.HealItem`,
+ibid.:346, via `AICheckEnemyHalfHP`). `tactics.parse_trainer_items()` parses
+the class table with `file:line` provenance, `outlook()['trainer']` carries
+the live class + OT-party levels, and `tactics.expects_heal(analysis)` is
+true exactly for a healer-class ace -- `recommend()` then prefers the move
+with the fewest hits-to-KO over bigger expected chip ("burst over chip"),
+because a FULL RESTORE erases accumulated damage. Unknown class or levels
+degrade to no bias.
 
 ### Status costs TURNS, and the harness now says how many
 

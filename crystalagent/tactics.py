@@ -20,6 +20,13 @@ disassembly:
 - ``constants/move_effect_constants.asm``: effect ids, so fixed-damage moves
   (DRAGON RAGE is ``EFFECT_STATIC_DAMAGE`` with power 40) are not run through
   the formula and are not thrown away for "having no power".
+- ``data/trainers/attributes.asm``: which items each TRAINER CLASS carries
+  (``db ITEM, ITEM ; items``), keyed by the class ids that
+  ``constants/trainer_constants.asm`` assigns with ``trainerclass`` -- so
+  heal-aware burst is read out of the ROM, not hardcoded. The engine gates
+  every enemy item behind ``.IsHighestLevel``
+  (``engine/battle/ai/items.asm:167``), and heal items fire once the ace
+  drops to half HP (``.HealItem``, ibid.:346).
 
 Live stat reads use the in-battle structs, which the engine keeps
 STAGE-MODIFIED (``ApplyStatLevelMultiplierOnAllStats`` writes straight into
@@ -87,6 +94,42 @@ RISKY = {
 # Muk and Crobat blanked two "100%" attacks in a row while a 15-18 damage
 # FAINT ATTACK finished each of them on demand.
 NEVER_MISS = ("EFFECT_ALWAYS_HIT",)
+
+# The AI's HP-restoring items (engine/battle/ai/items.asm:274-279, the
+# AI_Items table): these are the ones that ERASE chip damage mid-fight.
+# FULL_HEAL cures status only -- it does not undo damage, so it is
+# deliberately not here.
+HEALING_ITEMS = ("FULL_RESTORE", "MAX_POTION", "HYPER_POTION",
+                 "SUPER_POTION", "POTION")
+
+
+def parse_trainer_items(repo):
+    """``{class_id: {"class", "items", "line"}}`` from
+    data/trainers/attributes.asm.
+
+    Entries correspond in order to the ``trainerclass`` constants of
+    constants/trainer_constants.asm (attributes.asm:2 says so); TRAINER_NONE
+    (id 0) has no entry, so class ids run from 1. Provenance is the line of
+    the entry's ``db ..., ... ; items`` row. Class names come from the ROM's
+    own constant list; the display comments in attributes.asm ("Lt Surge",
+    "Blackbelt T") do not match them and are not used for lookup."""
+    consts = re.findall(r"^\ttrainerclass (\w+)",
+                        (Path(repo) / "constants/trainer_constants.asm")
+                        .read_text(), re.M)
+    classes = [c for c in consts if c != "TRAINER_NONE"]
+    out, idx = {}, 0
+    path = Path(repo) / "data/trainers/attributes.asm"
+    for n, line in enumerate(path.read_text().splitlines(), 1):
+        m = re.match(r"\tdb (\w+), (\w+) ; items$", line)
+        if not m or idx >= len(classes):
+            continue
+        out[idx + 1] = {
+            "class": classes[idx],
+            "items": [x for x in m.groups() if x != "NO_ITEM"],
+            "line": n,
+        }
+        idx += 1
+    return out
 
 
 def parse_effects(repo):
@@ -319,6 +362,8 @@ class Tactics:
         # {normalised item: curative properties} from the ROM's own tables,
         # so `recommend` can name a real cure instead of guessing one.
         self.heal_table = heal_table or {}
+        # {class_id: {"class", "items", "line"}} -- who heals, from the ROM.
+        self.trainer_items = parse_trainer_items(repo)
 
     # -- categories ------------------------------------------------------
 
@@ -547,7 +592,128 @@ class Tactics:
             "turns_they_need": (
                 None if not worst or worst["max"] <= 0
                 else -(-me["hp"] // max(1, worst["min"] or worst["max"]))),
+            "trainer": self.trainer_context(emu),
         }
+
+    def trainer_context(self, emu):
+        """Who am I fighting, and what does their class carry? ``None`` for
+        a wild battle (wTrainerClass 0) or any read failure -- the heal
+        model must degrade to today's behaviour, never raise: this runs
+        inside a live battle loop.
+
+        wTrainerClass / wOTPartyMon1Level are bank-1 WRAM (pokecrystal.sym);
+        the OT party levels are what .IsHighestLevel
+        (engine/battle/ai/items.asm:242) itself compares."""
+        try:
+            bank, addr = emu.sym["wTrainerClass"]
+            cls = emu.read((bank, addr), 1)[0]
+            if not cls:
+                return None
+            obank, obase = emu.sym["wOTPartyMon1Level"]
+            stride = emu.sym.offset("wOTPartyMon2", "wOTPartyMon1")
+            count = min(emu.read_u8("wOTPartyCount"), 6)
+            levels = [emu.read((obank, obase + i * stride), 1)[0]
+                      for i in range(count)]
+        except Exception:
+            return None
+        rec = self.trainer_items.get(cls) or {}
+        return {"class": cls,
+                "class_name": rec.get("class"),
+                "items": list(rec.get("items") or []),
+                "source": (f"data/trainers/attributes.asm:{rec['line']}"
+                           if rec else None),
+                "enemy_levels": levels}
+
+    def expects_heal(self, analysis):
+        """Will the mon facing me be healed out from under my chip damage?
+
+        True exactly when BATTLE.md §10's rule holds: a trainer battle
+        whose class carries an HP-restoring item (data/trainers/
+        attributes.asm) AND the mon in front is its highest-level one --
+        AI_TryItem gates EVERY enemy item behind .IsHighestLevel
+        (engine/battle/ai/items.asm:167), and heal items fire once that mon
+        drops to half HP (.HealItem, ibid.:346). Live: Koga healed his
+        Crobat 10 -> 26 HP mid-fight, exactly here.
+
+        Returns ``{"heal_items", "source", "enemy_level", "party_max"}`` or
+        False. Unknown class, unknown levels or no HP healer all degrade to
+        False -- no bias, no exception."""
+        tr = analysis.get("trainer") or {}
+        if not tr.get("class"):
+            return False
+        heals = [h for h in HEALING_ITEMS if h in (tr.get("items") or [])]
+        if not heals:
+            return False
+        levels = tr.get("enemy_levels") or []
+        level = (analysis.get("enemy") or {}).get("level")
+        if not levels or level is None:
+            return False          # cannot tell; refuse to guess
+        if max(levels) > level:
+            return False          # a bigger mon waits: not the ace
+        return {"heal_items": [h.replace("_", " ") for h in heals],
+                "source": tr.get("source"),
+                "enemy_level": level, "party_max": max(levels)}
+
+    def sacrifice_line(self, analysis, frame=None):
+        """The doomed-mon assessment behind the RIPTIDE line, or None.
+
+        Doomed means the enemy's best move KILLS me on its minimum roll
+        AND I cannot certainly KO first -- respecting `faster`: an
+        outspeeding certain KO removes the threat before it resolves
+        (BATTLE.md §8), so there is nothing to sacrifice against. When
+        doomed, my remaining value is the damage I deal before fainting,
+        because a faint lets the replacement enter FREE while a voluntary
+        switch concedes a hit (§9). The returned dict names the max-
+        expected-damage move (fixed-damage moves compete on their flat
+        number -- DRAGON RAGE's 40 beat a resisted STAB Surf live) and the
+        successor with whether IT can finish what is left after the chip.
+        """
+        me = analysis["me"]
+        their = analysis.get("their_best")
+        if not their or me["hp"] <= 0 or their["min"] < me["hp"]:
+            return None
+        kos = [m for m in analysis["moves"]
+               if m.get("pp") != 0 and m["ko_certain"]]
+        if kos and analysis.get("faster"):
+            return None           # §8: kill it before the threat resolves
+        live = [m for m in analysis["moves"]
+                if m.get("pp") != 0 and m["max"] > 0]
+        if not live:
+            return None
+        pick = max(live, key=self._score)
+        after_chip = dict(analysis["enemy"])
+        after_chip["hp"] = max(1, after_chip["hp"] - pick["min"])
+        succ = next(iter(self.switch_options(analysis, frame)), None)
+        finish = self._successor_finish(succ, after_chip) if succ else {}
+        return {"pick": pick, "chip_min": pick["min"],
+                "enemy_hp_after_chip": after_chip["hp"],
+                "successor": succ, "successor_finishes": finish}
+
+    def _successor_finish(self, succ, defender):
+        """Can the incoming mon KO the chipped enemy in one move? Needs the
+        frame's party entry to carry moves and stats (read_party provides
+        both); anything missing degrades to hits_to_ko None."""
+        entry = succ.get("_entry") if succ else None
+        if not entry or not entry.get("moves"):
+            return {"move": None, "hits_to_ko": None}
+        names = self.species_types.get(entry.get("species")) \
+            or self.species_types.get(entry.get("species_id")) or []
+        tids = [self.bdata.types[n] for n in names if n in self.bdata.types]
+        attacker = {"level": entry.get("level", 0), "hp": entry.get("hp", 1),
+                    "types": tids or [0], "status": 0, "sub3": 0,
+                    "acc_level": self.base_stage, "eva_level": self.base_stage,
+                    "attack": entry.get("attack", 0),
+                    "defense": entry.get("defense", 0),
+                    "speed": entry.get("speed", 0),
+                    "spatk": entry.get("spatk", 0),
+                    "spdef": entry.get("spdef", 0)}
+        views = [self.outlook(mid, attacker, defender)
+                 for mid in entry["moves"] if mid in self.bdata.moves]
+        best = min((v for v in views if v["hits_to_ko"] is not None),
+                   key=lambda v: v["hits_to_ko"], default=None)
+        if not best:
+            return {"move": None, "hits_to_ko": None}
+        return {"move": best["move"], "hits_to_ko": best["hits_to_ko"]}
 
     # -- the actual decision ---------------------------------------------
 
@@ -580,6 +746,9 @@ class Tactics:
                 "incoming_mult": incoming,
                 "hp_frac": round(hp_frac, 2),
                 "score": round((2.0 - incoming) * hp_frac, 3),
+                # the raw roster entry, so the sacrifice line can read the
+                # successor's moves/stats without a second lookup
+                "_entry": mon,
             })
         return sorted(out, key=lambda m: m["score"], reverse=True)
 
@@ -587,15 +756,19 @@ class Tactics:
         """``(action, reason)`` for this turn -- the whole point of the
         module. Order of preference:
 
-        1. a certain KO (the most RELIABLE one wins), because a dead enemy
-           deals no damage;
-        2. healing, if I am about to be out-damaged and carry a potion;
-        3. curing PAR/SLP/FRZ, which cost whole TURNS, when nothing is
+        1. a certain KO (the most RELIABLE one wins -- BATTLE.md §7),
+           because a dead enemy deals no damage;
+        2. the SACRIFICE LINE, when their best move kills me on its
+           minimum roll and I cannot certainly KO first: spend the last
+           turns on maximum damage and let the replacement enter free
+           (§9) -- a voluntary switch would concede a hit, so switching is
+           deliberately NOT on this list once doomed;
+        3. healing, if I am about to be out-damaged and carry a potion;
+        4. curing PAR/SLP/FRZ, which cost whole TURNS, when nothing is
            about to kill me and the bag holds the cure;
-        4. switching, if their best move kills me, I cannot kill them, and
-           a party member resists what is coming;
-        5. otherwise the best expected damage, ignoring immunities and
-           empty slots.
+        5. otherwise the best expected damage -- or, against a healer's
+           ace (expects_heal), the move that removes it in the fewest
+           hits, because chip gets erased by a FULL RESTORE (§10).
         """
         moves = [m for m in analysis["moves"] if m.get("pp") != 0]
         live = [m for m in moves if m["max"] > 0]
@@ -616,6 +789,28 @@ class Tactics:
             return ("attack", pick["slot"]), (
                 f"{pick['move']} KOs now ({pick['min']}-{pick['max']} vs "
                 f"{analysis['enemy']['hp']} HP, x{pick['mult']:g}, {hits})")
+        doom = self.sacrifice_line(analysis, frame)
+        if doom:
+            pick = doom["pick"]
+            succ = doom["successor"]
+            tail = (f"{pick['move']} {pick['min']}-{pick['max']} is my "
+                    f"remaining value")
+            if succ:
+                fin = doom.get("successor_finishes") or {}
+                tail += (f"; {succ['nickname']} enters FREE on the faint "
+                         f"(takes x{succ['incoming_mult']:g} of "
+                         f"{their['move']})")
+                if fin.get("hits_to_ko"):
+                    tail += (f" and needs {fin['hits_to_ko']} hit(s) to "
+                             f"finish the {doom['enemy_hp_after_chip']} HP "
+                             f"left" + (f" with {fin['move']}"
+                                        if fin.get("move") else ""))
+            else:
+                tail += "; no replacement waits, but fainting still beats " \
+                        "conceding a switch-in hit"
+            return ("attack", pick["slot"]), (
+                f"doomed: {their['move']} does {their['min']}-{their['max']} "
+                f"vs my {me['hp']} HP and nothing KOs first -- {tail}")
         lethal = bool(their and their["min"] >= me["hp"])
         hurt = me["hp"] <= heal_at * me["max_hp"]
         # The frame's bag is keyed by normalised names ('FULLRESTORE'), so
@@ -646,25 +841,29 @@ class Tactics:
                 return ("item", cure), (
                     f"{names} costs me ~{loss:.0%} of my turns and nothing "
                     f"lethal is incoming; {cure} clears it")
-        if lethal and not analysis["i_can_ko"]:
-            best_switch = next(
-                (s for s in self.switch_options(analysis, frame)
-                 if s["incoming_mult"] < 1.0 and s["hp_frac"] > 0.5), None)
-            if best_switch:
-                return ("switch", best_switch["index"]), (
-                    f"{their['move']} does {their['min']}-{their['max']} to "
-                    f"my {me['hp']} HP; {best_switch['nickname']} resists it "
-                    f"(x{best_switch['incoming_mult']:g})")
         if not live:
             status = [m for m in moves if m["kind"] == "status"]
             if status:
                 return ("attack", status[0]["slot"]), (
                     f"no damaging move connects; {status[0]['move']} instead")
             return "flee", "nothing in this moveset can touch it"
-        pick = live[0]
-        why = (f"{pick['move']} x{pick['mult']:g} "
-               f"{pick['min']}-{pick['max']} ({pick['pct_max']}% of its HP)"
-               f", {pick['hits_to_ko']} hit(s) to KO")
+        heal = self.expects_heal(analysis)
+        if heal:
+            # Burst over chip: their FULL RESTORE undoes every turn of
+            # chipping once the ace hits half HP (.HealItem,
+            # engine/battle/ai/items.asm:346), so minimise hits_to_ko.
+            pick = min(live, key=lambda m: (
+                m["hits_to_ko"] if m["hits_to_ko"] else 999,
+                -self._score(m)))
+            why = (f"{pick['move']} burst over chip: this ace will be "
+                   f"healed ({'/'.join(heal['heal_items'])}, "
+                   f"{heal['source']}), so {pick['hits_to_ko']} hit(s) to "
+                   f"KO beats accumulating damage that gets erased")
+        else:
+            pick = live[0]
+            why = (f"{pick['move']} x{pick['mult']:g} "
+                   f"{pick['min']}-{pick['max']} ({pick['pct_max']}% of "
+                   f"its HP), {pick['hits_to_ko']} hit(s) to KO")
         if lethal:
             why += f" -- but {their['move']} can kill me first"
         return ("attack", pick["slot"]), why

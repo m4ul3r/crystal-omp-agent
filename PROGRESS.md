@@ -1,3 +1,45 @@
+## session ox-alpha-integration - emulator-in-the-loop test lane `tests/integration/` (Aug 26 2026)
+
+Harness-only: no game progress, no milestone saved; `claude_saves/`
+verified byte-identical (sha256+mtime, all 120 files) across the run.
+Closes `BRIEF_integration_lane.md`. Owns: `tests/integration/**`,
+`tests/conftest.py`, `pyproject.toml` addopts, the HANDBOOK/AGENTS
+test-running lines. Deleted `scripts/verify_hardening.py` --
+its live checks are folded into the lane (accuracy/evasion/paralysis in
+`test_outlook_live_stages.py`, Indigo Plateau escalation in
+`test_goto_escalation.py`); no divergent copy left.
+
+Tests: default `.venv/bin/python -m pytest tests` = unit lane only
+(integration excluded via addopts `-m "not integration"`).
+`.venv/bin/python -m pytest -m integration`: **15 passed, 1 xfailed,
+~14 s wall** (boot ~1 s per forked savestate; scenarios pay it
+explicitly). Milestone forks per scenario:
+
+| scenario | fork |
+|---|---|
+| edge slide / map-edge connection | `wren-well-cleared` |
+| take_warp standing-on-tile + stale coords | `wren-well-cleared` |
+| goto escalation on lying grid + heal | `wren-pre-e4` |
+| trapped-switch refusal | `wren-zephyr-badge` |
+| missables() both directions | `wren-champion` + `wren-kanto` |
+| map interface vs disassembly | `wren-kanto` |
+| outlook under poked stages (promoted verify_hardening) | `wren-zephyr-badge` |
+
+**NEW LIVE BUG found by the lane** (xfail'd strict in
+`test_take_warp_entry.py::test_called_while_standing_on_the_tile_reenters`,
+left for trek.py's owner): `_reenter_warp` tries sides in STEP order
+(R,L,U,D); on Kurt's house exit door (3,7) called while standing ON it,
+the horizontal retry derails position bookkeeping so U/D are never
+attempted and the player is stranded at (0,7). A manual step-off-U +
+hold-D warps out fine -- the door IS enterable along its axis.
+
+Fixture contract (`tests/integration/conftest.py`): every scenario forks
+`claude_saves/<milestone>.state` PLUS `.meta` into tmp_path, deletes
+every created file in teardown even on failure, re-checks the source
+digest per fork and all of `claude_saves/` at session end. Determinism
+in use: pace()'s Python RNG is seeded, everything under that is the
+emulator's own same-state-same-input guarantee (gotcha 9).
+
 ## session claude-missables - un-collected items + a map DATA interface (Aug 26 2026)
 
 Harness-only: no game progress, no milestone saved, `saves/` untouched.
@@ -155,12 +197,19 @@ turns probing those and concluding "B1F west is sealed").
   (gotcha 7 again). Any field-move helper must clean up on failure.
 - The fly destination cursor moves with **UP/DOWN only** (it cycles the visited
   landmark list); LEFT/RIGHT do nothing.
-- `reach(1,5)` failed on Ilex Forest where a raw
-  `explore_bfs(goal=lambda: y<=6)` found it in **3 moves** - `reach`'s
-  goal-check or budget is wrong. Worth a test.
-- `explore_bfs` results do not survive into the next tool call: it found and
-  loaded (1,5), and the next cell read (1,43) again. Do the search and the
-  follow-up step in ONE call.
+- ~~`reach(1,5)` failed where `explore_bfs` found it in 3 moves~~ **RETRACTED
+  (pt13, checked in code)**: `reach` is now a thin wrapper on
+  `goto(..., escalate=(budget, nodes))`, and my comparison was not
+  apples-to-apples - reach targets the EXACT cell while my `explore_bfs` call
+  used the looser predicate `y <= 10`, which any of several cells satisfies.
+  There is no evidence of a goal-check bug. Do not chase it.
+- ~~`explore_bfs` results do not survive into the next tool call~~ **RETRACTED
+  (pt13, reproduced on a fork of wren-kanto)**: the searched state DOES
+  persist - position and `emu.frame` were byte-identical across two separate
+  tool calls. The Ilex observation was almost certainly a *failed* `reach`
+  restoring its root snapshot around the successful search. The real lesson is
+  narrower: a failed search restores, so do not interleave a failed `reach`
+  with a successful `explore_bfs` and expect the latter to stick.
 - `talk_to` fails on piers//dock tiles and against NPCs on warp rows; facing
   by hand and pressing A works.
 
@@ -2361,3 +2410,30 @@ Gotchas added this session:
 
 Next objectives for this timeline (post-game): S.S. Ticket phone call
 from Elm -> Kanto badges, Red at Mt. Silver, catch legendaries.
+
+## Session (battle planning, 2026-08-26): tactics.recommend gains two
+evidenced behaviours (BRIEF_battle_planning.md implemented)
+
+- Sacrifice line: Tactics.sacrifice_line() + recommend() branch. When the
+  enemy's best move kills on its MINIMUM roll and no certain-KO-first exists
+  (speed-respecting, BATTLE.md §8), recommend attacks for max expected
+  damage -- fixed-damage moves compete on their flat value (Dragon Rage >
+  resisted Surf, the RIPTIDE lesson) -- and never voluntarily switches; a
+  faint's free entry beats a switch that concedes a hit. The assessment
+  exposes successor + whether it finishes the chipped HP; needs frame roster
+  moves/stats, which decide.read_party now decodes from wPartyMon1Moves/
+  stats offsets (degrades to hits_to_ko=None if unreadable).
+- Heal-aware burst: parse_trainer_items() reads data/trainers/attributes.asm
+  ({class_id: items} with line provenance); outlook()['trainer'] carries live
+  wTrainerClass + wOTPartyMon levels. expects_heal() = healer-class AND front
+  mon is highest-level (AI_TryItem .IsHighestLevel gate, ai/items.asm:167;
+  heals at half HP, :346). recommend() then prefers fewest hits-to-KO over
+  bigger chip ("burst over chip") against Koga/Lance/Champion-class aces.
+- The old "switch away from lethal to a resister" recommendation is GONE:
+  doom analysis showed free faint-entry dominates voluntary switching.
+  tests/unit/test_tactics.py rewritten accordingly; §7 reliability ordering
+  untouched and still regression-pinned.
+- Tests: tests/unit/test_tactics.py (new sacrifice/burst/heal sections),
+  new tests/unit/test_party_read_fields.py. Full default pytest lane green.
+
+No trek.py / integration-lane changes needed or made.

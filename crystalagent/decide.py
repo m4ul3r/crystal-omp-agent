@@ -131,11 +131,18 @@ def read_bag(emu, names, pockets=("items", "balls")):
 
 def read_party(emu, names):
     """[{index, nickname, species, species_id, level, hp, max_hp, status,
-    fainted, egg}] straight from wPartyMon1..6 + wPartyMonNicknames.
+    fainted, egg, moves, attack, defense, speed, spatk, spdef}] straight
+    from wPartyMon1..6 + wPartyMonNicknames.
 
     Only the fields a battle decision needs (state.game_state() is the full
     version -- DVs, shininess, held items, schema validation -- and is far
-    too much machinery to run every turn)."""
+    too much machinery to run every turn). ``moves`` and the five battle
+    stats are what Tactics.sacrifice_line reads to say whether the
+    successor can finish the chipped enemy; the party struct keeps them at
+    fixed offsets (wPartyMon1Moves dce1 .. wPartyMon1SpclDef dd0d,
+    pokecrystal.sym), and an emulator that cannot serve them degrades to
+    []/0 rather than raising.
+    """
     sym = emu.sym
     stride = sym.offset("wPartyMon2", "wPartyMon1")
     off = lambda f: sym.offset("wPartyMon1" + f, "wPartyMon1")
@@ -148,6 +155,16 @@ def read_party(emu, names):
         rd = lambda f, n=1: emu.read((bank, base + i * stride + off(f)), n)
         species = rd("Species")[0]
         hp = int.from_bytes(rd("HP", 2), "big")
+        try:
+            moves = [m for m in rd("Moves", 4) if m]
+            stats = {k: int.from_bytes(rd(f, 2), "big") for k, f in
+                     (("attack", "Attack"), ("defense", "Defense"),
+                      ("speed", "Speed"), ("spatk", "SpclAtk"),
+                      ("spdef", "SpclDef"))}
+        except Exception:
+            moves = []
+            stats = dict.fromkeys(
+                ("attack", "defense", "speed", "spatk", "spdef"), 0)
         party.append({
             "index": i,
             "nickname": emu.charmap.decode(
@@ -161,6 +178,8 @@ def read_party(emu, names):
             "status": _status(rd("Status")[0]),
             "fainted": hp <= 0,
             "egg": bool(slots[i:i + 1]) and slots[i] == EGG,
+            "moves": moves,
+            **stats,
         })
     return party
 
@@ -187,6 +206,9 @@ def _party_entry(mon, index):
         "status": list(mon.get("status") or []),
         "fainted": bool(mon.get("fainted", hp <= 0)),
         "egg": bool(mon.get("egg", False)),
+        "moves": list(mon.get("moves") or []),
+        **{k: mon.get(k, 0) for k in
+           ("attack", "defense", "speed", "spatk", "spdef")},
     }
 
 
