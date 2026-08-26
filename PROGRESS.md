@@ -1,3 +1,219 @@
+## session claude-wren pt12 - FLY, the S.S. Aqua, and KANTO (Aug 26 2026)
+
+Actual gameplay session. **WREN is in Kanto.** Milestones:
+`claude_saves/wren-fly.state`, `wren-ssaqua.state`, `wren-kanto.state`.
+
+### What got done
+
+1. **HM02 FLY** - never collected in the whole Johto run, so every trip was on
+   foot. Walked New Bark -> Cherrygrove -> Violet -> Union Cave -> Azalea ->
+   (Ilex maze failed, rerouted) -> Violet -> Ecruteak -> Olivine, surfed Route
+   40/41 to Cianwood, and took it from Chuck's wife at (10,46).
+   Taught to REED the Pidgeot over WHIRLWIND (a 0-power move).
+2. **S.S. TICKET** from Prof. Elm - the Olivine sailor checks
+   `checkitem S_S_TICKET` (maps/OlivinePort.asm:162) and only Elm gives it
+   (maps/ElmsLab.asm:414), post-Champion.
+3. **Rode the S.S. Aqua**, solved the first-voyage sidequest, got the
+   **METAL COAT**, and disembarked at Vermilion. GATOR L79 -> L80 on the way.
+
+### The S.S. Aqua sidequest chain (for next time)
+
+The ship will NOT dock on a first voyage until `EVENT_FAST_SHIP_FOUND_GIRL`.
+Sleeping in the bed (bg_event at (7,1) of FAST_SHIP_CABINS_SW_SSW_NW, entered
+from 1F (15,8)) only says "refreshed" until then. The chain:
+B1F on-duty sailor (30,6) -> asks you to find his buddy -> the lazy sailor
+spawns at (4,26) of FAST_SHIP_CABINS_NNW_NNE_NE (1F door (19,8)) and battles
+you -> the granddaughter is at (2,25) of the CAPTAIN'S cabin, which is
+**only** reachable from 1F (3,13) on the WEST deck, which is **only** reachable
+from the B1F ladder at (5,11).
+
+**1F's east and west halves are not connected**: walking west along 1F stops
+dead at x=10 on every row. B1F is the link, and B1F's full-width corridor is
+at **rows 4-5** (its interior rooms at rows 7-15 are dead ends - I wasted many
+turns probing those and concluding "B1F west is sealed").
+
+### Harness notes from real play
+
+- **`goto` now auto-escalates to the savestate search** ("escalating to a
+  savestate search ... the decoded grid may be wrong"). Good - that P2 item is
+  in. It still gives up too small a budget by default (60 moves / 40 nodes).
+- **The money guard fires on winnings**: `MONEY +216 ... during goto --
+  movement must never spend money`. Trainer payouts are a false positive;
+  it should only warn on a DECREASE.
+- **Map connections and cave mouths need `step_hold` / `_step_warp_tap`, and
+  often a different row than `travel` picks.** `travel` failed at Azalea's east
+  edge (39,13) when the real connection row is (39,14), and at Route 32 ->
+  Violet (8,0). I wrote a `cross(direction)` helper that slides along the edge
+  and retries; that pattern belongs in `travel` itself.
+- **Standing ON a warp does not fire it** - you must ENTER it. Repeatedly cost
+  me turns (Ilex Azalea gate, Union Cave north mouth, cabin doors). Step off
+  and tap back on.
+- **FLY is outdoor-only** and a failed indoor attempt leaves the party menu
+  open with "Can't use that here", which **blocks all movement** until B'd out
+  (gotcha 7 again). Any field-move helper must clean up on failure.
+- The fly destination cursor moves with **UP/DOWN only** (it cycles the visited
+  landmark list); LEFT/RIGHT do nothing.
+- `reach(1,5)` failed on Ilex Forest where a raw
+  `explore_bfs(goal=lambda: y<=6)` found it in **3 moves** - `reach`'s
+  goal-check or budget is wrong. Worth a test.
+- `explore_bfs` results do not survive into the next tool call: it found and
+  loaded (1,5), and the next cell read (1,43) again. Do the search and the
+  follow-up step in ONE call.
+- `talk_to` fails on piers//dock tiles and against NPCs on warp rows; facing
+  by hand and pressing A works.
+
+**Next objective:** the Kanto gym run (8 badges) and eventually Red on Mt.
+Silver. Vermilion's Lt. Surge is right here; REED can now Fly between cities.
+
+
+## session claude-hardening - RETROSPECTIVE backlog P0-P2 landed (Aug 25 2026)
+
+Harness-only session: no game progress, no milestone saved, `saves/` and every
+existing `claude_saves/` milestone untouched. Executed `RETROSPECTIVE.md`'s
+backlog P0 1-3, P1 4-6, P2 7-8, P3 9-10 and **corrected four of its claims**
+that turned out to be stale or wrong (each correction is marked inline in
+RETROSPECTIVE.md; see §2.4, §2.5, §2.6, §2.7).
+
+Tests: **479 -> 553 green** (`.venv/bin/python -m pytest tests -q`, ~14 s).
+New files: `crystalagent/asmconst.py`, `tests/unit/test_parser_values.py`,
+`tests/unit/test_failure_reasons.py`, `tests/unit/test_teach_tm.py`,
+`tests/unit/test_money_watch.py`, `scripts/verify_hardening.py` (the live
+check below, re-runnable on a fork).
+
+### [feat] the model is now told the accuracy a move REALLY has
+
+`outlook()` carries `effective_accuracy` beside listed `accuracy`, computed by
+`tactics.effective_accuracy` -- a port of `BattleCommand_CheckHit.StatModifiers`
+(engine/battle/effect_commands.asm:1758) over `AccuracyLevelMultipliers`,
+including the engine's per-pass truncation and $ff cap. The stage bytes are
+`wPlayerAccLevel`/`wPlayerEvaLevel`/`wEnemyAccLevel`/`wEnemyEvaLevel` -- NOT
+the `wPlayerStatLevels` array the retrospective pointed at. `_score`,
+`recommend()`'s KO tie-break and `explain()` all rank on the effective number.
+
+Live proof (fork of `wren-all-37`, wild battle on ROUTE_39, then
+`d.emu.write("wEnemyEvaLevel", 9)` as TEST SCAFFOLDING -- never harness code):
+
+```
+neutral:      SURF acc 100      CUT acc  95     (listed == effective)
++2 evasion:   SURF acc  60 (listed 100)   CUT acc  57 (listed 95)
+```
+
+Also new: `my_status`/`their_status`/`my_confused`/`turn_loss` on `outlook()`,
+and a cure branch in `recommend()` that spends the cheapest ROM-priced item
+(PARLYZ HEAL ¥200 before FULL HEAL ¥600) on PAR/SLP/FRZ when nothing lethal is
+incoming and no KO is available. Live: a poked PAR bit read back as
+`my_status ['PAR']`, `turn_loss 0.25`.
+
+**Correction to the retrospective**: `faster` must NOT be changed to account
+for paralysis. `ApplyPrzEffectOnSpeed` (engine/battle/core.asm:6585) writes the
+halved speed straight into `wBattleMonSpeed`, so the raw compare already has
+it; halving again double-counts.
+
+### [feat] every parser is pinned to a VALUE
+
+`tests/unit/test_parser_values.py` (19 tests) asserts specific numbers with the
+disassembly file:line in each docstring: status bits (PSN 3 / BRN 4 / FRZ 5 /
+PAR 6, SLP_MASK %111), stage bounds 7/13, the accuracy table's 13 rows, IRON
+TAIL 75 / DYNAMICPUNCH 50 / TACKLE 95 / HYPER BEAM 90, TACKLE 35 PP, PARLYZ
+HEAL's ¥200 and PAR-only cure mask, `items[1] == MASTER BALL`, `$ec -> ▷` /
+`$ed -> ▶`, badge-boost order, FERALIGATR's types and TM learnset, and
+WILLS_ROOM's warps. The weak "accuracy is in 1..100" test it replaces would
+have passed for the bug it was written about.
+
+New `crystalagent/asmconst.py` holds the shared `.asm` walkers
+(`parse_const_defs` honouring const_def/const/const_skip/const_next/
+shift_const, `parse_defs` for literal `DEF ... EQU`, `parse_ratio_table`).
+`battle._parse_types` and `state._STATUS_BITS` now come from it -- the status
+bits were the last hardcoded game data in the read path.
+
+### [feat] no primitive fails silently any more
+
+`Menus.last_reason`, `Battle.last_reason`, `Driver.last_menu_reason` /
+`last_step_reason` / `last_tm_reason`, each with distinct text naming what was
+being looked for (`tests/unit/test_failure_reasons.py` asserts the reasons are
+non-empty AND mutually distinct). `Menus._expect_state` +
+`select_label(..., expect=<predicate>)` fix the root cause of the pt11 item
+bug: with `expect`, a True return means the target screen is really up.
+`Driver._confirm_label` adapts that for duck-typed Menus fakes without losing
+the verification, and `_open_pack` now verifies through `Driver._pack_up`.
+
+`has_label`, `cursor_labels`, `select_row_text`'s cursor scan,
+`Battle._my_move_list_up` and `Battle._wait_move_menu` now read EVERY cursor
+glyph on a row, not the leftmost (gotcha 1: a submenu paints ▶ to the right of
+a list's own ▷). `save(force=True)` logs the blockers it overrides -- it
+already refused a dirty screen, contrary to §2.7.
+
+### [feat] teach_tm, and a learn default that keeps its damage
+
+`d.teach_tm('TM01', 'GATOR', forget='FURY CUTTER')` -> True, verified live:
+DYNAMICPUNCH replaced FURY CUTTER, the TM left `wTMsHMs`, the overworld came
+back clean. Refusals happen before any button press:
+`teach_tm('TM30', 'GATOR')` -> `cannot-learn: FERALIGATR cannot learn SHADOW
+BALL (TM30)` with the screen byte-identical afterwards.
+
+Two gotchas worth remembering:
+- TM/HM data comes from the `add_tm`/`add_hm` ORDER in
+  constants/item_constants.asm. Item ids cannot be used (a plain
+  `const ITEM_C3` sits between TM04 and TM05), and data/moves/tmhm_moves.asm
+  is an rgbds `for` loop with no literal list to parse.
+- The pocket ROW renders `01 DYNAMICPUNCH`, not `TM01`: the TM/HM prefix is
+  drawn in graphics tiles. `Driver.pocket_tag` converts, and the cursor glyph
+  sits BETWEEN tag and name (`H3▶SURF`), so the two halves are matched
+  separately. teach_hm and teach_tm share every step now, including
+  `_walk_forget_menu`.
+
+`Driver.default_learn_policy` decides level-up learns when `learn_policy` is
+None: ROM base power, `(power, name)` tie-breaks, never an HM move, never
+trading a damaging move for a status move while <=2 damaging moves remain
+(this is the Gyarados/HYDRO PUMP -> RAIN DANCE rule). Its decisions are stamped
+`source='default'` on `move_changes`.
+
+### [feat] goto escalates to the savestate search by itself
+
+`goto(..., escalate=True)` runs `explore_bfs` when the failure is
+grid-distrust (`GOTO_ESCALATE_ON`: no-path / unreachable / replan-storm /
+no-progress / pass-cap) and refuses to when it is a live actor, scene, menu or
+whiteout (`GOTO_NO_ESCALATE_ON`). Budget 60 moves / 40 nodes; `reach` is the
+same call at 200/140. Nothing had ever called `reach`.
+
+Live, on a fork of `wren-team-leveled` (INDIGO_PLATEAU_POKECENTER_1F):
+
+| check | result | frames |
+|---|---|---|
+| decoded grid made to lie (a wall column that is not there), `goto(8,11)` | **True** via search, 3 steps / 17 states, reason cleared | 3,889 |
+| `goto(3,8)` -- the retrospective's storm case | False: `replan-storm ...; search exhausted (40 nodes)` | 12,553 |
+| `goto(16,1)` | False: `unreachable ...; search exhausted (40 nodes)` | 10,862 |
+
+**Correction to the retrospective**: `(3,8)` is NOT wrong static data. The
+savestate search -- ground truth -- explored all 25 reachable states within 60
+moves and never reached it, so that cell really is a wall; the storm was the
+harness being asked for the impossible. `(16,1)` is in the map's top-right
+region, reachable only through the warp at `(14,3)`: a `travel`/`route` job.
+The escalation's value is that failure is now PROVEN instead of guessed, at
+about 1.5-3 s of wall clock.
+
+### [feat] money cannot move during navigation unnoticed
+
+`Driver._money_watch` wraps `goto`, `walk` and `pace` (outer entry points only,
+so a purchase during a nested dialog drain is reported once, with the map and
+cell) and logs `MONEY -1200 (now 11800) during goto (3, 4) at GOLDENROD_CITY
+(9, 12)`; the delta lands on `d.last_money_delta`. `travel` is deliberately not
+wrapped: every leg it walks goes through `goto`.
+
+**Correction to the retrospective**: "navigation must refuse to press A near a
+clerk" is not implementable as written. Clerk identity does not exist at
+runtime -- `object_event` coordinates are parsed by scripts/build_mapgraph.py
+and then discarded, and `wObjectStructs` carries no sprite id. Watching the
+wallet is the honest version.
+
+### Left open (deliberately)
+
+P3-11 multi-turn/sacrifice planning and P3-12 trainer-item awareness both need
+enemy-roster/trainer-attribute data `battle_frame()` does not carry -- separate
+work, not a step here. P4-13 (splitting `trek.py`, now ~6,000 lines) untouched.
+
+---
+
 ## session claude-wren pt11 - items fixed, BATTLE.md, second model-driven E4 (Aug 25 2026)
 
 Cleared the Elite Four again with **GATOR benched** and every action chosen by
