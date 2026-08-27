@@ -173,6 +173,23 @@ _SIDE_WALL_BLOCKED = {
 }
 
 
+# A side-wall tile also refuses to START A SLIDE: the wall is on one edge,
+# and leaving the tile across that edge is refused in the same way entering
+# it across that edge is. Live on ICE_PATH_1F (28,10) $b2 with ice at
+# (28,9) and a battle-free screen: floor (28,11) -> U onto the tile works,
+# then U off it onto the ice never moves -- four step primitives, while
+# wTilePermissions reads $04. But Union Cave 1F's corridors DO cross $b2
+# rows upward onto plain floor (trek.py's own note above, and
+# tests/unit/test_nav.py::test_treknav_side_wall_directionality), so the
+# refusal is specific to a slide start, not to leaving the tile. Without
+# this, goto plans the step, the engine refuses it, the cell is marked
+# live-blocked and the walk dies in a replan-storm (FUCK_I_MESSED_UP #56).
+_SIDE_WALL_NO_SLIDE = {
+    b: {{"U": "D", "D": "U", "L": "R", "R": "L"}[d] for d in dirs}
+    for b, dirs in _SIDE_WALL_BLOCKED.items()
+}
+
+
 def _tile_kind(b):
     """Terrain word for a collision byte (observe()'s tiles{}). Field
     obstacles ($24 whirlpool, $33 waterfall, $27/$c0-$c7 buoys) and the
@@ -231,7 +248,12 @@ class TrekNav(MapData):
             hgt, wid = len(grid), len(grid[0])
             here = grid[y][x]
             plain, exits = [], []
+            no_slide = _SIDE_WALL_NO_SLIDE.get(here, ())
             for d, (dx, dy) in STEP.items():
+                if d in no_slide:
+                    sy, sx = y + dy, x + dx
+                    if 0 <= sy < hgt and 0 <= sx < wid and grid[sy][sx] in ICE:
+                        continue     # a side wall will not start a slide
                 # standing on a ledge lip and moving in its hop direction
                 # jumps over the cliff tile, landing 2 cells away (the game
                 # checks the tile you stand ON: engine .TryJump)

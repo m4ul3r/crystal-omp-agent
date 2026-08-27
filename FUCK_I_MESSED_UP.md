@@ -840,3 +840,134 @@ publishing every frame, including the keyboard, which is never savestated.
 **Lesson:** a failing test you did not read is not "pre-existing noise", it
 is an unread bug report. Two lines of traceback would have bought a
 watchable run six sessions earlier.
+
+---
+
+# Part 9 — hideout cleared, badge 7, and the Ice Path (nav's worst map)
+
+## 55. I probed movement for six calls with a wild GOLBAT on screen **[mine]**
+
+Trying to work out why a step failed, I tapped directions and recorded
+"blocked" for all four — twice — and built a whole theory on it. A battle
+intro was eating the input the entire time; `observe()['ui']` had said
+`textbox: False` one call earlier, before the encounter started, and my
+tap helper never re-checked. The screen said `Wild GOLBAT appeared!`.
+
+**Rule:** a movement probe MUST refuse to run while `d.battle()` or
+`ui['textbox']`. My `rawtap` now returns `('BATTLE', ...)` instead of
+pressing, and every conclusion drawn from a page of fake "blocked"
+readings had to be thrown away.
+
+## 56. `_enterable` treated every ICE tile as a wall **[fixed]**
+
+`MapData._enterable` listed WALKABLE / WARPS / HOPS / (WATER when
+surfing) — and **not ICE** — while `slide()` right below it models ice
+perfectly and `find_path`'s `expand` handles it. Consequences:
+
+- `_reach` (so `map_view` and every `offregion:` line) could not enter ice
+  at all: ICE_PATH_1F reported **81 reachable cells and "582 walkable
+  cells NOT reachable"**, and Mahogany Gym rendered as four rows.
+- After adding ICE: the same cell reaches **254** cells and the B1F
+  stairs appear in the `warps:` line.
+
+## 57. A side wall will not start a slide **[fixed]**
+
+ICE_PATH_1F (28,10) is `$b2` COLL_UP_WALL with ice at (28,9). Stepping U
+onto it from the floor below works; stepping U *off* it onto the ice never
+moves — four primitives (`rawtap`, `step_hold`, `step_dir`, `press`), on a
+battle-free screen, `wTilePermissions` reading `$04`. `goto` plans that
+step, the engine refuses, the cell is marked live-blocked, and 20 replans
+later it bails with `replan-storm`.
+
+But Union Cave 1F's corridors **do** cross `$b2` rows upward onto plain
+floor (trek.py's own note, and a unit test that asserts it). So the
+refusal is specific to STARTING A SLIDE off a side-wall tile, not to
+leaving it. My first fix banned the direction outright and broke that
+test; the narrowed rule (`_SIDE_WALL_NO_SLIDE`, applied only when the
+destination is ICE) keeps both behaviours. 627 tests pass.
+
+## 58. `goto`'s executor mis-drives ice; its PLANNER is fine **[open]**
+
+On ICE_PATH_1F (15,2), `nav.find_path` returns a 36-step plan beginning
+`L`. `goto` reports `blocked R at (15, 2)` twenty times and bails. Same
+cell, same grid, opposite direction. I stopped debugging the executor and
+wrote a 12-line driver that follows `find_path` one step at a time,
+re-planning after each move — it crossed the entire maze in ONE call.
+
+**Recipe until this is fixed:** plan with `nav.find_path`, execute
+yourself, re-plan every step, and retry a stuck step once with a longer
+press (24 frames) before believing it.
+
+## 59. Immovable boulders are STOPPERS the grid does not model **[open]**
+
+ICE_PATH_B2F_MAHOGANY_SIDE is a solid ice rectangle: every slide dumps you
+back to B1F, and the (9,11) stairs sit in a floor pocket no slide can
+stop in. The four boulders on that floor ("It's immovably imbedded in
+ice") are the stoppers that make it solvable — and they are `object_event`s
+gated on `EVENT_BOULDER_IN_ICE_PATH_nA`, so they only exist once you have
+pushed the matching B1F boulder into its hole.
+
+`nav.grid()` knows none of it, and `observe()['npcs']` is a LOCAL view
+(sprites near the player), so a boulder two screens away is invisible to
+planning. Modelling one fallen boulder as a wall
+(`nav.set_cell(map, 4, 7, 0x07)`) turned "no path" into a 5-step path.
+
+## 60. STRENGTH switches off when you change maps **[mine]**
+
+I activated STRENGTH on ICE_PATH_B1F, went up to 1F, out to Route 44, came
+back — and the first push silently did nothing (`push b3 R did not move
+me`). Re-activating fixed it instantly. Activate it on the floor where you
+are pushing, every time you re-enter.
+
+Also: the push helper reports failure when the boulder falls into a hole,
+because the player does NOT step forward on that push. `The boulder fell
+through.` in the textbox is the success signal.
+
+## 61. The Ice Path solution, written down
+
+B1F boulders pair with holes by `stonetable` (macro: `warp id, object id`)
+— boulder N -> the Nth `def_warp_events` entry:
+
+| boulder | at | hole | B2F stopper appears at |
+|---|---|---|---|
+| 1 | (11,7) | (11,2) | (11,3) |
+| 2 | (7,8)  | (4,7)  | (4,7) |
+| 3 | (8,9)  | (5,12) | (3,12) |
+| 4 | (17,7) | (12,13)| (12,13) |
+
+Pushing **one** boulder is enough. The cheapest is boulder 2, and the
+sequence (all verified live) is:
+
+1. b3 blocks the corridor east: push it R once, then D three times ->
+   (9,12), which also opens the (9,10)-(9,11) link south.
+2. b2: push L twice -> (5,8); push U twice -> (5,6).
+3. b1 blocks the (11,7) link the long way round: push it U twice -> (11,5)
+   (row 3 then bypasses it).
+4. Walk the long way (south -> row 16 east -> east column -> row 13 ->
+   x12 column -> (11,6) -> row 5 -> row 3 -> row 1 -> the NW chamber) to
+   (6,6); push b2 L -> (4,6); stand (4,5) and push D -> it falls.
+5. Fall through B1F (5,12) yourself -> B2F (4,12); with the stopper at
+   (4,7) modelled, (9,10) is 5 steps; then (9,11) -> B3F.
+6. B3F (15,5) -> B2F_BLACKTHORN (3,15) -> B1F south (5,25) -> 1F (36,27)
+   -> **BLACKTHORN CITY**.
+
+## 62. Clair is gated on the RADIO TOWER, not on the Ice Path **[game]**
+
+The gym guard says "CLAIR entered the DRAGON'S DEN behind the GYM" —
+`maps/BlackthornCity.asm:38,66` check `EVENT_CLEARED_RADIO_TOWER`. So
+badge 8 needs Goldenrod's Radio Tower cleared first. Route 44's east end
+is walled (verified by walking: (57,10) has three blocked cells east), so
+the Ice Path really is the only road east — the `ROUTE_44 -> BLACKTHORN_CITY`
+edge in `attributes.asm` is a map band, not a path.
+
+## 63. Goldenrod's underground shutters are invisible to nav **[known]**
+
+`nav.grid`'s docstring already says macro-generated changeblocks with
+symbolic coords (exactly the Goldenrod underground doors) are not scanned.
+Live effect: the warehouse doors (22,10)/(23,10) sit in a 12-cell region
+that `offregion:` reports as "NOT reachable ... no warp and no changeblock
+found" from every other region on the map. The switches are `bg_event`s at
+(16,1), (10,1), (2,1) plus an emergency switch at (20,11), and the door
+layout comes from `wUndergroundSwitchPositions` (01:d963).
+**Flip a switch, then `sync_grid()`** — that is what the drift reader is
+for.

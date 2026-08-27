@@ -1,9 +1,103 @@
+## session claude pt9 - hideout cleared, GLACIER badge (7/8), Ice Path solved, Basement Key (Aug 26 2026)
+
+**7/8 badges.** PANIC is a TYPHLOSION **L53**. `saves/claude.state` ==
+`saves/claude-basement-key.state` (GOLDENROD_UNDERGROUND_SWITCH_ROOM_ENTRANCES
+(5,24)). New milestones: `claude-rocket-passwords`, `claude-hideout-cleared`,
+`claude-pryce-ready`, `claude-glacier-badge`, `claude-blackthorn`,
+`claude-basement-key`.
+
+### Done
+
+- **Rocket hideout cleared.** The B3F west wing that pt6 called unreachable
+  took two calls with the component graph: B3F comp2 --(27,2)--> B2F comp0
+  --(3,2)--> B3F comp0. Collected all three passwords (SLOWPOKETAIL,
+  RATICATE TAIL from the grunts, HAIL GIOVANNI from the Murkrow at (7,2)),
+  opened both locked doors, beat the boss-room guard and the B2F executive
+  pair alongside Lance, KO'd the three Electrodes -> **HM06 WHIRLPOOL** and
+  `EVENT_CLEARED_ROCKET_HIDEOUT`.
+- Both locked doors were opened with `grid_drift()`/`sync_grid()` doing
+  exactly their job: the changeblock fired, drift reported the two cells,
+  sync patched nav, and `goto` routed through the new doorway.
+- **PRYCE beaten -> GLACIERBADGE** (the fisher blocking Mahogany's gym door
+  vanishes the moment the hideout clears). Also got TM16 ICY WIND.
+- **ICE PATH solved end to end** (see `FUCK_I_MESSED_UP.md` #56-#61) --
+  HM07 WATERFALL picked up at 1F (31,7), one STRENGTH boulder pushed into
+  its hole to create the B2F stopper, and the 6-hop floor chain walked to
+  **BLACKTHORN CITY**.
+- Radio Tower 1F-5F climbed; **BASEMENT KEY** obtained on 5F. Bought 9
+  Hyper Potions in Blackthorn.
+
+### Harness fixes this leg
+
+- `MapData._enterable` now includes **ICE**. It was missing, so every ice
+  tile was a wall for `_reach`: Ice Path 1F reported 81 reachable cells and
+  "582 walkable cells NOT reachable" (real answer: 254 and the stairs are
+  in view). Mahogany Gym was rendering four rows.
+- `_SIDE_WALL_NO_SLIDE`: a side-wall tile refuses to START a slide across
+  its own wall edge. Verified live on ICE_PATH_1F (28,10) `$b2`. Narrow on
+  purpose -- Union Cave crosses `$b2` upward onto plain floor, which an
+  existing unit test asserts.
+- Tests: **627 passed, 0 failed.**
+
+### Next, in order
+
+1. **Goldenrod Underground shutters** (#63): the warehouse doors (22,10)/
+   (23,10) are sealed behind switch-operated shutters nav cannot see.
+   Switch `bg_event`s are (16,1), (10,1), (2,1) + emergency (20,11);
+   state byte `wUndergroundSwitchPositions` = 01:d963. Flip, then
+   `sync_grid()` and re-plan. Alternative route: GOLDENROD_DEPT_STORE_B1F
+   (17,2) also warps into the warehouse.
+2. **CARD KEY** at GOLDENROD_UNDERGROUND_WAREHOUSE (12,8) -> Radio Tower
+   3F locked door -> 5F -> clear the tower (`EVENT_CLEARED_RADIO_TOWER`).
+3. **CLAIR** returns to Blackthorn Gym only then (`maps/BlackthornCity.asm`
+   :38,66) -> badge 8 (RISING, via the Dragon's Den errand).
+4. Route 27 / Tohjo Falls -> Victory Road -> Elite Four.
+
+**Navigation recipe for ice/maze floors** (goto's executor mis-drives ice,
+#58): plan with `nav.find_path`, execute one step at a time, re-plan after
+every move, retry a stuck step once with a 24-frame press. That drove the
+whole Ice Path. And always model live obstacles as walls
+(`nav.set_cell(map, x, y, 0x07)`) -- `observe()['npcs']` only sees sprites
+near the player.
+
 ## session claude2 - OWNS fresh save -> starter -> Route 29 (Aug 26 2026)
 
 Claiming: boot a FRESH save as `saves/claude2.state` (+ `.meta`), drive
 power-on -> New Bark Town -> claim a starter from Elm's lab, then walk out
 toward Route 29. Working state: `saves/claude2.state`. Touches neither
 `saves/default.state` nor `saves/claude.state`.
+
+Progress: fresh boot landed (bedroom checkpoint `saves/claude2.state`),
+Mom Pokégear/DST chain answered, Elm errand accepted, **CYNDAQUIL L5
+claimed** (nickname declined). Milestone: `saves/claude2-starter.state`
+(ELMS_LAB, clean overworld, lead 19/19).
+
+New gotcha (2x reproduced): pressing A on a lab ball opens the POKEPIC
+viewer; screen_text decodes the Cyndaquil front pic as a 7x7 letter box
+("AHOV:dk" — NOT a keyboard), and hook-injected `d.press` keys do NOT
+register in this state (waitbutton never sees them) -> looks like a hard
+wedge. Escape/carry-on via RAW PyBoy input (`d.emu.py.button_press('a')`,
+tick, release); then dialog flows normally. Matches deepseek's note in
+`backup/DEEPSEEK_PROGRESS.md`.
+
+**OBJECTIVE COMPLETE (20:54): standing on ROUTE_29 (59,8), lead CYNDAQUIL
+L5 19/19, 1x POTION in bag, no balls yet (aide gives them later per
+script). Milestone: `saves/claude2-route29.state`. Next session owns
+Route 29 -> Violet City.**
+
+Session gotchas beyond the pokepic one above:
+- Mom's Pokégear intro is a 4-prompt chain: "SUNDAY, is it?" YES ->
+"Is it Daylight Saving Time now?" YES -> "N AM DST, is that OK?" YES ->
+"Come home to adjust your clock for DST" NO. `d.resolve_choice` silently
+fails on these ("no choice cursor settled") — answer with raw presses.
+- Elm's MustSayYes favor prompt opens while older paragraph text is still
+the last visible page ("that I recently caught."); don't keyword-match
+the question text, just answer YES on any choice during his intro.
+- `step_dir` keys are U/D/L/R only (W/N KeyError).
+- Lab exit: nav blocks rows y>=8 ('!' live-blocked aide cells); walk down
+through (4/5,8) manually, drain the aide POTION scene at y=8, then door
+warp (4,11)/(5,11) fires normally from below.
+
 
 ## session claude pt8 - the live feed was dead; landed it, suite green (Aug 26 2026)
 

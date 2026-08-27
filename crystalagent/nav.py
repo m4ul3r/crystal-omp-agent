@@ -243,11 +243,15 @@ class MapData:
     surf = False   # set True (Driver.enable_surf) to route across WATER
 
     def _enterable(self, const_name, x, y):
+        """Can a step land here? ICE counts: stepping onto it starts a
+        deterministic slide (see slide()), and leaving it out sealed every
+        ice map -- Ice Path's 1F read as an 81-cell dead end with "582
+        walkable cells NOT reachable", and Mahogany Gym as four rows."""
         grid = self.grid(const_name)
         if not (0 <= y < len(grid) and 0 <= x < len(grid[0])):
             return False
         c = grid[y][x]
-        return c in WALKABLE or c in WARPS or c in HOPS or \
+        return c in WALKABLE or c in WARPS or c in HOPS or c in ICE or \
             (self.surf and c in WATER)
 
     def slide(self, const_name, x, y, d):
