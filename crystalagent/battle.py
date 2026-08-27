@@ -154,21 +154,26 @@ def cheapest_heal(table, bag, allow, need_hp, status, fainted):
 
 def bag_item_index(emu, names, item_name, pocket="items"):
     """0-based position of an item inside a pack pocket's WRAM list.
-    Entries are (id, quantity) pairs."""
+    Entries are (id, quantity) pairs -- except the KEY ITEM pocket
+    (`wKeyItems`, ram/wram.asm:3115), which is a flat id array with no
+    quantities. Key items were unreachable before this, so nothing could
+    use a SQUIRTBOTTLE / SECRETPOTION / CARD KEY through the API."""
     if pocket == "balls":
-        count_sym, list_sym = "wNumBalls", "wBalls"
+        count_sym, list_sym, stride = "wNumBalls", "wBalls", 2
+    elif pocket in ("key", "keyitems", "key_items"):
+        count_sym, list_sym, stride = "wNumKeyItems", "wKeyItems", 1
     else:
-        count_sym, list_sym = "wNumItems", "wItems"
-    count = min(emu.read_u8(count_sym), 20)
+        count_sym, list_sym, stride = "wNumItems", "wItems", 2
+    count = min(emu.read_u8(count_sym), 26)
     want = norm_item(item_name)
     got = next((i for i, n in names.items.items()
                 if norm_item(n) == want), None)
     if got is None or count == 0:
         return None
     bank, addr = emu.sym[list_sym]
-    raw = emu.read((bank, addr), count * 2)
+    raw = emu.read((bank, addr), count * stride)
     for i in range(count):
-        if raw[i * 2] == got:
+        if raw[i * stride] == got:
             return i
     return None
 
@@ -1302,10 +1307,19 @@ class Battle:
                     # always progresses instead of flailing in the pack
                     # (which can even toss items) until the frame cap.
                     act = "attack"
+                ball_act = (isinstance(act, tuple) and act
+                            and act[0] == "ball")
                 if stall_act is not None and act == stall_act and \
-                        stalls >= self.STALL_SUBSTITUTE:
+                        stalls >= self.STALL_SUBSTITUTE and not ball_act:
                     # (c) this exact action has changed nothing twice: it
                     # will change nothing again. Try a different one.
+                    #
+                    # EXCEPT a ball: a failed capture changes no vitals by
+                    # design, so the stall detector fires on every miss and
+                    # used to substitute an ATTACK -- which KOs the mon the
+                    # caller was trying to catch (FUCK_I_MESSED_UP.md #18).
+                    # Throwing again is exactly the right move; the ball
+                    # count is the caller's own budget.
                     alt = self._stall_alternative(act, me, stalls)
                     log.warning("[battle] %r changed nothing for %d turns: "
                                 "substituting %r", act, stalls, alt)

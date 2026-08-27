@@ -332,7 +332,9 @@ _GLYPH_LEGEND = [
     ("!", "sealed or live-blocked cell"),
     ("N", "NPC"),
     ("#", "solid wall"),
-    (" ", "unreachable from here"),
+    (",", "walkable, NOT reachable from here (needs another entrance)"),
+    ("o", "warp in a region you cannot reach from here"),
+    (" ", "wall / off-map"),
 ]
 
 
@@ -383,9 +385,17 @@ def _reach(nav, map_name, start, surf):
 
 
 def render_map_view(nav, map_name, pos, npcs=(), surf=False):
-    """ASCII view of the region reachable on foot/surf from `pos`, cropped
-    to its bounding box (+1). Global coordinates in the rulers so the
-    deciding LLM can quote them straight back to goto()/talk_to()."""
+    """ASCII view centred on the region reachable on foot/surf from `pos`,
+    cropped to its bounding box (+1). Global coordinates in the rulers so
+    the deciding LLM can quote them straight back to goto()/talk_to().
+
+    Cells inside the window that are WALKABLE but belong to another
+    connected component draw as `,` (and `o` for their warps) instead of
+    blank: a blank used to be indistinguishable from wall, so a whole
+    wing of a map -- Rocket base B3F's west half, reachable only from
+    B2F's left ladders -- rendered as void and read as "nothing there".
+    Components with no cell in the window are named by the `offregion:`
+    annotation line instead."""
     grid = nav.grid(map_name)
     hgt, wid = len(grid), len(grid[0])
     reach = _reach(nav, map_name, pos, surf)
@@ -395,6 +405,8 @@ def render_map_view(nav, map_name, pos, npcs=(), surf=False):
     ys = [y for _, y in reach | {tuple(pos)}]
     ox, oy = max(min(xs) - 1, 0), max(min(ys) - 1, 0)
     ex, ey = min(max(xs) + 1, wid - 1), min(max(ys) + 1, hgt - 1)
+    ids, _ = nav.region_map(map_name)
+    mine = set(nav.regions_at(map_name, *pos))
     lines = [f"map={map_name} origin=({ox},{oy}) "
              f"pos=({pos[0]},{pos[1]})"]
     # two-row ruler: tens only where they change, units everywhere
@@ -416,7 +428,7 @@ def render_map_view(nav, map_name, pos, npcs=(), surf=False):
             elif (x, y) in reach:
                 row.append(_cell_glyph(grid[y][x]))
             else:
-                row.append(" ")
+                row.append(_offregion_glyph(nav, map_name, ids, mine, x, y))
         lines.append(f"{y:4d} " + "".join(row))
     used = {ch for line in lines[3:] for ch in line.split(" ", 1)[-1]}
     legend = [f"  {g} {desc}" for g, desc in _GLYPH_LEGEND
@@ -425,6 +437,34 @@ def render_map_view(nav, map_name, pos, npcs=(), surf=False):
         lines.append("legend:")
         lines += legend
     return "\n".join(lines)
+
+
+def _offregion_glyph(nav, map_name, ids, mine, x, y):
+    """Glyph for a cell outside `_reach`: `o` for a warp that opens onto a
+    component the player cannot reach, `,` for that component's walkable
+    floor, blank otherwise.
+
+    Only OTHER components are revealed. A cell in the player's own
+    component that simply is not walk-reachable (water without SURF, a CUT
+    tree) keeps the old blank: it is already named by the annotation block
+    when it matters, and drawing it would claim reachability the view
+    cannot promise. What was genuinely missing is architecture the player
+    can never touch from here -- Rocket base B3F's western wing rendered
+    as void, and a session read that as "nothing there"."""
+    coll = nav.grid(map_name)[y][x]
+    here = ids[y][x]
+    if here >= 0:
+        return "o" if (coll in WARPS and here not in mine) else \
+            ("," if here not in mine else " ")
+    # warp-EVENT tiles belong to no component (stepping on one fires it):
+    # name them by what they open onto, so a ladder into an unreachable
+    # wing shows as `o`. regions_at() answers for ANY cell, so this must
+    # be gated on the cell really being a warp -- otherwise every wall
+    # beside the wing would draw as a door.
+    if coll not in WARPS and (x, y) not in nav.warps.get(map_name, {}):
+        return " "
+    touches = set(nav.regions_at(map_name, x, y))
+    return "o" if touches and not (touches & mine) else " "
 
 
 _coord_event_cache = None
@@ -784,11 +824,16 @@ def _load_heal_table(rom_path, sym, names):
 
 
 class Driver:
-    def __init__(self, state_path=None):
+    def __init__(self, state_path=None, fresh=False):
+        """fresh=True: power-on reset (no savestate loaded); `state_path` is
+        then only the file a later save() writes to. Documented in AGENTS.md's
+        capabilities map (`Driver(state, fresh=True)`) and used by
+        scripts/newgame_bedroom.py."""
         self.state_path = Path(state_path or paths.DEFAULT_STATE)
         sym = Symbols(paths.SYM)
         cm = Charmap(paths.CHARMAP)
-        self.emu = Crystal(paths.ROM, sym, cm, self.state_path)
+        self.emu = Crystal(paths.ROM, sym, cm,
+                           None if fresh else self.state_path)
         # savestates can carry phantom held keys; force-release everything
         for b in ("up", "down", "left", "right", "a", "b", "start", "select"):
             self.emu.py.button_release(b)
@@ -1071,6 +1116,65 @@ class Driver:
                         "edge": edges.get(d, "?")})
         return out
 
+    def live_grid(self):
+        """Collision grid decoded from the LIVE block map in WRAM -- the map
+        the ENGINE is walking right now -- in nav.grid()'s shape.
+
+        `wOverworldMapBlocks` holds the loaded map with a 3-block border on
+        every side (stride = wMapWidth + 6, map block (bx,by) at
+        (by+3)*stride + bx+3; the +1/+1 in GetMapScreenCoords is the screen
+        anchor, not the map origin). Block ids go through the same tileset
+        collision table nav uses, so any difference from nav.grid() is a
+        real disagreement, not a decode artefact."""
+        const = self._map_const()
+        camel = self.nav.camel[const]
+        w = self.emu.read_u8("wMapWidth")
+        h = self.emu.read_u8("wMapHeight")
+        stride = w + 6
+        raw = self.emu.read("wOverworldMapBlocks", stride * (h + 6) + 8)
+        table = self.nav._tileset_coll(self.nav.tileset[camel])
+        grid = [[0x07] * (2 * w) for _ in range(2 * h)]
+        for by in range(h):
+            for bx in range(w):
+                for i, c in enumerate(table[raw[(by + 3) * stride + bx + 3]]):
+                    grid[by * 2 + i // 2][bx * 2 + i % 2] = c
+        return grid
+
+    def grid_drift(self):
+        """Cells where the static decode disagrees with the live engine map:
+        [(x, y, static_byte, live_byte), ...]. Empty is the normal answer.
+
+        nav.grid() decodes maps/<Name>.blk, which is the map BEFORE any
+        `changeblock` the map script fires (Burned Tower's basement ladder,
+        Rocket base B3F's door to Giovanni, Goldenrod's underground doors).
+        Those cells -- and only those -- can drift; conditional()/
+        cell_kind()=='conditional' names them ahead of time. Audited across
+        53 savestates of this run: 0 drift everywhere the events matched
+        the default blockdata."""
+        live, static = self.live_grid(), self.nav.grid(self._map_const())
+        return [(x, y, static[y][x], live[y][x])
+                for y in range(min(len(live), len(static)))
+                for x in range(min(len(live[0]), len(static[0])))
+                if live[y][x] != static[y][x]]
+
+    def sync_grid(self):
+        """Push every drifted cell into nav as a live override, so pathing
+        uses the map the engine actually has. Returns the patched cells.
+
+        Call it after any script that can open a door or drop a boulder --
+        or just after arriving somewhere `conditional()` flags. Cheap
+        (one WRAM read + a region-cache invalidation per cell) and
+        idempotent; nav.clear_overrides() undoes it."""
+        const = self._map_const()
+        drift = self.grid_drift()
+        for x, y, _static, live in drift:
+            self.nav.set_cell(const, x, y, live)
+        if drift:
+            log.info(f"[sync_grid] {len(drift)} live cell(s) patched on "
+                     f"{const}: " + " ".join(f"({x},{y})={l:#04x}"
+                                             for x, y, _s, l in drift[:8]))
+        return drift
+
     def _map_annotations(self, const, art, npcs=()):
         """The block printed under map_view's grid: every warp, NPC and
         water span the ART shows, by absolute coordinate.
@@ -1107,6 +1211,8 @@ class Driver:
                 lines.append(f"edge:  {e['dir']} {e['edge']} -> {e['to']}")
         if npcs:
             lines.append("npcs:  " + " ".join(f"({x},{y})" for x, y in npcs))
+        for line in self._offregion_lines(const):
+            lines.append(line)
         for word in ("water", "grass"):
             cells = [c for c in self.find_tiles(word, const) if c in window]
             if cells:
@@ -1114,9 +1220,71 @@ class Driver:
                 ys = [c[1] for c in cells]
                 lines.append(f"{word}: rows {min(ys)}-{max(ys)}, "
                              f"x {min(xs)}-{max(xs)} ({len(cells)} cells)")
+        try:
+            drift = self.grid_drift() if const == self._map_const() else []
+        except Exception as err:      # no live block map (other map, fake emu)
+            log.debug(f"map_view: live grid unreadable ({err})")
+            drift = []
+        if drift:
+            lines.append("DRIFT: the live engine map disagrees with the "
+                         "decoded grid at " + "  ".join(
+                             f"({x},{y}) {s:#04x}->{l:#04x}"
+                             for x, y, s, l in drift[:6])
+                         + (f"  (+{len(drift) - 6} more)"
+                            if len(drift) > 6 else "")
+                         + " -- a changeblock fired; call sync_grid()")
         lines.append("decide from find_tiles()/exits()/tiles_in(); "
                      "the grid above is for humans")
         return "\n".join(lines)
+
+    def _offregion_lines(self, const):
+        """One line per connected component the player cannot reach on this
+        map, with its bounding box and the warp cells that open onto it.
+
+        This is the fact that map_view's blanks used to swallow: Rocket
+        base B3F's whole western wing (the rival and boss coord_events)
+        hangs off two ladders that only B2F's left block can reach, and
+        the render showed void. Sizes are cell counts, not blocks."""
+        ids, count = self.nav.region_map(const)
+        if count < 2:
+            return []
+        mine = set(self.nav.regions_at(const, *self.pos()[2:]))
+        cells = {}
+        for y, row in enumerate(ids):
+            for x, rid in enumerate(row):
+                if rid >= 0 and rid not in mine:
+                    cells.setdefault(rid, []).append((x, y))
+        if not cells:
+            return []
+        dest = {(e["x"], e["y"]): e["to"] for e in self.exits(const)
+                if e["kind"] == "warp"}
+        out = []
+        for rid, pts in sorted(cells.items(),
+                               key=lambda kv: -len(kv[1]))[:4]:
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            doors = [f"({x},{y})->{dest[(x, y)]}"
+                     for (x, y) in sorted(dest)
+                     if rid in self.nav.regions_at(const, x, y)]
+            if not doors:
+                # no warp touches it: the wall itself opens, via a
+                # changeblock the map script fires on an event
+                doors = [f"changeblock at {c}"
+                         for c in sorted(self.nav.conditional(const))
+                         if any(abs(c[0] - x) + abs(c[1] - y) <= 1
+                                for x, y in pts)][:3]
+            if not doors:
+                if len(pts) < 8:
+                    continue    # a decorative 2-cell island, not a wing
+                doors = ["no warp and no changeblock found"]
+            extra = len(doors) - 4      # a warp-pad maze (Ecruteak Gym has
+            doors = doors[:4]           # 26 pads into one region) is noise
+            out.append(
+                f"offregion: {len(pts)} walkable cells at x {min(xs)}-"
+                f"{max(xs)}, y {min(ys)}-{max(ys)} -- NOT reachable from "
+                f"here; enter via " + "  ".join(doors)
+                + (f"  (+{extra} more)" if extra > 0 else ""))
+        return out
 
     @staticmethod
     def _view_origin(art):
@@ -1426,6 +1594,12 @@ class Driver:
                 "max_hp": m["max_hp"],
                 "status": "+".join(m["status"]) or None,
                 "moves": moves,
+                # An egg reads 0 HP with a live-looking mon struct, so
+                # anything that treats hp<=0 as "fainted" must be able to
+                # see this. train()'s heal rail could not: with the Togepi
+                # egg in the party it healed 30+ times in a row and never
+                # fought (FUCK_I_MESSED_UP.md #20).
+                "egg": bool(m.get("egg")),
             })
         flags = {}
         for const in ("GOT_MYSTERY_EGG_FROM_MR_POKEMON",
@@ -2272,6 +2446,42 @@ class Driver:
         return (e.read_u8("wNamingScreenType"),
                 e.read_u8("wNamingScreenDestinationPointer"))
 
+    def _naming_screen_plausible(self):
+        """True when the naming-screen WRAM union holds values a real
+        NamingScreen call could have written. Those bytes ($c6d0-$c6d8)
+        are UNIONED with other screen buffers, so a cutscene scribbling
+        tilemap data through them moves _naming_sig() and used to be read
+        as 'a keyboard opened' -- 30+ wasted B/START/A presses per scene,
+        which is how a blind A press walked into the START menu and
+        browsed the Pokedex mid-cutscene.
+
+        wNamingScreenType is masked with NUM_NAMING_SCREEN_TYPES
+        (constants/menu_constants.asm:129 -> 8 types) and the longest name
+        the game ever asks for is 10 (a mon nickname), so anything outside
+        those ranges is somebody else's data."""
+        e = self.emu
+        return (e.read_u8("wNamingScreenType") < 8
+                and 1 <= e.read_u8("wNamingScreenMaxNameLength") <= 10
+                and e.read_u8("wNamingScreenCurNameLength") <= 10)
+
+    def _naming_opened(self, sig0):
+        """Is a naming keyboard REALLY up? A WRAM signature delta alone is
+        a guess (the bytes are unioned); a rendered DEL/END row is proof.
+        On a delta we therefore wait briefly for the render and, if it
+        never arrives, report False -- confirming a keyboard that is not
+        there types START+A into the overworld, which opened the START
+        menu and walked into the Pokedex twice this session. A real
+        keyboard is patient: waiting costs nothing."""
+        if self.keyboard_open():
+            return True
+        if self._naming_sig() == sig0 or not self._naming_screen_plausible():
+            return False
+        for _ in range(8):                       # ~80 frames of grace
+            self.emu.tick(10)
+            if self.keyboard_open():
+                return True
+        return False
+
     @staticmethod
     def _text_speed_byte(opts, mode):
         """wOptions low TEXT_DELAY_MASK bits select render delay
@@ -2304,6 +2514,18 @@ class Driver:
                 "keyboard_open() after hatches/catches first")
         self.dismiss_keyboard(name)
 
+    def _take_pending_nickname(self):
+        """Resolve the naming screen that just opened, consuming
+        `_pending_nickname` if one is armed (gift mons: the starter,
+        Togepi, Eevee, the Odd Egg's hatch). One-shot: the name never
+        leaks into the next prompt."""
+        name = self._pending_nickname
+        if callable(name) or isinstance(name, dict):
+            name = None       # species-keyed forms need a species; gifts
+        self._pending_nickname = None
+        self.dismiss_keyboard(name)
+        return name
+
     def dismiss_keyboard(self, name=None):
         """Confirm a naming screen. With a name, actually type it; without,
         confirm with the minimal name (fast path). Runs with the naming
@@ -2331,6 +2553,18 @@ class Driver:
         renders names in caps anyway). Runs with the freeze lifted."""
         was = getattr(self, "_naming_busy", False)
         self._naming_busy = True
+        # The naming window SLIDES IN: the letter grid is on screen for
+        # ~40 frames before DEL/END are drawn and the joypad loop reads
+        # input. Typing into that animation silently drops every press --
+        # a Cyndaquil got handed over as "CYNDAQUIL" that way. Wait for a
+        # fully drawn keyboard first (gotcha 2, the naming-screen case).
+        for _ in range(40):
+            if self.keyboard_open():
+                break
+            self.emu.tick(10)
+        else:
+            log.warning("  type_name: keyboard never finished drawing "
+                        "(no DEL/END row) -- typing anyway")
         global NAME_GRIDS
         if NAME_GRIDS is None:
             NAME_GRIDS = _parse_name_grid(paths.REPO_ROOT)
@@ -2388,10 +2622,16 @@ class Driver:
         while self.emu.frame - f0 < max_frames:
             if self.battle():
                 return "battle"
-            if self._naming_sig() != sig0 or self.keyboard_open():
-                self.dismiss_keyboard()
+            if self._naming_opened(sig0):
+                # A GIFT mon (starter, Togepi, Eevee...) also opens the
+                # naming keyboard, and this path used to always confirm
+                # empty -- the persona's PANIC came out of Elm's lab
+                # called CYNDAQUIL twice. Honour _pending_nickname here
+                # too, exactly like fight()/catch() do.
+                self._take_pending_nickname()
                 quiet = 0
                 continue
+            sig0 = self._naming_sig()   # re-baseline: no keyboard came up
             events = self.hooks.drain()
             kinds = [k for k, _ in events]
             if hookevents._STOP_EVENTS & set(kinds):
@@ -2437,9 +2677,11 @@ class Driver:
                     self.hooks.has("page_wait"):
                 return self._flush_dialog_hooks(max_frames, quiet_frames)
             rows = self.emu.screen_text()
-            if self._naming_sig() != sig0 or self.keyboard_open():
-                self.dismiss_keyboard()
+            if self._naming_opened(sig0):
+                self._take_pending_nickname()
                 quiet = 0
+            elif self._naming_sig() != sig0:
+                sig0 = self._naming_sig()   # false alarm; re-baseline
             elif self.textbox() and dialog_press_safe(rows):
                 self.press("A:2 .:8")
                 quiet = 0
@@ -2727,13 +2969,19 @@ class Driver:
             pass
         kind = act[0] if isinstance(act, tuple) and act else act
         arg = act[1] if isinstance(act, tuple) and len(act) > 1 else None
-        if kind == "attack" and not isinstance(arg, int):
+        if kind == "attack":
+            # ALWAYS re-resolve the slot through best_move(): Battle's own
+            # heuristic sometimes hands back slot 0, and slot 0 is a status
+            # move for most parties (TACKLE-over-EMBER cost a Scyther
+            # fight; GROWL/LEER cost two whiteouts -- #21/#24).
             try:
                 slot = b.best_move()
             except Exception:
                 slot = None
             if slot is not None:
                 act = ("attack", slot)
+            elif not isinstance(arg, int):
+                act = ("attack", 0)
         if state["autos"] == 0:
             label = self._action_label(act, me)
             if steered:
@@ -2782,8 +3030,18 @@ class Driver:
                      else None)
             act = None
             if policy is not None:
-                act = (policy(frame) if style == "frame"
-                       else policy(rows, me, enemy))
+                try:
+                    act = (policy(frame) if style == "frame"
+                           else policy(rows, me, enemy))
+                except Exception as err:
+                    # A raising policy used to be indistinguishable from a
+                    # policy that declined, and the fallback then played
+                    # slot 0 -- silent status-move spam for whole battles
+                    # (FUCK_I_MESSED_UP.md #21). Say it out loud.
+                    log.error(f"  [fight] policy RAISED "
+                              f"{type(err).__name__}: {err} -- falling back "
+                              f"to the harness pick for this turn")
+                    act = None
             source = "policy"
             if act is None:
                 if must_decide:
@@ -3674,14 +3932,48 @@ class Driver:
             sick = any(m.get("status") == "PSN" or m["hp"] <= 0
                        for _, m in members)
             if sick or lead["hp"] / max(lead["max_hp"], 1) < 0.35:
+                # The rail is only worth walking if healing can actually
+                # change the party. An already-full party that still looks
+                # "sick" means something the nurse cannot fix (an egg read
+                # as fainted, a permanent status): bail loudly instead of
+                # round-tripping to the Pokécenter forever -- that loop ate
+                # 30+ trips and zero battles (FUCK_I_MESSED_UP.md #20).
+                if all(m["hp"] >= m["max_hp"] and not m.get("status")
+                       for _, m in members):
+                    raise RuntimeError(
+                        "train: heal rail asked for while every non-egg "
+                        "member is already full -- refusing to loop; check "
+                        "for an egg or an unhealable status in the party")
                 log.info(f"  train: healing rail ({lead['species']} "
                       f"{lead['hp']}/{lead['max_hp']})")
                 self._train_heal()
                 continue               # relocate grass from wherever we land
+            # A mon with no damaging move cannot land a KO, so it earns no
+            # exp no matter how many encounters it sees: rotating it in
+            # burned 60 battles for zero levels. Keep it out of the
+            # rotation and say so.
+            ids = {n: i for i, n in self.names.moves.items()}
+
+            def _can_damage(m):
+                for mv in m["moves"]:
+                    row = self.bdata.moves.get(ids.get(mv["name"], -1)) or {}
+                    if row.get("power"):
+                        return True
+                return False
+            blocked = [m["nick"] for _, m in members
+                       if m["hp"] > 0 and m["level"] < _goal(m)
+                       and not _can_damage(m)]
             elig = sorted((i for i, m in members
-                           if m["hp"] > 0 and m["level"] < _goal(m)),
+                           if m["hp"] > 0 and m["level"] < _goal(m)
+                           and _can_damage(m)),
                           key=lambda i: _goal(party[i]) - party[i]["level"],
                           reverse=True)   # biggest gap rotates in first
+            if not elig and blocked:
+                raise RuntimeError(
+                    "train: the only under-levelled members have no "
+                    f"damaging move ({', '.join(blocked)}) -- they cannot "
+                    "KO anything and will never gain exp; teach a damaging "
+                    "move or raise them another way")
             if not elig:
                 # everyone still under target is FAINTED: the rail above
                 # only fires on lead-HP/poison, so revive explicitly
@@ -4636,14 +4928,28 @@ class Driver:
             target_slot = 0
         e = self.emu
         self.last_item_reason = None
+        # Which pocket holds it? Key items live in their own flat list and
+        # used to be invisible here ('not-in-bag' for a SQUIRTBOTTLE that
+        # observe() could see -- FUCK_I_MESSED_UP.md #23).
+        pocket = "items"
         idx = bag_item_index(e, self.names, item_name, "items")
+        if idx is None:
+            idx, pocket = bag_item_index(e, self.names, item_name, "key"), "key"
+        if idx is None:
+            idx, pocket = (bag_item_index(e, self.names, item_name, "balls"),
+                           "balls")
         if idx is None:
             return self._item_fail("not-in-bag", f"no {item_name} in bag",
                                    exit_ui=False)
         if not self._open_pack():
             return self._item_fail(
                 "no-pack", f"could not open the pack for {item_name}")
-        before = bag_quantity(e, self.names, item_name)
+        if pocket != "items" and not goto_pocket(self.menu, pocket):
+            return self._item_fail(
+                "pocket-miss", f"could not reach the {pocket} pocket for "
+                f"{item_name}")
+        before = (bag_quantity(e, self.names, item_name)
+                  if pocket != "key" else 1)
         if not self._pocket_select(idx, item_name):
             return self._item_fail(
                 "pocket-miss",

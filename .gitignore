@@ -10,3 +10,5 @@ backup/
 *.watch.state
 *.watch.state.meta
 *.swp
+live/
+.omp/

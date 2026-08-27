@@ -104,6 +104,7 @@ class PartyMonObs(_Strict):
     max_hp: int
     status: Optional[str] = None
     moves: list[PartyMoveObs]
+    egg: bool = False
 
 
 class UIState(_Strict):

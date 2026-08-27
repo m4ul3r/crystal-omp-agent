@@ -12,6 +12,8 @@ So `find_tiles`/`exits`/`tile_at`/`tiles_in` answer by coordinate, and
 `map_view` carries an annotation block built from those same calls, so the
 picture and the data cannot disagree.
 """
+import re
+
 import pytest
 
 import trek
@@ -67,6 +69,14 @@ class FakeNav:
         return (c in WALKABLE or c in WARPS or c in HOPS
                 or (self.surf and c in WATER))
 
+    # the component/changeblock surface map_view now reads: borrow the REAL
+    # algorithms so the fake cannot drift from MapData's behaviour
+    region_map = MapData.region_map
+    regions_at = MapData.regions_at
+
+    def conditional(self, name):
+        return {}
+
     def _warp_landing(self, *a, **k):
         return None
 
@@ -77,6 +87,7 @@ def fake_driver(grid, warps=(), conns=(), pos=(2, 2), npcs=()):
     d.nav = FakeNav(grid, warps, conns)
     d.names = None
     d.map_name = lambda: "TEST_MAP"
+    d._map_const = lambda: "TEST_MAP"
     d.pos = lambda: (0, 0, pos[0], pos[1])
     d.npc_cells = lambda: set(npcs)
     return d
@@ -235,3 +246,58 @@ def test_map_view_names_edge_connections_and_water():
     assert "water:" not in art
     d.nav.surf = True
     assert "water: rows 3-3, x 2-3 (2 cells)" in d.map_view()
+
+
+def _grid_rows(art):
+    """Just the cell rows of a map_view, gutter removed: the header and two
+    ruler rows come first, legend/annotations after. The gutter is the
+    fixed `f"{y:4d} "` width the renderer writes."""
+    return [l[5:] for l in art.splitlines()[3:]
+            if re.match(r"^\s{0,3}\d+ ", l)]
+
+
+def test_map_view_shows_a_wing_it_cannot_reach_and_names_its_entrance():
+    """The regression that cost a session: Rocket base B3F's western half
+    is walkable, holds the rival/boss triggers, and hangs off two ladders
+    only another floor can reach. The render drew it as blank -- identical
+    to wall -- so the map read as "nothing there". Walkable cells of an
+    unreachable component must draw as `,`, their warps as `o`, and the
+    annotation must say how to get in.
+
+    The wing is walled off INSIDE the reachable bounding box, which is the
+    case the glyphs answer; a wing outside the crop is answered by the
+    `offregion:` line alone."""
+    F, W, O = FLOOR, WALL, WARP
+    grid = [[F, F, F, F, F, F, F],
+            [F, W, W, W, W, W, F],
+            [F, W, O, F, F, W, F],
+            [F, W, F, F, F, W, F],
+            [F, W, F, F, F, W, F],
+            [F, W, W, W, W, W, F],
+            [F, F, F, F, F, F, F]]
+    d = fake_driver(grid, warps={(2, 2): ("OTHER_FLOOR", 1)}, pos=(0, 0))
+    art = d.map_view()
+    rows = _grid_rows(art)
+    assert any("," in r for r in rows), "unreachable floor drew as void"
+    assert any("o" in r for r in rows), "its entrance drew as void"
+    line = next(l for l in art.splitlines() if l.startswith("offregion:"))
+    assert "(2,2)->OTHER_FLOOR" in line
+    assert "NOT reachable from here" in line
+    assert "8 walkable cells at x 2-4, y 2-4" in line
+    # the reachable ring is untouched: still plain floor glyphs
+    assert rows[0].startswith("@......")
+
+
+def test_map_view_keeps_quiet_about_decorative_islands():
+    """A one-cell pocket with no way in is noise, not architecture: it
+    draws, so the map is never a lie, but it earns no annotation line."""
+    F, W = FLOOR, WALL
+    grid = [[F, F, F, F, F],
+            [F, W, W, W, F],
+            [F, W, F, W, F],
+            [F, W, W, W, F],
+            [F, F, F, F, F]]
+    d = fake_driver(grid, pos=(0, 0))
+    art = d.map_view()
+    assert "offregion:" not in art
+    assert any("," in r for r in _grid_rows(art))
