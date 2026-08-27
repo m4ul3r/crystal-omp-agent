@@ -1,3 +1,79 @@
+## session claude pt10 - Radio Tower cleared, CLAIR BEATEN; badge 8 pending the Dragon Shrine (Aug 26 2026)
+
+Still **7/8 badges** on the counter, but **Clair is beaten** -- the RISING
+BADGE is handed over at the DRAGON SHRINE, which I could not enter (see
+below). PANIC is a TYPHLOSION **L57** with CUT / FLAME WHEEL / SWIFT /
+DYNAMICPUNCH. `saves/claude.state` == `saves/claude-clair-beaten.state`
+(DRAGONS_DEN_B1F (19,22)). New milestones: `claude-warehouse`,
+`claude-card-key`, `claude-radio-tower`, `claude-clair-beaten`,
+`claude-whirlpool`.
+
+### Blockers solved this leg
+
+1. **BASEMENT KEY door** (#64): it is *used on* GOLDENROD_UNDERGROUND
+   (18,6) -- stand at the door, press A. `grid_drift()` had already named
+   the cell (static `0x71` door vs live `0x07` wall).
+2. **Goldenrod switch-room shutters** (#65): read the door table out of
+   the ROM source and **simulated all 7 switch positions offline** with
+   `nav.set_cell` before touching a switch. Switches ADD 1/2/3 (a sum, not
+   a bitmask) and door states PERSIST, so no single position works but
+   **position 5 then position 6** does. Simulation predicted 40 steps; the
+   walk then worked first try.
+3. **CARD KEY** from the rescued Director in the warehouse, then the 3F
+   card-key slot (the shutter opened and `sync_grid()` picked up all three
+   cells).
+4. **Radio Tower cleared** -- executives on 5F, Archer's HOUNDOOM, and the
+   real Director's **CLEAR BELL**. That sets `EVENT_CLEARED_RADIO_TOWER`,
+   which is what brings Clair back to her gym.
+5. **Blackthorn Gym's two-floor boulder puzzle**: pushed boulder 1 into
+   (8,3) and boulder 2 into (2,5) on 2F, which drop as bridges on 1F; and
+   boulder 3 into (8,7) after re-entering the map to reset a mis-push.
+6. **CLAIR BEATEN** (#69). The harness recommender lost the first attempt
+   (she Hyper Potions; the recommender answered with heals and switches --
+   five turns of `115->115` and `FREE HIT`). A five-line policy won:
+   **SWIFT every turn** (never misses, so SMOKESCREEN is irrelevant) and a
+   Hyper Potion only under 40%.
+7. **WHIRLPOOL taught** to TENTACOOL by driving the PACK by hand (#68) --
+   `teach_tm` cannot drive the TM/HM list (`tmhm_use: party list never
+   opened`, five attempts).
+
+### The one open blocker (#70)
+
+The RISING BADGE is at the DRAGON SHRINE, entered at DRAGONS_DEN_B1F
+**(19,29)** whose only approach is **(19,30)** on a strip (x14-23, y30-31)
+bounded by water at x12-13 / x24-25. Proved, not guessed:
+
+- the courtyard above the door dead-ends (row 29 is solid but for the door;
+  walked both columns to y28);
+- the eastern water arm ends at a **buoy line** `0x27` (x24-27, y23) --
+  buoys block surf, verified by bumping one twice;
+- the western arm ends at `0x24` at **(10,20)** with a buoy column at x11;
+- WHIRLPOOL is learned, GLACIERBADGE is the only badge
+  `WhirlpoolFunction` checks (engine/events/overworld.asm:1100),
+  `wPlayerDirection` reads `0x00` (DOWN) at (10,19) -- and the move still
+  says **"Can't use that here."**
+
+`TryWhirlpoolMenu` tests the TILE ID via `CheckWhirlpoolTile`, not the
+collision byte, so `tile_at`'s 'whirlpool' (collision `0x24`) is answering a
+different question: (10,20) is probably decorative current.
+
+**Next session, in order:**
+1. Find the REAL whirlpool tiles: read `CheckWhirlpoolTile`'s tile list and
+   compare against the live tilemap on DRAGONS_DEN_B1F.
+2. Or probe a land route into the strip from the south-east: rows 31-33,
+   x26-29 are floor, separated from the strip by `0xb2` up-walls at row 32
+   -- crossing those on foot is allowed (the new `_SIDE_WALL_NO_SLIDE` rule
+   only forbids starting a SLIDE across the wall edge).
+3. Shrine -> elder quiz -> Clair hands over **RISING**.
+4. Route 27 / Tohjo Falls -> Victory Road -> **Elite Four** (needs
+   WATERFALL: HM07 is already in the bag, unteached).
+
+Harness notes worth keeping: clear `nav.blocked[map]` when a "no path"
+contradicts the live grid (a stale mark from an old `goto` severed the
+switch room's main corridor, #66), and read the `▶` row label instead of
+counting presses in any menu that remembers its cursor (the dept-store
+elevator picked CANCEL twice, #67).
+
 ## session claude pt9 - hideout cleared, GLACIER badge (7/8), Ice Path solved, Basement Key (Aug 26 2026)
 
 **7/8 badges.** PANIC is a TYPHLOSION **L53**. `saves/claude.state` ==

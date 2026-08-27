@@ -971,3 +971,124 @@ found" from every other region on the map. The switches are `bg_event`s at
 layout comes from `wUndergroundSwitchPositions` (01:d963).
 **Flip a switch, then `sync_grid()`** — that is what the drift reader is
 for.
+
+---
+
+# Part 10 — every blocker solved except one: Clair is beaten, the badge is not collected
+
+## 64. The BASEMENT KEY is *used on a door*, not carried to a lock **[game]**
+
+`GoldenrodUndergroundCheckBasementKeyCallback` (maps/GoldenrodUnderground.asm:43)
+redraws (18,6) as a locked door until `EVENT_USED_BASEMENT_KEY`, and the
+script at line 374 wants you to **stand at the door and press A with the key
+in the bag**. `grid_drift()` named the cell before I touched anything:
+static `0x71` (door) vs live `0x07` (wall). One A-press: "The BASEMENT KEY
+opened the door."
+
+That door is one-way into the base's south-east corner — warp 3 lands on
+warp 4 — and from there (22,27) is the only way to the switch rooms.
+
+## 65. The Goldenrod switch puzzle, solved offline first **[fixed method]**
+
+`nav.grid` cannot see the shutters (macro changeblocks, documented), and
+`offregion:` correctly reported the warehouse doors as sealed. Rather than
+flip switches and hope, I read the door table out of the ROM source and
+**simulated every switch position with `nav.set_cell`**:
+
+| position | doors opened |
+|---|---|
+| 1 | 1, 7, 10 |
+| 2 | 2, 8, 9 |
+| 3 | 3, 7, 10 |
+| 4 | 4, 8, 9 |
+| 5 | 5, 7, 10 |
+| 6 | 6, 8, 9, 11 |
+
+Switch 1 adds 1, switch 2 adds 2, switch 3 adds 3 (`addval`, and the same
+value back off), so the position is a SUM, not a bitmask -- and **door
+states persist**: a position only touches the doors it names. That is the
+whole puzzle: no single position connects the strip to the warehouse, but
+**5 then 6** does (position 5 opens door 5 and position 6 never closes it).
+The simulation said 40 steps before I pressed a single switch, and the walk
+then worked first try.
+
+Also: `wUndergroundSwitchPositions` = `01:d963`, and the two-block doors'
+passable half is the LOWER block only -- the upper block is the frame and
+reads as wall in both states.
+
+## 66. A stale live-block mark silently severed a corridor **[mine]**
+
+`_reach` drew the switch room's full-width row-4/5 corridor as unreachable
+and `press_switch` reported "no path" for every switch. Cause:
+`nav.blocked['...SWITCH_ROOM...']` still held `(19,4)`/`(19,5)` from a
+`goto` failure many calls earlier, and those two cells ARE the corridor.
+`d.nav.blocked[map].clear()` fixed it instantly.
+
+**Rule:** hand-driving bypasses `_refresh_nav_blocks`, so clear the blocked
+set when a "no path" contradicts the live grid.
+
+## 67. The elevator picker must READ the row, not count presses **[mine]**
+
+`GOLDENROD_DEPT_STORE_ELEVATOR` remembers its cursor. My first two rides
+"selected" CANCEL and B1F because I pressed D a fixed number of times.
+Reading the `▶` row's label each iteration made it deterministic. The
+B1F crate layout also reshuffles every ride (`LAYOUT_1/2/3`), and
+`sync_grid()` shows the new layout -- but B1F's warehouse door pocket is
+walled off from B1F itself, so that route is an EXIT only.
+
+## 68. `teach_tm` cannot drive the TM/HM list; the pack can **[open]**
+
+`d.teach_tm('HM06','TENTACOOL')` failed five times with
+`tmhm_use: party list never opened`, and TM01/TM23 failed with
+`tmhm_row: no row reading '01 DYNAMICPUNCH' came under the cursor` (a
+scroll bug -- TM31 and, on a later retry, TM01 worked).
+
+Doing it by hand always works and is worth having as the fallback:
+**START -> PACK** (it opens straight into the TM/HM pocket with the cursor
+remembered) -> A on the HM -> `USE` -> A through "Booted up an HM." ->
+`YES` -> the party list shows `ABLE`/`NOT ABLE` per mon -> move the `▶` to
+the ABLE one -> A. "TENTACOOL learned WHIRLPOOL!"
+
+## 69. Clair: the harness's own tactics lost, a five-line policy won **[mine]**
+
+First attempt: **whiteout**. The log shows why -- `T5 KINGDRA 17->115`
+(she Hyper Potions), then five turns of `115->115` with `FREE HIT` markers
+while the recommender healed and switched instead of attacking.
+
+Second attempt with an explicit policy -- *SWIFT every turn (it never
+misses, so SMOKESCREEN is irrelevant), Hyper Potion only under 40%* -- won
+it: `T1 DRAGONAIR 100->20 ... T10 KINGDRA 64->8`. Two of her heals were
+simply out-damaged.
+
+**Lesson:** against a healer with an accuracy-dropper, a never-miss move
+plus a hard HP threshold beats a general recommender. Write the policy.
+
+## 70. The RISING BADGE is behind a tile the engine will not accept **[open]**
+
+Clair is beaten (`EVENT_BEAT_CLAIR`: she now says "Is it too much to expect
+of you?"), and the badge comes from the DRAGON SHRINE, entered at
+DRAGONS_DEN_B1F **(19,29)** -- a `0x71` door whose only approach is
+**(19,30)**, on a strip (x14-23, y30-31) bounded by water at x12-13 / x24-25.
+
+What I proved:
+- The courtyard above the door (x17-22, y22-28) dead-ends: row 29 is solid
+  except the door itself, and both columns stop at y28 (walked both).
+- The eastern arm stops at a **buoy line** (`0x27`, x24-27 at y23). Buoys
+  block surf -- verified by pressing L into one twice: no movement.
+- The western arm ends at a whirlpool `0x24` at **(10,20)** with a buoy
+  column at x11. (10,19) and (10,21) are its only water neighbours.
+- WHIRLPOOL is learned and GLACIERBADGE is in hand (the only badge
+  `WhirlpoolFunction` checks, engine/events/overworld.asm:1100), the facing
+  byte `wPlayerDirection` reads `0x00` (DOWN) at (10,19) -- and the move
+  still answers **"Can't use that here."**
+
+`TryWhirlpoolMenu` calls `GetFacingTileCoord` + `CheckWhirlpoolTile`, which
+tests the TILE ID, not the collision byte. So `tile_at` saying 'whirlpool'
+(from collision `0x24`) is not the same question the engine asks -- (10,20)
+is very likely decorative current, and the real entrance is elsewhere.
+
+**Next session starts here.** Check `CheckWhirlpoolTile`'s tile list against
+the live tilemap to find the REAL whirlpool tiles on this map, or look for
+a land route into the strip from the south-east (rows 31-33, x26-29 are
+floor, separated from the strip by `0xb2` up-walls at row 32 -- which the
+new `_SIDE_WALL_NO_SLIDE` rule does NOT forbid crossing on foot).
