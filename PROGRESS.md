@@ -1,3 +1,52 @@
+## session claude pt11 - 8 badges, WATERFALL, Tohjo Falls crossed, at INDIGO PLATEAU (Aug 27 2026)
+
+**8/8 Johto badges** (ZEPHYR HIVE PLAIN FOG MINERAL STORM GLACIER RISING).
+Working state `saves/claude.state` == `saves/claude-indigo-plateau.state`
+(INDIGO_PLATEAU_POKECENTER_1F (3,9), party fully healed).
+New milestones: `claude-goldeen`, `claude-waterfall`,
+`claude-tohjo-crossed`, `claude-route26`, `claude-victory-gate`,
+`claude-victory-road`, `claude-indigo-plateau`.
+
+Party: **PANIC TYPHLOSION L62** (CUT / FLAME WHEEL / FLAMETHROWER /
+DYNAMICPUNCH -- FLAMETHROWER replaced the 0-PP SWIFT on a level-up),
+GOLDEEN L22 (WATERFALL), NOCTOWL L16 (FLY), TENTACOOL L10
+(SURF/WHIRLPOOL), GEODUDE L7 (STRENGTH). Field moves: everything except
+FLASH. Three spare GOLDEEN and the old TOGEPI/GROWLITHE sit in BOX1.
+
+### The route
+- No party member could learn HM07, so I caught a **GOLDEEN** in Tohjo
+  Falls' water (`data/wild/kanto_water.asm`: GOLDEEN/SLOWPOKE/SEAKING at
+  20% each; GOLDEEN's `tmhm` line has WATERFALL) and taught it by hand.
+- **Tohjo Falls solved**: the two Route 27 warps ((13,15) west, (25,15)
+  east) are in separate regions joined only by the top channel at y4-5.
+  Climb the west falls (x8-11, y8-11) from (9,12), surf east along y4-5,
+  descend the east falls (x18-23, y6-9), land at (22,14), warp out at
+  (25,15).
+- Route 27 east -> Route 26 -> VICTORY_ROAD_GATE -> Victory Road ->
+  ROUTE_23 -> Indigo Plateau. Victory Road's floors are one map joined by
+  same-map ladders: (1,49)<->(1,35), (13,31)<->(13,17),
+  (17,33)<->(17,19), (0,27)<->(0,11), exit (13,5) -> ROUTE_23.
+
+### Harness changes (tests: 629 passed, 16 deselected)
+- **nav**: `$b0-$b7` side walls now block LEAVING across their own wall
+  edge for *any* terrain, derived from `home/map.asm
+  .MovementPermissionsData` (the mask/FACE encodings are reversed, so
+  `$b2` forbids moving UP). This was the Victory Road replan-storm and the
+  Ice Path one from #56. The old unit test asserted the wrong model and
+  was rewritten.
+- **take_warp**: recognises same-map ladders via `Driver._warp_fired`,
+  measured from the cell we entered *from*.
+- `Driver(state, fresh=True)` (added earlier this session) is what
+  `scripts/newgame_bedroom.py` documents.
+
+### Next objective
+The Elite Four. **The team is not ready**: PANIC is the only real
+fighter and Will opens at L40. Either train the box GOLDEEN/GROWLITHE or
+catch a second real mon before entering `INDIGO_PLATEAU` (the lobby warp
+is north of the Pokécenter). Known-good recipes for it are in
+`FUCK_I_MESSED_UP.md` #75 (water HMs need an A press, never the party
+menu) and #72 (never blind-A a PC list).
+
 ## session claude pt10 - Radio Tower cleared, CLAIR BEATEN; badge 8 pending the Dragon Shrine (Aug 26 2026)
 
 Still **7/8 badges** on the counter, but **Clair is beaten** -- the RISING

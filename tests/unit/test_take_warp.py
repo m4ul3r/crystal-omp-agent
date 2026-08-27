@@ -97,6 +97,58 @@ def test_entering_from_an_adjacent_cell_needs_no_step_off():
     assert w.entered == ["D"]
 
 
+class InternalLadder(World):
+    """Victory Road's floors live in ONE map joined by same-map
+    warp_events, so entering (13,31) lands on (13,17) with the map name
+    unchanged. take_warp used to call that a failure."""
+
+    def __init__(self):
+        super().__init__(cell=(13, 31), start=(13, 30),
+                         map_name="VICTORY_ROAD")
+
+    def step(self, mv):
+        dx, dy = {"U": (0, -1), "D": (0, 1), "L": (-1, 0), "R": (1, 0)}[mv]
+        nxt = (self.pos[0] + dx, self.pos[1] + dy)
+        if nxt == self.cell:
+            self.entered.append(mv)
+            self.pos = (13, 17)             # the paired ladder cell
+            return "warp"
+        self.pos = nxt
+        return "moved"
+
+
+def test_same_map_ladder_counts_as_a_fired_warp():
+    w = InternalLadder()
+    d = warp_driver(w)
+    assert d.take_warp(*w.cell) is True
+    assert w.entered == ["D"]
+    assert d.map_name() == "VICTORY_ROAD"
+    assert d.pos()[2:] == (13, 17)
+    assert d.last_warp_reason is None
+
+
+def test_a_two_cell_shuffle_is_not_a_fired_warp():
+    """Anchoring the same-map test on the TARGET made a walk that merely
+    stepped twice look like a teleport; it must be measured from where we
+    stood when we entered."""
+    fired = Driver._warp_fired
+    # real ladder: entered (13,31) from (13,30), landed fourteen rows away
+    assert fired("VICTORY_ROAD", (13, 30), (13, 31),
+                 "VICTORY_ROAD", (13, 17)) is True
+    # a walk that shuffled two cells and never entered the warp
+    assert fired("VICTORY_ROAD", (13, 17), (13, 31),
+                 "VICTORY_ROAD", (15, 17)) is False
+    # standing on the tile is never entering it
+    assert fired("VICTORY_ROAD", (13, 30), (13, 31),
+                 "VICTORY_ROAD", (13, 31)) is False
+    # warp arrival drifts up to ~2 cells past the landing (gotcha 14)
+    assert fired("VICTORY_ROAD", (13, 30), (13, 31),
+                 "VICTORY_ROAD", (13, 33)) is False
+    # a different map is always a fired warp
+    assert fired("ILEX_FOREST", (3, 40), (3, 41),
+                 "ILEX_FOREST_AZALEA_GATE", (3, 41)) is True
+
+
 def test_a_warp_that_never_fires_reports_a_reason():
     w = World(cell=(3, 41), start=(3, 40))
     w.step = lambda mv: "blocked"           # nothing moves

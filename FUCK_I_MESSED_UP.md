@@ -1092,3 +1092,165 @@ the live tilemap to find the REAL whirlpool tiles on this map, or look for
 a land route into the strip from the south-east (rows 31-33, x26-29 are
 floor, separated from the strip by `0xb2` up-walls at row 32 -- which the
 new `_SIDE_WALL_NO_SLIDE` rule does NOT forbid crossing on foot).
+
+---
+
+# Part 11 — WATERFALL, and the worst self-inflicted wound of the run
+
+## 71. `d.teach_tm` still cannot drive the TM/HM list **[open]**
+
+`d.teach_tm('HM07', 'GOLDEEN')` -> `False`, `d.last_tm_reason ==
+'tmhm_use: party list never opened'`. Same failure as HM06/WHIRLPOOL (#66):
+the precondition checks pass (species learnset + `wTMsHMs` count are both
+fine), so it presses into the pack and then never sees the party list.
+
+The by-hand recipe works every time and is now used twice:
+
+```
+START -> menu.select_label('PACK') -> A          # TM/HM pocket opens on HMs
+(cursor already on the HM row; verify by reading the row text)
+A            -> USE/QUIT box
+A            -> " Booted up an HM."
+A x3         -> "Teach WATERFALL to a POKéMON?" -> "Teach which ᴾᴹ?"
+read the list: each mon has an `ᴸnn ABLE` / `ᴸnn NOT ABLE` line
+D to the ABLE row, A, then A through the forget prompt
+```
+
+GOLDEEN forgot PECK and learned WATERFALL; `d.field_moves()['WATERFALL']`
+went `None -> 'GOLDEEN'`.
+
+## 72. I deposited my entire party by mashing A at Bill's PC **[mine]**
+
+The worst mistake of the run, and entirely mine. TOGEPI had to leave the
+party to make room for a WATERFALL user, so I opened Bill's PC, selected
+TOGEPI, and then ran my usual "press A until the dialog stops changing"
+loop to confirm the deposit.
+
+The deposit flow does not *end*. After each deposit it returns to
+`Choose a ᴾᴹ.` with the cursor on the next party member, so a 14-iteration
+A loop deposits fourteen times. Five Pokémon went into the box, including
+**PANIC, my L58 Typhlosion** — the party was down to one NOCTOWL L16 before
+I read `d.observe()['party']` again.
+
+Recovered by withdrawing PANIC/TENTACOOL/GEODUDE and re-depositing the
+spare GOLDEEN (the water hunt had caught four). Nothing was lost, but this
+is exactly gotcha 13's "never flush_dialog near an open shop list", one
+screen over: **any menu that re-arms itself turns a blind A loop into a
+repeat-action loop.**
+
+Rule for PC/party menus: ONE `py.button_press('a')` per step, read
+`d.observe()['party']` (not the dialog) after each, and stop on the
+observed party change.
+
+## 73. The PC list has no `▶` cursor **[known]**
+
+`Choose a ᴾᴹ.` lists are box-highlighted, not glyph-highlighted, so
+`[l for l in screen_text() if '▶' in l]` returns `[]` and `menu.select_label`
+cannot see the selection. What *does* track it is the left-hand info panel:
+row 12-14 carry the selected mon's `ᴸnn ♀/♂` line and its species name.
+
+```python
+def selected_name():           # works for BOX and PARTY lists
+    rows = d.emu.screen_text()
+    return rows[14].strip() if len(rows) > 14 else ''
+```
+
+Navigate by pressing D and watching `selected_name()` change; the submenu
+that opens after A (`WITHDRAW/STATS/RELEASE/CANCEL`, `DEPOSIT/STATS/...`)
+*does* use `▶` and can be read normally.
+
+## 74. Tohjo Falls' water is a Kanto encounter table **[known]**
+
+`d.field_moves()['WATERFALL'] is None` with six mons that all refuse HM07
+(Typhlosion, Geodude, Growlithe, Tentacool, Togepi, Noctowl). The nearest
+legal learner is in the water I was standing next to:
+`data/wild/kanto_water.asm` gives TOHJO_FALLS `GOLDEEN / SLOWPOKE /
+SEAKING` at 20% each, and GOLDEEN's `tmhm` line includes `WATERFALL`.
+
+Two things cost time here:
+- `d.pace()` walked me back onto land, and land paces roll the *grass*
+  table (RATICATE/ZUBAT/GOLBAT, none of which learn anything useful).
+  Water hunting has to re-check `d.observe()['tiles']['here'] == 'water'`
+  every step.
+- A `'flee'` encounter policy against a wild that also refuses to flee
+  stalls `fight()` ("no action changed the battle state in 5 turns"), and
+  the stall was really **SWIFT at 0 PP** being picked as slot 0. A policy
+  that filters `pp > 0` before choosing fixed it.
+
+## 75. The field-move MENU cannot use WATERFALL; the A button can **[open]**
+
+`d.field_moves()['WATERFALL'] == 'GOLDEEN'`, RISINGBADGE in hand, surfing
+at TOHJO_FALLS (9,12) facing UP at (9,11) whose collision is `0x33`
+(COLL_WATERFALL) -- and START -> POKéMON -> GOLDEEN -> WATERFALL answered
+**"Can't use that here."** One plain A press from the same tile, same
+facing, answered **"Do you want to use WATERFALL?"** and climbed
+(9,12) -> (9,7).
+
+So this is the same shape as #70's whirlpool, and #70's conclusion was
+wrong: the tile *was* the right tile. The overworld A handler
+(`engine/events/overworld.asm`, the `.waterfall` arm) reads
+`wFacingTileID` after `GetFacingTileCoord` has just populated it; the menu
+path evidently asks before it is valid. **For every water HM, face the
+tile and press A -- do not go through the party menu.** Whirlpool at
+DRAGONS_DEN_B1F (10,20) is worth re-testing this way.
+
+While here: `wFacingTileID` read from a savestate is only meaningful in
+the few frames after an A press. `hex(read_u8('wFacingTileID'))` gave
+`0x40` and then `0x00` for the same cell depending on when I looked; the
+two conclusions I drew from those reads were both garbage. `wPlayerDirection`
+*is* stable: DOWN=`0x0`, UP=`0x4`, and a 6-frame directional press turns
+without stepping.
+
+## 76. A $b2 tile cannot be crossed -- nav thought it could **[fixed]**
+
+VICTORY_ROAD (5,58) is `0xb2` (COLL_UP_WALL) with plain `0x00` floor
+above. `goto` planned U, the engine refused it (16-frame press, no
+movement; D and R both moved), the cell was marked live-blocked, and
+`travel` died in a 20-replan storm -- the exact failure #56 described on
+ICE_PATH_1F, which I had narrowed to "a side wall will not start a
+SLIDE" because a unit test claimed Union Cave crosses `$b2` upward.
+
+Derived the rule from the engine instead of guessing this time:
+`home/map.asm GetMovementPermissions` indexes `.MovementPermissionsData`
+by `collision & 7` for any standing tile with hi nybble `$b0`/`$c0` and
+ORs the result into `wTilePermissions`;
+`engine/overworld/player_movement.asm .CheckLandPerms` refuses the step
+when `wFacingDirection & wTilePermissions`. The two encodings are
+**reversed** (`DOWN_MASK=1 UP_MASK=2 LEFT_MASK=4 RIGHT_MASK=8` vs
+`FACE_DOWN=8 FACE_UP=4 FACE_LEFT=2 FACE_RIGHT=1`), so `$b2 & 7 = 2 ->
+LEFT_MASK = 4` masks **FACE_UP**: standing on `$b2` you cannot move UP.
+A `$b2` cell is a one-way dead end from the south -- enterable going up,
+never crossable.
+
+- `_SIDE_WALL_NO_SLIDE` renamed `_SIDE_WALL_EXIT_BLOCKED` and applied
+  unconditionally in the pathfinder, not just onto ICE.
+- `tests/unit/test_nav.py::test_treknav_side_wall_directionality` was
+  asserting the wrong model (`(0,2) -> (0,0) == ["U","U"]`). Rewritten to
+  the engine rule with the citation; the Union Cave claim it rested on was
+  never verified live.
+
+## 77. take_warp could not see a same-map ladder **[fixed]**
+
+Victory Road stacks its floors inside ONE map: `maps/VictoryRoad.asm`
+pairs `warp_event 13,31 -> VICTORY_ROAD 5` with `warp_event 13,17 ->
+VICTORY_ROAD 4`. `take_warp` returned True only when `map_name()`
+changed, so every ladder reported `entered (1,49) ... but the map is
+still VICTORY_ROAD` -- a failure the caller cannot act on, for a warp
+that had worked.
+
+New `Driver._warp_fired(start_map, start_pos, target, now_map, now_pos)`:
+map change, or a same-map jump of more than 3 cells **measured from where
+we stood when we entered**. My first version measured from the warp cell
+and immediately produced a false success (a two-cell walk at (13,17) was
+"a fired warp at (13,31)"). Covered by
+`tests/unit/test_take_warp.py::test_same_map_ladder_counts_as_a_fired_warp`
+and `::test_a_two_cell_shuffle_is_not_a_fired_warp`.
+
+## 78. heal_pokecenter hardcodes the nurse at (3,3) **[open]**
+
+`INDIGO_PLATEAU_POKECENTER_1F` puts its counter at row 8 with the nurse
+behind (3,7), so `heal_pokecenter` routed to (3,3), found no path, and
+raised `party not fully healed`. `d.talk_to(3,7)` + A through
+"Shall we heal your POKéMON?" healed all five. The helper should find the
+nurse from the map's own `object_event`s instead of assuming the Johto
+town layout.

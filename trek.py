@@ -173,18 +173,24 @@ _SIDE_WALL_BLOCKED = {
 }
 
 
-# A side-wall tile also refuses to START A SLIDE: the wall is on one edge,
-# and leaving the tile across that edge is refused in the same way entering
-# it across that edge is. Live on ICE_PATH_1F (28,10) $b2 with ice at
-# (28,9) and a battle-free screen: floor (28,11) -> U onto the tile works,
-# then U off it onto the ice never moves -- four step primitives, while
-# wTilePermissions reads $04. But Union Cave 1F's corridors DO cross $b2
-# rows upward onto plain floor (trek.py's own note above, and
-# tests/unit/test_nav.py::test_treknav_side_wall_directionality), so the
-# refusal is specific to a slide start, not to leaving the tile. Without
-# this, goto plans the step, the engine refuses it, the cell is marked
-# live-blocked and the walk dies in a replan-storm (FUCK_I_MESSED_UP #56).
-_SIDE_WALL_NO_SLIDE = {
+# A side-wall tile also blocks LEAVING it across its own wall edge, for any
+# terrain -- not just a slide start. Derived from the engine instead of
+# guessed: home/map.asm GetMovementPermissions indexes
+# .MovementPermissionsData by `collision & 7` for any tile whose hi nybble
+# is $b0/$c0 and ORs the entry into wTilePermissions, and
+# engine/overworld/player_movement.asm .CheckLandPerms refuses the step
+# when `wFacingDirection & wTilePermissions`. The two encodings are
+# reversed (DOWN_MASK=1/UP_MASK=2/LEFT_MASK=4/RIGHT_MASK=8 vs
+# FACE_DOWN=8/FACE_UP=4/FACE_LEFT=2/FACE_RIGHT=1), so the table's
+# LEFT_MASK on $b2 forbids moving *UP* off the tile -- exactly the mirror
+# of its entry rule.
+#
+# Proven live twice, both on plain floor (not ice): ICE_PATH_1F (28,10)
+# and VICTORY_ROAD (5,58), where U off the $b2 tile onto $00 floor never
+# moves while D and R both do. The old ICE-only narrowing let goto plan
+# that step, the engine refused it, the cell was marked live-blocked and
+# the walk died in a replan-storm (FUCK_I_MESSED_UP #56, #75).
+_SIDE_WALL_EXIT_BLOCKED = {
     b: {{"U": "D", "D": "U", "L": "R", "R": "L"}[d] for d in dirs}
     for b, dirs in _SIDE_WALL_BLOCKED.items()
 }
@@ -248,12 +254,10 @@ class TrekNav(MapData):
             hgt, wid = len(grid), len(grid[0])
             here = grid[y][x]
             plain, exits = [], []
-            no_slide = _SIDE_WALL_NO_SLIDE.get(here, ())
+            exit_walls = _SIDE_WALL_EXIT_BLOCKED.get(here, ())
             for d, (dx, dy) in STEP.items():
-                if d in no_slide:
-                    sy, sx = y + dy, x + dx
-                    if 0 <= sy < hgt and 0 <= sx < wid and grid[sy][sx] in ICE:
-                        continue     # a side wall will not start a slide
+                if d in exit_walls:
+                    continue     # crossing this tile's own wall edge
                 # standing on a ledge lip and moving in its hop direction
                 # jumps over the cliff tile, landing 2 cells away (the game
                 # checks the tile you stand ON: engine .TryJump)
@@ -1879,6 +1883,30 @@ class Driver:
         log.warning(f"  take_warp: {reason}")
         return False
 
+    @staticmethod
+    def _warp_fired(start_map, start_pos, target, now_map, now_pos):
+        """Did the warp at `target` actually fire?
+
+        A different map is the obvious yes. But Victory Road, the Ice Path
+        and Silver Cave stack their floors inside ONE map and join them
+        with same-map warp_events, so the map name never changes and only
+        the position teleports: stepping onto (13,31) lands on (13,17)
+        fourteen rows away. Judging by map alone reported those ladders as
+        failures the caller could not act on (FUCK_I_MESSED_UP #76).
+
+        The tell has to be measured from where we STOOD, not from the warp
+        cell: a walk that merely shuffled two cells is far from the target
+        too, and anchoring on the target made take_warp claim success for
+        a warp it never entered. Warp arrival drifts up to ~2 cells past
+        the modeled landing (gotcha 14), so a same-map jump counts only
+        beyond that."""
+        if now_map != start_map:
+            return True
+        if now_pos == target:
+            return False                  # standing on it is not entering
+        return abs(now_pos[0] - start_pos[0]) + \
+            abs(now_pos[1] - start_pos[1]) > 3
+
     def take_warp(self, x, y, label=""):
         """ENTER the warp at (x, y) -- and standing on it is not entering.
 
@@ -1934,6 +1962,7 @@ class Driver:
                 return self._warp_fail(
                     f"no reachable cell adjacent to {target} "
                     f"(last goto: {self.last_goto_reason})")
+        entry_pos = self.pos()[2:]
         r = self._held_warp_entry({"kind": "warp", "cell": target})
         if r == "battle":
             if not self._on_battle(f"take_warp {target}"):
@@ -1941,7 +1970,8 @@ class Driver:
                     f"battle entering {target} and auto_fight=manual -- "
                     f"decide it, then retry")
         self.settle()
-        if self.map_name() != start_map:
+        if self._warp_fired(start_map, entry_pos, target, self.map_name(),
+                            self.pos()[2:]):
             log.info(f"  -> {self.map_name()} {self.pos()[2:]}")
             return True
         if self.pos()[2:] == target:
@@ -2005,16 +2035,18 @@ class Driver:
             if self.pos()[2:] == target:
                 continue                  # could not step off this way
             tried.append(mv)
+            off = self.pos()[2:]
             r = self.step_hold(inv[mv])
             if r == "battle":
                 if not self._on_battle(f"take_warp {target}"):
                     return self._warp_fail(
                         f"battle entering {target} and auto_fight=manual "
                         f"-- decide it, then retry")
-            if self.map_name() == start_map:
+            if self.map_name() == start_map and self.pos()[2:] == target:
                 r = self._step_warp_tap(inv[mv])
             self.settle()
-            if self.map_name() != start_map:
+            if self._warp_fired(start_map, off, target, self.map_name(),
+                                self.pos()[2:]):
                 log.info(f"  -> {self.map_name()} {self.pos()[2:]} "
                          f"(entered {inv[mv]})")
                 return True

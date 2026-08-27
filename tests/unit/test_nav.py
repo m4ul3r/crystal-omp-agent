@@ -124,12 +124,18 @@ def test_treknav_blocked_cells_stop_even_goals():
 
 
 def test_treknav_side_wall_directionality():
-    # $b2 (COLL_UP_WALL) refuses DOWNWARD entry, allows upward
+    # $b2 (COLL_UP_WALL) refuses DOWNWARD entry, and -- per
+    # home/map.asm .MovementPermissionsData, index $b2 & 7 = 2 -> LEFT_MASK,
+    # which masks FACE_UP -- also refuses moving UP off the tile. So a $b2
+    # cell is a one-way dead end from the south: enterable going up,
+    # not crossable. Verified live on VICTORY_ROAD (5,58) and
+    # ICE_PATH_1F (28,10).
     nav = trek({"M": [[FLOOR],
                       [UP_WALL],
                       [FLOOR]]})
     assert nav.find_path("M", (0, 0), (0, 2)) is None   # down through $b2
-    assert nav.find_path("M", (0, 2), (0, 0)) == ["U", "U"]
+    assert nav.find_path("M", (0, 2), (0, 0)) is None   # up off the $b2
+    assert nav.find_path("M", (0, 2), (0, 1)) == ["U"]  # onto it, though
 
 
 def test_set_cell_override_roundtrip():
