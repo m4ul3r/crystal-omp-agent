@@ -107,6 +107,8 @@ from the leg's own arguments.
 | What have I not collected? | `d.missables()` (key items + HMs, live) / `d.missables('all')` / `crystal missables [--all]` / the `missing:` fragment on `d.status()` — each row cites `maps/Foo.asm:NNN` and carries the giver's coordinates. HM02 FLY sat in Cianwood for a whole playthrough because nothing surfaced this |
 | Can I actually use a field move? | `d.field_moves()` → `{'CUT': 'GATOR', 'FLY': None, ...}` — per HM, which party member knows it. "HM in the bag" is not "I can use it" |
 | What is at (x,y)? What warps exist? | `d.tile_at(x,y)`, `d.tiles_in(x0,y0,x1,y1)`, `d.find_tiles('warp'\|'water'\|'grass'\|'ledge'\|'blocked'\|'npc')`, `d.exits()` → warps AND edge connections with destinations. **These are the decision interface; `map_view()` is art for humans** (gotcha 11) |
+|Does the decoded map match the ENGINE's map?|`d.grid_drift()` → `[(x,y,static,live), ...]` from `d.live_grid()` (the block map in WRAM). Empty is normal — audited 0 drift over 53 savestates. `d.sync_grid()` pushes any drift into nav so PATHING sees it; only `changeblock` cells can drift and `nav.conditional()` names them in advance|
+|What is walkable that I cannot reach from here?|The `,`/`o` glyphs and the `offregion:` lines of `d.map_view()` — cell count, bounding box, and the warps or changeblock that open each unreachable component. A blank is wall, never a hidden wing (gotcha 11)|
 | Go through a door | `d.take_warp(x, y)` — routes adjacent, enters with the held/tapped step, tries each side, verifies the map changed; `d.last_warp_reason` on failure. Standing on a warp never fires it (gotcha 15) |
 
 Battle math comes from the repo itself: type chart parsed from
@@ -153,7 +155,16 @@ ROM's `Moves` table via `pokecrystal.sym`. Don't hardcode game data.
     `find_tiles(kind)` / `exits()` / `tile_at(x,y)` / `tiles_in(rect)`**,
     which answer by absolute coordinate; `map_view()`'s annotation block
     prints the same data under the grid. Use coordinates for ground truth,
-    `screen --png` + image read only when you need terrain visuals.
+    `screen --png` + image read only when you need terrain visuals — that
+    PNG is the real framebuffer and the only surface that shows the room
+    the way a player sees it.
+    **`map_view()` is a REACHABILITY render, not a map render.** `,`/`o`
+    are walkable cells (and warps) of a component you cannot reach from
+    here, and each such component gets an `offregion:` line naming its
+    bounding box and the warps or `changeblock` that open it. Before the
+    glyphs existed those cells drew as BLANK, so Rocket base B3F's 57-cell
+    western wing — holding the rival and boss `coord_event`s — read as
+    void and cost a session (`FUCK_I_MESSED_UP.md` #51).
 12. **Door/cutscene warps finish asynchronously AND need the key held.**
     `step_dir` releases the direction as soon as the step starts — doors
     silently don't trigger (the warp only fires if the key is still down

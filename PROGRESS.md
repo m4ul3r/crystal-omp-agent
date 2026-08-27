@@ -1,3 +1,488 @@
+## session claude pt7 - the map view was accurate and INCOMPLETE; fixed (Aug 26 2026)
+
+Harness-only, no game progress. Still 6/8 badges, `saves/claude.state`
+unchanged (TEAM_ROCKET_BASE_B3F (16,1)).
+
+**Question asked: is the map/screen view accurate? Answer: the DATA is
+byte-exact; the PICTURE hid half the map.**
+
+`nav.grid()` decodes `maps/<Name>.blk` + tileset collision statically. I
+built the same grid from the engine's own live block map
+(`wOverworldMapBlocks`: 3-block border all round, `stride = wMapWidth+6`,
+block (bx,by) at `(by+3)*stride+bx+3`) and diffed: **0 mismatched cells
+across all 53 `saves/claude-*.state`**, plus BURNED_TOWER_1F entered live
+after the beasts, SPROUT_TOWER_3F, ROUTE_32 and TEAM_ROCKET_BASE_B3F.
+Only `changeblock` cells can ever drift, and `nav.conditional()` already
+names them in advance (BURNED_TOWER_1F: exactly (7,15) and (10,9)).
+
+But `map_view()` is a **reachability** render: everything unreachable drew
+as a SPACE, indistinguishable from wall. So B3F's 57-cell western wing --
+which holds the rival and boss `coord_event`s -- rendered as void, and
+pt6 spent ~25 calls rediscovering it from raw collision hex. The legend
+even had `(" ", "unreachable from here")` and the renderer filtered that
+line out (`if g != " "`).
+
+### Changed
+
+- `render_map_view`: unreachable components draw `,` (walkable) and `o`
+  (their warps). Cells in the player's own component are untouched, so
+  water-without-SURF still stays blank rather than claiming reachability.
+- New `offregion:` annotation line per unreachable component: cell count,
+  bbox, and **how to get in** -- its warps, or the `changeblock` when no
+  warp touches it. Capped at 4 doors/4 lines; door-less components under
+  8 cells draw but are not annotated.
+- New `Driver.live_grid()` / `grid_drift()` / `sync_grid()`. `sync_grid()`
+  pushes live drift into nav via `set_cell`, so pathing gets it too --
+  on B3F, poking the Giovanni door merged 3 components into 2.
+- `map_view()` prints a `DRIFT:` line when live and decoded disagree.
+- Tests: 2 new in `tests/unit/test_map_interface.py` (a wing must draw and
+  name its entrance; a decorative island draws but earns no line);
+  `FakeNav` borrows the real `region_map`/`regions_at` so it cannot drift
+  from `MapData`.
+
+Tests: unit lane **595 passed**, same 2 pre-existing `test_live_feed`
+failures. The integration lane cannot run in this checkout at all --
+`tests/integration/conftest.py:23` forks `claude_saves/wren-*.state` and
+there is no `claude_saves/` here (16 ERRORs, pre-existing). Verified
+instead by sweeping all 53 states live: 0 render errors, 0 drift.
+
+Also: `./crystal --state S screen --png FILE` writes the real framebuffer
+and is the only surface that shows the room as a player sees it. Unused
+for this entire run out of misplaced distrust of the TEXT screen decode.
+
+## session claude pt6 - Lake of Rage cleared; parked inside the Rocket base (Pryce is gated) (Aug 26 2026)
+
+Still **6/8 badges**. PANIC is a TYPHLOSION **L48**. `saves/claude.state`
+== `saves/claude-rocket-base-b3f.state` (TEAM_ROCKET_BASE_B3F (16,1)).
+New milestones: `claude-mahogany`, `claude-red-gyarados`,
+`claude-rocket-base-b3f`.
+
+### Why Pryce is not done
+
+**The Mahogany gym is hard-gated by the Rocket hideout.** The fisher at
+MAHOGANY_TOWN **(6,14)** sits on the only approach to the gym door (6,13)
+and is guarded by `EVENT_MAHOGANY_TOWN_POKEFAN_M_BLOCKS_GYM`
+(maps/MahoganyTown.asm:269). That event is SET by
+**`RocketBaseElectrodeScript`** on B2F -- the same script that gives
+**HM06 WHIRLPOOL** and sets `EVENT_CLEARED_ROCKET_HIDEOUT`. No hideout, no
+Pryce, no shortcut.
+
+### Done this leg
+
+- Flew Olivine -> Ecruteak, surfed/walked Route 42 -> **Mahogany**.
+- **Lake of Rage**: surfed to (18,22), beat the shiny **RED GYARADOS**
+  (L30) -> **RED SCALE**; talked to **Lance** at (21,28) and agreed to help
+  (he flies to Mahogany).
+- Entered the hideout behind the souvenir shop (MAHOGANY_MART_1F (7,3)),
+  cleared B1F (camera grunts + the 22 exploding traps are trivial at L48),
+  crossed B2F, explored much of B3F (PROTEIN, ULTRA BALL).
+
+### The base's connectivity (the part that matters next time)
+
+```
+B1F (27,2) entrance; row 2 runs x1..x26; the left corridor below row 5 is
+    x3..x5 (NOT x1); ladder to B2F at (3,14).
+B2F arrive (3,14). ROW 12 IS SOLID WALL x1..x23, so the bottom block
+    CANNOT reach B2F's left ladders (3,2)/(3,6). Row 16 (x7..x28) is the
+    through-corridor -> column 27 -> (27,14) ladder -> B3F.
+    (23,14)/(22,15) are $90 WALL, not the transmitter door.
+B3F arrive (27,14). rows 12-13 are the only east-west link across x15;
+    column 16/17 is the only climb from row 12 up to rows 8-10; row 8 and
+    row 10 are both split at x15 ($90).
+    => B3F's WEST half (x1..x14) -- which holds the rival coord_event at
+    (8,10) and the boss coord_events at (10,8)/(11,8) -- is NOT reachable
+    from the (27,14) arrival. It must be entered from B2F's LEFT ladders
+    (3,2)/(3,6), i.e. via B1F's internal warps ((5,15)->B1F#4,
+    (25,2)->B1F#3).
+```
+
+**Next session, in order:** take B1F's internal warp branch to reach B2F's
+left block -> B2F(3,2)/(3,6) -> B3F west half -> rival scene at (8,10) ->
+boss at (10,8)/(11,8) -> back to B2F's electrode room ->
+`RocketBaseElectrodeScript` gives HM06 WHIRLPOOL and un-gates
+**Pryce**. Then Clair needs WATERFALL from ICE_PATH_1F (31,7).
+
+Also learned: **FLY is outdoor-only** (three failed attempts from inside
+Olivine Gym), and the party menu REMEMBERS its cursor -- read the `▶` row
+instead of pressing D a fixed number of times, or you select the wrong mon.
+
+## session claude pt5 - FLY usable + the LIGHTHOUSE solved -> badge 6 (MINERAL) (Aug 26 2026)
+
+**6/8 badges: ZEPHYR / HIVE / PLAIN / FOG / STORM / MINERAL.** PANIC is a
+TYPHLOSION L46. All four field moves now WORK:
+`CUT=PANIC, FLY=NOCTOWL, SURF=TENTACOOL, STRENGTH=GEODUDE`.
+
+`saves/claude.state` == `saves/claude-mineral-badge.state` (OLIVINE_GYM,
+party full HP). New milestones: `claude-fly-usable`, `claude-jasmine-met`,
+`claude-secretpotion`, `claude-amphy-healed`, `claude-mineral-badge`.
+
+### The cheap win: a bird for FLY
+
+ROUTE_39 grass (x4-5, y20-27) has **NOCTOWL and PIDGEOTTO at L16**, one
+screen from Olivine; both learn FLY. Two prerequisites I got wrong first:
+the party must have a **free slot** (a caught mon with 6 in the party goes
+to the box, so the catch "fails" from the harness's point of view) and the
+bag must actually contain balls. GREAT BALLs (Olivine mart) caught a
+full-HP L16 Noctowl on the second throw. `teach_tm('HM02','NOCTOWL')` ->
+True. Flying works: Olivine -> Cianwood was one menu.
+
+Freeing the slot needs the PC: its collision byte is `$93` (COLL_PC), so
+find it with `[(x,y) for ... grid[y][x]==0x93]` -> Olivine PC at **(9,1)**,
+stand at (9,2) facing UP. **Do not blind-press in there** (see
+FUCK_I_MESSED_UP #45 -- I deposited the L44 carry).
+
+### The lighthouse, understood
+
+Read the **collision byte** under each warp event, not the warp list:
+`$72 COLL_LADDER` = climbable, `$70` = door, **`$60 COLL_PIT` = one-way
+fall**, `$00` = plain floor (the warp event exists but never fires -- these
+are the landing pads I spent a whole session hammering).
+
+```
+1F (3,11)=72 up        (16,13)/(17,13)=00 pads
+2F (5,3)=72 up         (16,13)/(17,13)=60 pit down
+3F (13,3)=72 (9,5)=72  (16,11)/(17,11)=60 pit down
+4F (3,5)=72 (9,7)=72   (8,3)/(9,3)+(16,9)/(17,9)=60 pit
+5F (9,15)=72           (16,7)/(17,7)=60 pit down
+6F                     (16,5)/(17,5)=60 pit down
+```
+
+**Design: climb the left/middle LADDERS, descend the right-hand PIT chain,
+and take one deliberate pit-fall on the way up.**
+
+UP: 1F(3,11) -> 2F(5,3) -> 3F: (4,3),(3,4), down x2 (a trainer sits on
+(3,9)), (4,14), east along **row 14** to (14,14), up x14 to (14,5),
+(13,4), **(13,3)** -> 4F: (13,2), west row 2 to (12,2) (NPC blocks (11,2)),
+(12,3),(11,3),(10,3), **(9,3) = PIT** -> 3F strip B, **(9,5)** ->
+4F(9,5), **(9,7)** -> 5F, down x9 to **(9,15)** -> 6F, up x9 to (9,9),
+Jasmine at (8,8).
+DOWN: 6F row 8 east to x17, north into the (17,5) pit, then D,D per floor:
+5F(17,7) -> 4F(17,9) -> 3F(17,11) -> 2F(17,13) -> 1F. Four falls.
+
+I also had the 3F "three disconnected strips" wrong: I printed the grid
+only to row 13 and never saw that **rows 14-15 are a full-width corridor**.
+
+### Jasmine chain, in order
+
+Talk to Jasmine on 6F (she asks for medicine) -> Cianwood pharmacy gives
+the **SECRETPOTION** (it is a script gift, not a purchase; before meeting
+her the pharmacist is only a shop -- blind A presses there bought 6
+Potions) -> back to 6F, talk to Jasmine again (she takes it and heals
+Amphy) -> she returns to OLIVINE_GYM. **MAGNEMITE L30 x2 + STEELIX L35, all
+steel: Flame Wheel one-shots the lot** (3 turns, no damage taken).
+
+### Harness note worth keeping
+
+On the 2F ladder `d.press()` stopped delivering input entirely (six calls,
+no movement, `wScriptMode 0`, no textbox). Raw
+`d.emu.py.button_press(...)` worked instantly, and raw taps drove the whole
+lighthouse. A 6-10 frame raw tap = exactly one cell; use `step_hold` only
+for warp entry.
+
+**Next objective:** Pryce (badge 7). Mahogany is reachable by land/Fly;
+the gym opens after the Lake of Rage -> Team Rocket hideout chain. Then
+Clair (needs WHIRLPOOL from the Rocket base and WATERFALL from ICE_PATH).
+
+## session claude pt4 - UNBLOCKED: badges 4 and 5 (FOG + STORM), SURF/STRENGTH/FLY (Aug 26 2026)
+
+**Two more gyms cleared.** Badges: **ZEPHYR / HIVE / PLAIN / FOG / STORM**
+(5/8). PANIC is a **TYPHLOSION L44** with FLAME WHEEL. HM01 CUT, HM02 FLY,
+HM03 SURF, HM04 STRENGTH, HM05 FLASH all in the bag; CUT/SURF/STRENGTH are
+USABLE (PANIC / TENTACOOL / GEODUDE).
+
+`saves/claude.state` == `saves/claude-storm-olivine.state`: Olivine
+Pokécenter, party healed, ¥19.5k. New milestones: `claude-beasts-released`,
+`claude-fog-badge`, `claude-surf`, `claude-surf-usable`, `claude-olivine`,
+`claude-cianwood`, `claude-strength`, `claude-storm-badge`,
+`claude-fly-hm`, `claude-storm-olivine`.
+
+### The two retractions that unblocked everything
+
+1. **Burned Tower B1F does not "slide".** `step_hold` HOLDS the direction
+   through the transition, so on open floor it keeps walking — that is the
+   whole "one step moved me 5 cells" mystery. `step_dir`/a 4-frame tap
+   moves exactly one cell. **Use `step_hold` only to enter a warp tile
+   with a wall behind it; tap everywhere else.**
+2. **Ecruteak Gym is pits, not warps.** `find_tiles('warp')` returns just
+   the two door tiles; the 31 interior cells are tile kind **`pit`**. A
+   floor-only BFS finds Morty fine (falling costs only the walk back), so
+   a fall-aware walker that re-plans after each fall solves the gym.
+
+### Route knowledge worth keeping
+
+- **Beasts:** `coord_event (10,6)` on BURNED_TOWER_B1F is live from the
+  start (scene 0) but only fires on a TAPPED entry. Fall in at 1F (10,9),
+  tap up the corridor, and the release runs. Until it runs the exit ladder
+  is turned to floor by the map callback, so B1F is a one-way trip.
+- **Morty**: 4 ghosts, all with HYPNOSIS. Ember/Flame Wheel swept them in
+  5 turns at L33; carry AWAKENINGs and put a `SLP -> ('item','AWAKENING')`
+  branch in the policy.
+- **SURF**: HM03 from the DANCE_THEATER gentleman at (7,10) after beating
+  all five Kimono Girls ((0,2),(2,1),(6,2),(9,1),(11,2)). **Nothing in a
+  fire/rock starter party can learn it** — I fished a TENTACOOL with the
+  OLD ROD (from the Route 32 Pokécenter fisherman) on Route 32's shore.
+  Old Rod = 15% chance of a Surf-capable species per cast (KRABBY /
+  GOLDEEN / TENTACOOL by fishgroup, data/wild/fish.asm). Grass hunting for
+  Psyduck/Marill/Wooper/Slowpoke failed ~80 encounters straight; **fishing
+  is the reliable way to get a water mon.**
+  Cast loop that works: `use_item('OLD ROD', field=True)` (needs the
+  key-item pocket fix), then press A to clear "Oh! A bite!", THEN poll
+  `d.battle()`.
+- **Cianwood**: surf Olivine (10,13) -> south edge of ROUTE_40 -> ROUTE_41
+  west edge -> CIANWOOD_CITY. `travel` has no water edges in its mapgraph,
+  so drive the seams by hand.
+- **Chuck's gym** needs STRENGTH (HM04 in OLIVINE_CAFE (4,3)) and the
+  boulders must be pushed in this order, or you seal the only gap:
+  (3,8) push U, (5,8) push U, then from (5,7) push L, then walk up column
+  4 and around via (3,4)->(3,3)->(3,2)->(4,2). Boulders reset on map
+  re-entry if you get it wrong. Activate Strength from START -> POKéMON ->
+  GEODUDE -> STRENGTH after every map entry; the first directional press
+  only turns you, so press twice per push.
+- **HM02 FLY**: Chuck's wife, CIANWOOD_CITY (10,46) (she walks; also try
+  (11,46)), after beating Chuck. Read her dialog page by page — the give is
+  on the 11th page.
+
+### What blocks Jasmine (badge 6) right now
+
+The **Olivine Lighthouse stairs**: 1F `(16,13)/(17,13)` and 2F
+`(16,11)/(17,11)` are listed as warps up but do not fire from any side,
+tapped or held. The pair that does work ((3,11) then (5,3)) lands in 3F's
+left column, which is walled off from the x12-17 region holding the 4F
+stairs. Jasmine needs the SECRETPOTION, which the Cianwood pharmacist only
+offers after you have met her at the top of the lighthouse.
+
+Also still open: **nobody can learn FLY** (no bird in the party) — catching
+a HOOTHOOT/PIDGEY would make every remaining trip trivial, and that is the
+cheapest next win.
+
+New details/retractions in `FUCK_I_MESSED_UP.md` #34/#35 (retracted),
+#39-#43.
+
+## session claude pt3 - fixed the P0 harness blockers; run parked in Ecruteak (Aug 26 2026)
+
+**Still 3 badges. The Elite Four was not reached.** This leg spent its
+effort where it was worth spending: the six defects that made team-building
+impossible are fixed and verified live, and the run is parked one step
+before Morty with a written route through him.
+
+`saves/claude.state` == `saves/claude-ecruteak-ready.state`:
+**ECRUTEAK_POKECENTER_1F, healed**, PANIC the QUILAVA **L32** with
+**FLAME WHEEL**, GROWLITHE L13 (caught), GEODUDE L7, BELLSPROUT L5,
+TOGEPI L5. Bag: 5 SUPER POTION, **5 AWAKENING**, SQUIRTBOTTLE, HM01, HM05,
+TM31/45/49, 13 POKé BALLs. Money ~2500.
+New milestones: `claude-flamewheel`, `claude-growlithe`, `claude-team5`,
+`claude-ecruteak`, `claude-pre-tower`, `claude-ecruteak-ready`.
+
+### Harness fixes landed (unit lane still 593 green)
+
+1. **`observe()['party']` now reports `egg`** (schema updated), and
+   `train`'s heal rail raises instead of looping when every non-egg member
+   is already full. That kills the 30-round-trip infinite heal.
+2. **`train` refuses to rotate in a mon with no damaging move**, naming it.
+   No more 60-battle zero-exp runs.
+3. **A policy that raises is logged** (`[fight] policy RAISED …`) instead of
+   being indistinguishable from a decline.
+4. **`_auto_action` always re-resolves the slot via `best_move()`** -- the
+   fallback can no longer be a status move in slot 0.
+5. **The stall guard never swaps a ball for an attack.** A failed capture
+   changes no vitals by design; the old code KO'd the target on the third
+   throw. Proof: a GROWLITHE was caught on the FIRST attempt after the fix
+   (four attempts failed before it).
+6. **Key items are addressable**: `bag_item_index(..., pocket="key")` reads
+   `wNumKeyItems`/`wKeyItems` (flat id array), and `use_item` auto-detects
+   and switches pockets. SQUIRTBOTTLE/SECRETPOTION/CARD KEY are usable now.
+
+### The Ecruteak route, written down so the next session does not re-derive it
+
+- **Morty is absent** until the Burned Tower is done
+  (`MORTY, the GYM LEADER, is absent.`).
+- The **only** working hole down is BURNED_TOWER_1F **(10,9)**; every other
+  B1F warp in that map file is commented *"inaccessible, left over from
+  G/S"*. The rival battle is the `coord_event` at **(11,9)**
+  (maps/BurnedTower1F.asm:298), i.e. the tile beside the hole.
+- His team: GASTLY L21 / HAUNTER L21 / GENGAR L25 / HAUNTER L23, all with
+  **HYPNOSIS**. Bring AWAKENINGs (5 are in the bag) and a sleep branch in
+  the policy -- the rival's HAUNTER put PANIC to sleep and that alone lost
+  the fight.
+- **ECRUTEAK_GYM is a hole maze**: 33 warps, 31 of them interior floor
+  traps returning `warp_id 3`. `goto` ping-pongs on the door
+  (`map seam crossed 3x`). It needs a floor-only BFS *plus* knowledge of
+  which pads are the intended route.
+- **Burned Tower B1F slides**: one `step_dir` can move you five cells
+  ((10,9) -> (10,4)). Plan one step at a time there, re-reading position.
+- After any battle, `step_dir` returns `blocked` in every direction for a
+  while; `close_menus()` + `settle()` clears it.
+
+### What is genuinely blocked (needs harness work, not more play)
+
+- Levelling the bench: exp is split with the L32 carry, and
+  **`party_swap(0, n)` fails** (`cursor never reached first row 0`), so the
+  documented "trainee must be sole participant" recipe cannot be executed.
+- Naming caught/hatched mons: the new-species Pokédex page still eats the
+  nickname prompt, and the Goldenrod Name Rater flow does not open the
+  party list.
+- Hole/slide-tile maps (Ecruteak Gym, Burned Tower B1F, Goldenrod Gym) have
+  no nav model.
+
+Details and log lines: `FUCK_I_MESSED_UP.md` #33-#38 and the fix table
+above them.
+
+## session claude pt2 - push for the ELITE FOUR: got to 3 badges, NOT the E4 (Aug 26 2026)
+
+**Objective was the Elite Four. It was not reached.** Honest stopping
+point: **3 badges (ZEPHYR / HIVE / PLAIN)**, PANIC the QUILAVA **L29**,
+HM01 CUT + HM05 FLASH + SQUIRTBOTTLE in hand, standing in the Goldenrod
+Pokécenter. Five badges, Victory Road and four HM quests still to go.
+
+`saves/claude.state` == `saves/claude-3badges-goldenrod.state`.
+Milestones added this leg: `claude-togepi-egg`, `claude-union-cave`,
+`claude-azalea`, `claude-well-cleared`, `claude-hive-badge`, `claude-cut`,
+`claude-goldenrod`, `claude-pre-whitney`, `claude-r34-trainers`,
+`claude-plain-badge`, `claude-squirtbottle`,
+`claude-3badges-goldenrod`.
+
+Party: PANIC (QUILAVA L29, CUT/LEER/QUICK ATTACK/EMBER), BELLSPROUT L5,
+TOGEPI L5 (hatched on Route 34), GEODUDE L6. **The bench is dead weight
+and that is the single reason the run stalled** -- see below.
+
+### What got done
+
+1. Route 32 is **gated on the Togepi Egg** (`Route32CooltrainerMStopsYouScene`,
+   maps/Route32.asm:87). The aide is in the **Violet Pokécenter**
+   (VioletPokecenter1F.asm:30), NOT Elm's lab -- I walked to New Bark and
+   back before grepping the event.
+2. Union Cave -> Slowpoke Well (all Rocket grunts) -> Kurt -> **Bugsy /
+   HIVE badge** (Ember one-shots the whole gym).
+3. Ilex Forest: herded the Farfetch'd via `wFarfetchdPosition` (read the
+   var, then approach the exact cell with the exact facing -- see the
+   position/facing table in maps/IlexForest.asm:20-330) and took **HM01
+   CUT**. The cut tree out of the forest is the only one on the map:
+   `[(x,y) for ... grid[y][x] == d._CUT_TREE_BYTE]` -> **(8,25)**.
+4. Goldenrod: Dept Store 2F for Super Potions, **Whitney / PLAIN badge**
+   (see the tactic below), then the SQUIRTBOTTLE chain (meet Floria at
+   Route 36 (33,12) FIRST, then both flower-shop NPCs).
+5. Sudowoodo: watered it (key items need the manual pack flow, `use_item`
+   cannot see them) and **lost** -- PANIC fainted at Sudowoodo 11/58.
+
+### The Whitney tactic that worked (write this down)
+
+Three whiteouts before it. Miltank walls a lone Quilava because CUT
+(physical, normal) does 1-2 damage to it and Rollout ramps. What won:
+**EMBER every single turn, no items at all.** Ember did 22-26 a hit:
+Clefairy in 2, Miltank in 3, PANIC survived on 5/73. Items are a trap here
+-- every heal is a free Rollout turn, and in this build three consecutive
+SUPER POTIONs restored **0 HP** (bug #24).
+
+Then: **leave the gym and re-enter** before talking to her, or she just
+cries at you forever (`SCENE_GOLDENRODGYM_WHITNEY_STOPS_CRYING`).
+
+### Why it stopped, and what the next session must fix FIRST
+
+No team. Every attempt to build one hit a harness wall:
+
+- **`train()` is unusable (P0).** With an egg in the party it heal-loops
+  forever (an egg reads 0 HP and reads as fainted); with the egg hatched it
+  ran **60 battles for zero bench exp**, because it rotates in mons that
+  cannot KO the local encounters. ~55 wasted Pokécenter round trips.
+- **A crashed policy is reported as "declined" and the harness then picks
+  SLOT 0 (P0)** -- for my party that is GROWL/LEER/DEFENSE CURL. Two
+  whiteouts came from this.
+- **`outlook()['moves']` is not in battle-slot order (P0)** -- indexing
+  `('attack', i)` off it picked LEER as "best move". Score by NAME and map
+  back to `battle_frame()['moves']`.
+- **`use_item` cannot see the KEY ITEM pocket** -- SQUIRTBOTTLE,
+  SECRETPOTION, CARD KEY all unusable through the API.
+- **`catch`/hatch nickname prompts are declined** whenever a new-species
+  Pokédex page opens first, so only the starter carries a persona name.
+
+Full details, with the log lines, in `FUCK_I_MESSED_UP.md` #20-#32.
+
+**Concrete plan for the next session** (in order):
+1. Fix `train`: skip egg slots in the heal check; refuse to rotate a mon
+   whose moves cannot damage the map's encounter table; stop healing when
+   the party is already full.
+2. Make policy exceptions loud, and make the fallback "best damaging move".
+3. Add key-item support to `bag_item_index`/`use_item`.
+4. THEN build a team: the Violet City house trades a **BELLSPROUT for an
+   ONIX** (I have the spare Bellsprout) -- an on-level Rock/Ground wall is
+   exactly what this run lacks, and Route 46/Union Cave Geodude/Onix can be
+   levelled once `train` works.
+5. Sudowoodo again (Ember is resisted -- use CUT or a levelled second mon),
+   then Ecruteak: Morty.
+
+## session claude - NEW RUN from a fresh boot: CLAUDE + PANIC, Zephyr Badge (Aug 26 2026)
+
+A brand-new game, played to badge 1, plus five harness fixes found by
+playing it. Persona: `persona_claude.md` (CLAUDE, Cyndaquil -> PANIC,
+reads map data before moving, decides turns from `outlook()`). Every
+mistake and every harness wart is written up in **`FUCK_I_MESSED_UP.md`**
+(19 entries) -- read that before repeating this route.
+
+### Where the run stands
+
+`saves/claude.state` (working) == `saves/claude-zephyr-badge.state`:
+**VIOLET_GYM (5,2), ZEPHYR badge, PANIC the QUILAVA L16**, plus an
+unnamed BELLSPROUT L5 on the bench. Bag: 7 POTION, PARLYZ HEAL, 1 POKE
+BALL, TM31, HM05 FLASH. Money ~1400.
+
+Milestones (all forked from this run, `saves/`, none overwritten):
+`claude-starter` -> `claude-egg` -> `claude-pre-rival` ->
+`claude-rival-beaten` -> `claude-egg-delivered` -> `claude-r29-tutorial` ->
+`claude-violet-arrived` -> `claude-violet-shopped` -> `claude-tower-1f` ->
+`claude-tower-3f` -> `claude-tower-cleared` -> `claude-pre-falkner` ->
+`claude-zephyr-badge`.
+
+**Next objective:** Route 32 -> Union Cave -> Azalea. Get a real second
+team member first (Geodude on Route 46 or Onix in Union Cave -- the
+Bellsprout is a passenger), and note only ONE Poké Ball is left, so buy
+balls in Violet before leaving.
+
+### Harness fixes landed in `trek.py` (unit lane still 593 green)
+
+1. **`Driver(state, fresh=True)`** now exists. `AGENTS.md` documented it
+   and `scripts/newgame_bedroom.py` called it, but the constructor only
+   took `state_path` -- a new game was impossible. `fresh=True` skips the
+   savestate load. (That script also wants a `live=` kwarg and `d.live`,
+   neither of which exists in this checkout; I did NOT rebuild the
+   LiveFeed, I wrote `scripts/newgame_claude.py` without it. `crystalagent/
+   live.py`, `scripts/newgame_bedroom.py` and `tests/unit/test_live_feed.py`
+   are all UNTRACKED and the two live-feed tests are red on a clean tree.)
+2. **Gift Pokémon can be named.** `flush_dialog` always confirmed a
+   naming keyboard with the empty/default name, and `_pending_nickname`
+   was only read by `fight`/`catch` -- so Elm's starter came out named
+   "CYNDAQUIL" twice. New `_take_pending_nickname()` is used by both flush
+   paths; arm `d._pending_nickname = "PANIC"` before triggering the gift.
+   Verified live: `{'species':'CYNDAQUIL','nick':'PANIC'}`.
+3. **`type_name` waits for the keyboard to finish drawing.** The naming
+   window slides in; typing into the animation dropped every press and
+   `wNamingScreenCurNameLength` read back 38.
+4. **No more phantom naming keyboards.** `_naming_sig()` deltas alone were
+   read as "a keyboard opened" on every cutscene and evolution (the bytes
+   are a union), and `dismiss_keyboard`'s START+A then landed in the
+   OVERWORLD -- opening the START menu and the Pokédex mid-scene, after
+   which everything read "blocked". Now gated by
+   `_naming_screen_plausible()` (type < 8, lengths <= 10) AND
+   `_naming_opened()`, which waits ~80 frames for a real DEL/END render
+   before confirming. The whole trek to Violet ran with zero spurious
+   confirms afterwards.
+
+### Play notes worth keeping
+
+- `travel` is excellent across routes and useless indoors: it dies on
+  `coord_event` cells, which nav marks sealed (`ELMS_LAB` rows 8,
+  `ROUTE_29` x=53 catch tutorial). Step those by hand.
+- Every door this session needed `goto` the adjacent cell +
+  `step_hold(dir)`. `take_warp` mis-sides south-wall doors and strands.
+- `mart_buy` cannot answer BUY/SELL/QUIT; shop by hand and verify from
+  the bag, not from the `×NN` glyph (asked for 6 Potions, got 7).
+- Sprout Tower's floors are three disconnected regions per floor: 3F is
+  reached from 2F's SOUTH staircase `(10,14)`, which is reached from 1F's
+  `(2,6)`, which is reached from 2F's `(17,3)`. The middle 1F staircase
+  `(6,4)` only serves the north half.
+- `d.tactics.recommend` drove every turn (Ember at x2 on the tower's
+  Bellsprouts, one-shotting Falkner's birds). Sole participant the whole
+  way: Cyndaquil L5 -> Quilava L16 with no grinding detours.
+
 ## session ox-alpha-integration - emulator-in-the-loop test lane `tests/integration/` (Aug 26 2026)
 
 Harness-only: no game progress, no milestone saved; `claude_saves/`

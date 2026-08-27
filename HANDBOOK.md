@@ -74,8 +74,22 @@ d.last_goto_reason        # None on success; see failure table below
 - `d.map_view(map_name=None)` — ASCII reachable-region view, global
   coordinates in the rulers. Glyphs: `@` you, `.` floor, `%` grass,
   `~` water, `O` warp, `^` ledge, `=` ice, `x` pit, `!` live-blocked,
-  `N` NPC, `#` wall, space unreachable. Quote coordinates straight back
-  into `goto`/`talk_to`.
+  `N` NPC, `#` wall, `,` walkable but in a component you CANNOT reach
+  from here, `o` a warp into such a component, space wall/off-map. Quote
+  coordinates straight back into `goto`/`talk_to`.
+  Every unreachable component also gets an `offregion:` line under the
+  grid: cell count, bounding box, and the warps (or the `changeblock`)
+  that open it. Blanks are walls — a walkable wing is never invisible
+  (that bug hid Rocket base B3F's western half; `FUCK_I_MESSED_UP.md` #51).
+- `d.grid_drift()` / `d.sync_grid()` — the decoded grid is static
+  `.blk` data; these compare it against the LIVE block map in WRAM
+  (`d.live_grid()`) and push any difference into nav so pathing sees it.
+  Only `changeblock` cells can drift (`nav.conditional()` lists them);
+  audited 0 drift across 53 savestates. `map_view()` prints a `DRIFT:`
+  line when they disagree.
+- `./crystal --state S screen --png /tmp/x.png` — the REAL framebuffer.
+  When the question is "what am I looking at", read that image; the text
+  screen decode is for dialog and menus, not terrain.
 - `d.status()` — one-line summary for logs.
 
 ## Failure signatures → first response
