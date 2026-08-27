@@ -115,10 +115,15 @@ from the leg's own arguments.
 | Teach a TM/HM to a NAMED mon | `d.teach_tm('TM23', 'GATOR', forget='BITE')` (tag or move name; nickname or species) — refuses BEFORE pressing anything with `d.last_tm_reason` in `unknown-tm`/`not-in-bag`/`cannot-learn`/`already-knows`, off the species' own `tmhm` learnset and the live `wTMsHMs` counts; `d.teach_hm('H3','SURF')` still teaches the first ABLE mon |
 | Level-up learns | `d.learn_policy = f` to decide them yourself; the DEFAULT (`d.default_learn_policy`) never trades a damaging move for a status move, ranks by ROM base power, and never names an HM move |
 | Why did that primitive return False? | `d.last_goto_reason` (nav), `d.last_step_reason` (one step / no decoded grid), `d.last_item_reason` (use_item), `d.last_menu_reason` (pack/pocket/party/START), `d.last_tm_reason` (teach_tm), `d.menu.last_reason` (Menus), `d.last_money_delta` (money moved during movement — it never should) |
-| Menus anywhere | `d.menu.select_label('SAVE')` (instance method, cursor-glyph driven), `select_abs(i)` (scrolling lists), `wait_for_label('USE')`; open YES/NO box → `resolve_choice('YES')` |
+| Menus anywhere | `d.menu.select_label('SAVE')` (instance method, cursor-glyph driven), `select_abs(i)` (scrolling lists), `wait_for_label('USE')`; open YES/NO box → `resolve_choice('YES')`. A **PC box/party list has no glyph at all**: `d.menu.pc_info()` reads the selected mon off the info panel (species row 14, level row 12) and `select_pc_mon(name)` navigates by it |
 | Read any game variable | `crystal sym <pattern>` then `crystal read <symbol> -n N [--text]` |
 | What have I not collected? | `d.missables()` (key items + HMs, live) / `d.missables('all')` / `crystal missables [--all]` / the `missing:` fragment on `d.status()` — each row cites `maps/Foo.asm:NNN` and carries the giver's coordinates. HM02 FLY sat in Cianwood for a whole playthrough because nothing surfaced this |
 | Can I actually use a field move? | `d.field_moves()` → `{'CUT': 'GATOR', 'FLY': None, ...}` — per HM, which party member knows it. "HM in the bag" is not "I can use it" |
+| Use a WATER HM (waterfall/whirlpool) | `d.waterfall()` / `d.whirlpool()` / `d.use_field_move('WATERFALL', facing='U')` — faces the tile and presses **A** on the overworld, never the party menu (gotcha 18); refuses before pressing with `d.last_field_reason` in `no-knower`/`no-badge`/`wrong-tile`, and proves it worked by the position or the live grid |
+| Deposit / withdraw at a PC | `d.deposit('TOGEPI')`, `d.withdraw('PANIC')`, `d.box_list()` — one mon per call, targeted by WRAM index, verified against `observe()['party']` and the SRAM box; refuses before pressing with `d.last_pc_reason` in `no-such-mon`/`last-mon`/`box-full`/`party-full`/`not-in-box`/`holds-mail`. `find_tiles('pc')` locates the terminal ($93 COLL_PC). Never A-loop these lists (gotcha 18) |
+| Where does this map keep its nurse/clerk? | `d.sprite_cell('SPRITE_NURSE')` / `d.map_objects()` — the map's own `object_event`s, so `heal` works at Indigo Plateau (nurse (3,7)) as well as a Johto town (3,1) |
+| Which coord_event cells is nav refusing? | `d.blocked_cells()` (all maps) / `d.blocked_cells('INDIGO_PLATEAU_POKECENTER_1F')` — recomputed live; a cell whose script's own `checkevent`/`checkflag` guard chain sends it to a do-nothing label is NOT blocked |
+| Read an engine flag | `d.engine_flag('ENGINE_INDIGO_PLATEAU_RIVAL_FIGHT')` — index from `constants/engine_flags.asm`, address+mask from the ROM's own `EngineFlags` table (`d._event_flag` does the same for `EVENT_*`) |
 | What is at (x,y)? What warps exist? | `d.tile_at(x,y)`, `d.tiles_in(x0,y0,x1,y1)`, `d.find_tiles('warp'\|'water'\|'grass'\|'ledge'\|'blocked'\|'npc')`, `d.exits()` → warps AND edge connections with destinations. **These are the decision interface; `map_view()` is art for humans** (gotcha 11) |
 |Does the decoded map match the ENGINE's map?|`d.grid_drift()` → `[(x,y,static,live), ...]` from `d.live_grid()` (the block map in WRAM). Empty is normal — audited 0 drift over 53 savestates. `d.sync_grid()` pushes any drift into nav so PATHING sees it; only `changeblock` cells can drift and `nav.conditional()` names them in advance|
 |What is walkable that I cannot reach from here?|The `,`/`o` glyphs and the `offregion:` lines of `d.map_view()` — cell count, bounding box, and the warps or changeblock that open each unreachable component. A blank is wall, never a hidden wing (gotcha 11)|
@@ -205,6 +210,37 @@ ROM's `Moves` table via `pokecrystal.sym`. Don't hardcode game data.
 17. **A field move that fails leaves its menu open** ("Can't use that
     here" indoors), and an open menu eats all movement input (gotcha 7).
     Every field-move helper must `close_menus()` on every failure path.
+18. **The PC lists RE-ARM, and they have no cursor glyph.** Bill's PC
+    draws its selection with an OAM sprite (`BillsPC_UpdateSelectionCursor`),
+    so `select_label`/`cursor_row` are blind there, and a completed
+    deposit jumps the jumptable back to `.Init` with the cursor reset --
+    the list comes straight back up on the NEXT party member. A 14-press
+    "A until the dialog stops changing" loop therefore deposited FIVE of
+    six party members, including the run's only real fighter
+    (`FUCK_I_MESSED_UP.md` #72/#73). Use `d.deposit(nick)` /
+    `d.withdraw(nick)`: one mon per call, WRAM-indexed, verified against
+    `observe()['party']`. Same shape as gotcha 13 -- **any menu that
+    re-arms itself turns a blind A loop into a repeat-action loop**, and
+    the mart's "N ITEM(S) will be ¥NNNN." YES/NO box is the other end of
+    it (nothing answered it, so purchases silently never happened).
+19. **Water HMs work from the A button, not the party menu.** The
+    overworld A handler dispatches on the tile you FACE
+    (`engine/overworld/events.asm:1085-1125` → `TryWhirlpoolOW` /
+    `TryWaterfallOW`); the menu path asks `CheckMapCanWaterfall` from
+    outside the overworld loop and answers "Can't use that here" on a
+    perfectly good tile. Live twice (#70 whirlpool, #75 waterfall). Use
+    `d.waterfall()` / `d.whirlpool()` / `d.use_field_move(move)`.
+    `wFacingTileID` read from a savestate is only valid for a few frames
+    after an A press; `wPlayerDirection` is stable (`d.facing()`).
+20. **A scene block is only real while its script's guards say so.**
+    `nav.blocked` is recomputed from the map source every goto, so a
+    coord_event whose scene token still matches came back forever --
+    (16,4)/(17,4) at `INDIGO_PLATEAU_POKECENTER_1F` sever the only
+    corridor to the League door and had to be cleared by hand three
+    times. The script's own leading `checkevent`/`checkflag` +
+    `iftrue/iffalse` chain is now evaluated live (`d.blocked_cells()`
+    shows the result), so a spent ambush stops blocking. A guard-less
+    scene (Route 32's push-back) still blocks.
 
 ## Session protocol
 
@@ -218,8 +254,10 @@ ROM's `Moves` table via `pokecrystal.sym`. Don't hardcode game data.
 7. before yielding harness changes: `.venv/bin/python -m pytest tests`
    (unit lane, fast) and, when navigation/battle/map-interface behavior
    changed, `.venv/bin/python -m pytest -m integration` (drives the
-   emulator on FORKED milestone savestates; never mutates
-   `claude_saves/`).
+   emulator on FORKED milestone savestates; never mutates the milestone
+   dir). That lane finds its milestones in `claude_saves/`, then
+   `backup/claude_saves/`, then `$CRYSTAL_MILESTONES` -- it used to ERROR
+   16 times on a missing path and got read as "cannot run here".
 ```
 
 Pre-flight before any long journey (the FLY lesson): `d.field_moves()` —

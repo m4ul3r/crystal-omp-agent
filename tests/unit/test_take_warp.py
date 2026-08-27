@@ -41,7 +41,10 @@ class FakeEmu:
 
 class World:
     """A one-warp map: the warp at `cell` fires only when a step ENTERS
-    it, exactly like the engine."""
+    it, exactly like the engine. `warps` is the map's own warp table in
+    def_warp_events order -- warp ids are 1-based positions in it."""
+
+    warps = {}
 
     def __init__(self, cell=(3, 41), start=None, map_name="ILEX_FOREST"):
         self.cell = cell
@@ -74,6 +77,11 @@ def warp_driver(world):
     d.press = lambda seq: None
     d.goto = lambda x, y, label="", **kw: False
     d.last_goto_reason = "unreachable"
+
+    class Nav:
+        warps = dict(getattr(world, "warps", {}) or {})
+    d.nav = Nav()
+    d._map_const = lambda: world.map
     return d
 
 
@@ -100,7 +108,14 @@ def test_entering_from_an_adjacent_cell_needs_no_step_off():
 class InternalLadder(World):
     """Victory Road's floors live in ONE map joined by same-map
     warp_events, so entering (13,31) lands on (13,17) with the map name
-    unchanged. take_warp used to call that a failure."""
+    unchanged. take_warp used to call that a failure.
+
+    The warp table is the map's own, in def_warp_events order:
+    `warp_event 13, 31, VICTORY_ROAD, 3` lands on the THIRD entry."""
+
+    warps = {"VICTORY_ROAD": {(9, 67): ("VICTORY_ROAD_GATE", 5),
+                              (13, 31): ("VICTORY_ROAD", 3),
+                              (13, 17): ("VICTORY_ROAD", 2)}}
 
     def __init__(self):
         super().__init__(cell=(13, 31), start=(13, 30),
@@ -127,23 +142,39 @@ def test_same_map_ladder_counts_as_a_fired_warp():
     assert d.last_warp_reason is None
 
 
-def test_a_two_cell_shuffle_is_not_a_fired_warp():
-    """Anchoring the same-map test on the TARGET made a walk that merely
-    stepped twice look like a teleport; it must be measured from where we
-    stood when we entered."""
+def test_same_map_landing_comes_from_the_maps_own_warp_table():
+    """Warp ids are 1-based positions in def_warp_events, so the pairing
+    is data, not a guess."""
+    d = warp_driver(InternalLadder())
+    assert d._same_map_landing((13, 31)) == (13, 17)
+    assert d._same_map_landing((13, 17)) == (13, 31)
+    assert d._same_map_landing((9, 67)) is None      # leaves the map
+    assert d._same_map_landing((0, 0)) is None       # not a warp
+
+
+def test_only_the_paired_cell_counts_as_a_same_map_warp():
+    """A DISTANCE cannot tell a ladder from a walk. "moved more than 3
+    cells" reported success for Kurt's house exit (3,7), where the tap
+    fallback walks west to (0,7) on the same map with no warp fired --
+    take_warp answered True with the player still indoors
+    (tests/integration/test_take_warp_entry.py)."""
     fired = Driver._warp_fired
-    # real ladder: entered (13,31) from (13,30), landed fourteen rows away
+    ladder = (13, 17)
+    # real ladder: entered (13,31) from (13,30), landed on the paired cell
     assert fired("VICTORY_ROAD", (13, 30), (13, 31),
-                 "VICTORY_ROAD", (13, 17)) is True
+                 "VICTORY_ROAD", (13, 17), ladder) is True
+    # arrival drifts up to ~2 cells past the modeled landing (gotcha 14)
+    assert fired("VICTORY_ROAD", (13, 30), (13, 31),
+                 "VICTORY_ROAD", (13, 19), ladder) is True
     # a walk that shuffled two cells and never entered the warp
     assert fired("VICTORY_ROAD", (13, 17), (13, 31),
-                 "VICTORY_ROAD", (15, 17)) is False
+                 "VICTORY_ROAD", (15, 17), ladder) is False
+    # the Kurt's house false positive: 4 cells away, same map, no pairing
+    assert fired("KURTS_HOUSE", (4, 7), (3, 7),
+                 "KURTS_HOUSE", (0, 7), None) is False
     # standing on the tile is never entering it
     assert fired("VICTORY_ROAD", (13, 30), (13, 31),
-                 "VICTORY_ROAD", (13, 31)) is False
-    # warp arrival drifts up to ~2 cells past the landing (gotcha 14)
-    assert fired("VICTORY_ROAD", (13, 30), (13, 31),
-                 "VICTORY_ROAD", (13, 33)) is False
+                 "VICTORY_ROAD", (13, 31), ladder) is False
     # a different map is always a fired warp
     assert fired("ILEX_FOREST", (3, 40), (3, 41),
                  "ILEX_FOREST_AZALEA_GATE", (3, 41)) is True

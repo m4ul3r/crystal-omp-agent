@@ -98,6 +98,37 @@ def _object_events(lines):
     return out
 
 
+def parse_map_objects(path):
+    """Every ``object_event`` in one ``maps/<Camel>.asm``, in declaration
+    order (which is the map's own object_const_def order):
+
+        [{'x': 3, 'y': 7, 'sprite': 'SPRITE_NURSE',
+          'movement': 'SPRITEMOVEDATA_STANDING_DOWN',
+          'script': 'IndigoPlateauPokecenter1FNurseScript', 'event': None}]
+
+    Coordinates are walk cells, the same space as `state`'s x,y. This is
+    how a helper finds the NPC it needs to talk to instead of assuming a
+    layout: heal_pokecenter assumed the Johto counter (3,3) and could not
+    heal at INDIGO_PLATEAU_POKECENTER_1F, whose nurse stands at (3,7)
+    behind a row-8 counter (FUCK_I_MESSED_UP.md #78)."""
+    out = []
+    for line in Path(path).read_text(errors="replace").splitlines():
+        m = _OBJECT.match(line)
+        if not m:
+            continue
+        fields = [f.strip() for f in m.group(1).split(",")]
+        if len(fields) < 13:
+            continue
+        try:
+            x, y = int(fields[0]), int(fields[1])
+        except ValueError:
+            continue
+        out.append({"x": x, "y": y, "sprite": fields[2],
+                    "movement": fields[3], "script": fields[-2],
+                    "event": None if fields[-1] == "-1" else fields[-1]})
+    return out
+
+
 def _guarding_event(lines, idx, top_label):
     """The EVENT_GOT_* flag guarding the give at `lines[idx]`.
 

@@ -1,3 +1,114 @@
+## session omp-harness - pt11/pt12 grievances closed (Aug 27 2026)
+
+**Harness session, no gameplay.** Touched no working savestate: every fix
+was reproduced on a FORK of the checkpoint named, fixed, and re-run on
+the same fork. `saves/omp-*.state` are scratch forks, not milestones.
+Tests: **691 unit passed** (629 + 62 new), **16 integration passed** --
+that lane runs in this checkout now (it was looking for `claude_saves/`,
+which lives under `backup/` here; journal #53).
+
+Fixed, each live-verified on the state in brackets (details:
+`FUCK_I_MESSED_UP.md` Part 13, #83-#91):
+
+1. **PC/box API** (#72, #73, #45): `d.deposit(nick)`, `d.withdraw(nick)`,
+   `d.box_list()`. One mon per call, targeted by
+   `wBillsPC_CursorPosition + wBillsPC_ScrollPosition`, judged from
+   `observe()['party']` + the SRAM box; raises if two mons ever move.
+   Box reads come from `sBox` in SRAM bank 1 -- `emu.read` could not
+   reach SRAM banks at all before. `Menus.pc_info()`/`select_pc_mon()`
+   read the glyph-less list off its info panel.
+   [claude-indigo-plateau: GEODUDE deposited, GROWLITHE withdrawn]
+2. **`teach_tm` drives the TM/HM list** (#68, #71): the YES/NO teach
+   prompt eats its first A, and the old wait only ticked; the party-list
+   predicate also required a CANCEL row that a six-mon party hides.
+   [claude-goldeen: GOLDEEN forgot PECK, learned WATERFALL]
+3. **Water HMs via the overworld A press** (#70, #75): `d.waterfall()`,
+   `d.whirlpool()`, `d.use_field_move(move, facing=)`.
+   [claude-whirlpool: DRAGONS_DEN_B1F (10,20) whirlpool -> water]
+4. **`heal_pokecenter` finds the nurse** (#78) from the map's own
+   `object_event`s (`d.sprite_cell('SPRITE_NURSE')`).
+   [claude-indigo-plateau: nurse (3,7), party healed, single pass]
+5. **Scene blocks expire** (pt12 stale-marks grievance): a coord_event's
+   own `checkevent`/`checkflag` guard chain is evaluated live, so the
+   spent Indigo rival ambush stops severing the League corridor.
+   `d.blocked_cells()` shows what nav refuses; `d.engine_flag()` reads
+   `ENGINE_*` off the ROM's own table. Route 32 still blocks.
+   [claude-indigo-plateau: goto(17,4) walks it]
+6. **`mart_buy`** (pt12 mart grievance): nothing chose BUY on the
+   clerk's menu, and nothing answered the "N ITEM(S) will be ¥NNNN."
+   YES/NO box -- so purchases silently never happened while `bought` was
+   set anyway. Exit now refuses to leave a quantity picker open.
+   [claude-indigo-plateau: FULL RESTORE x6, bag 0->6, ¥29370->¥11370]
+7. **`fight(resume=4)`** (#82): a spent frame budget re-enters `play()`
+   instead of reporting UNRESOLVED; `stuck`/`stalled`/`wedged` never do.
+8. **take_warp false positive** (regression from #77, found by the
+   integration lane the moment it could run): "same map, moved > 3
+   cells" called a 4-cell WALK a fired warp at Kurt's house exit. A
+   same-map warp must land on its PAIRED cell, which is data (warp ids
+   are positions in `def_warp_events`).
+
+New registry actions (serve/autopilot): `deposit`, `withdraw`,
+`box_list`, `use_field_move`, `teach_tm`.
+
+### Next objective
+Unchanged for the CLAUDE timeline (Kanto; see pt12). Harness-wise the
+open items from pt11/pt12 are the ones the journal marks `[mine]` --
+policy discipline, not code -- plus `train()` (#20) and the Ecruteak/
+Goldenrod-underground map-data holes, which nothing here touched.
+
+## session tally - ZEPHYR BADGE, 1/8 (Aug 27 2026)
+
+Fresh TALLY run launched (contract: `persona_TALLY.md`). Working state
+`saves/tally.state` == `saves/tally-zephyr-badge.state`
+(VIOLET_POKECENTER_1F, fully healed). Milestones: `tally-chikorita`,
+`tally-pre-falkner(2)`, `tally-zephyr-badge`. Ledger: ¥2,557, 4 Poké
+Balls, TM31 untaught, ¥0 shop spend. Party: **GEODUDE L14 (unnamed,
+TACKLE/DEFENSE CURL/ROCK THROW)**, **LEDGER CHIKORITA L11
+(TACKLE/GROWL/RAZOR LEAF)**.
+
+- **Starter trap:** lab balls are Cyndaquil (6,3), **Totodile (7,3)**,
+  Chikorita (8,3) per `maps/ElmsLab.asm:1409-1411`. First attempt took
+  the middle ball and named him LEDGER -- had to reload the bedroom
+  checkpoint and redo the whole leg to honor the persona contract.
+  NEVER trust ball position; read `ElmsLab.asm` first.
+- **POKEPIC wedge (confirms claude2):** A on a lab ball opens the
+  POKEPIC viewer; the dialog only flows after raw `d.emu.py` presses.
+  A tap ALSO needs the player actually FACING the ball -- a `goto`
+  approach can leave you facing sideways and the A press does nothing.
+- **Wanderer on ROUTE_29 (53,8)/(53,9):** a roaming NPC parks in the
+  only westbound corridor near New Bark; nav live-blocks those cells
+  and `travel` fails with no-path. The NPC eventually triggered its own
+  dialog ("I've seen you a couple times"), repositioned us, and travel
+  worked again. Don't clear these marks; wait for or talk to the NPC.
+- **Falkner wiped attempt 1** (entered at 10/29 HP with a TACKLE-only
+  Geodude -- persona violation, no heal mid-gym). Fix: DEBIT to L11
+  for ROCK THROW (`evos_attacks.asm:985`), full heal, rematch swept it.
+  Attempt 2: GEODUDE L13 led, LEDGER anchored, ZEPHYR BADGE.
+- **Grind economics:** Route 30 grass box (3-14, 40-46) + `d.pace(25)`
+  + fight-on-stop leveled both mons 9->14 in minutes. `pace` returns
+  0 steps when the player is OUTSIDE the box -- re-anchor with `goto`
+  every chunk. `party_swap(a, b)` is 1-BASED.
+
+### Next objective (persona: HIVE badge)
+1. Route 31 -> Route 32 -> Azalea, SPROUT TOWER en route (FLASH giver
+   at `SPROUT_TOWER_3F (10,2)` per `crystal missables`).
+2. Slot 3 declared: catch at Azalea (persona table: CREDIT) -- species
+   TBD from local wilds before entering grass.
+3. HIVE BADGE: Bugsy. Level floor = ace-1; verify Bugsy's party in
+   `parties.asm` before setting the floor. Fork `tally-pre-bugsy`.
+
+## session tally - FRESH RUN as persona TALLY (Aug 27 2026)
+
+Claiming: a brand-new timeline as **TALLY** (contract in
+`persona_TALLY.md`) -- Chikorita starter named LEDGER, team cap 4,
+Pokecenter-only heals, level-floor grinding, forks before every gym.
+Working state: `saves/tally.state` (+ `.meta`). Touches no existing
+savestate; the CLAUDE champion timeline stays as-is.
+
+Plan: `scripts/newgame_bedroom.py --state saves/tally.state --name TALLY`,
+then Mom's clock chain, Elm's errand, Chikorita from the lab, Route 29 to
+the L12 floor, Zephyr Badge.
+
 ## session claude pt12 - CHAMPION. Elite Four cleared, Hall of Fame registered (Aug 27 2026)
 
 **The run is won.** CLAUDE is Johto Champion: 8/8 badges, Lance beaten,

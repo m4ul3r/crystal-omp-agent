@@ -66,6 +66,13 @@ ACTIONS = {
         Action("press", required=("seq",)),
         Action("use_cut", required=("tree_x", "tree_y"),
                optional=("label", "forget_move"), need_battle=False),
+        Action("deposit", required=("mon",), need_battle=False),
+        Action("withdraw", required=("mon",), need_battle=False),
+        Action("box_list", need_battle=False),
+        Action("use_field_move", required=("move",), optional=("facing",),
+               need_battle=False),
+        Action("teach_tm", required=("tm", "mon"), optional=("forget",),
+               need_battle=False),
     )
 }
 

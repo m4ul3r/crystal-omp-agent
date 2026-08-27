@@ -32,7 +32,7 @@ from crystalagent.nav import WATER as _NAV_WATER
 from crystalagent.nav import ICE as _NAV_ICE
 from crystalagent.schemas import validate_observe, validate_route
 from crystalagent.state import (game_state, status_line, live_sprites,
-                                SPRITE_WANDERERS)
+                                box_state, SPRITE_WANDERERS)
 from crystalagent.symfile import Symbols
 
 # -- model-facing decision vocabulary (wren pt6) ---------------------------
@@ -209,6 +209,8 @@ def _tile_kind(b):
         return "whirlpool"
     if b == 0x33:                       # COLL_WATERFALL
         return "waterfall"
+    if b == 0x93:                       # COLL_PC: the box terminal you
+        return "pc"                     # face and press A on (journal #45)
     if b == 0x27 or 0xC0 <= b <= 0xC7:  # COLL_BUOY + water side walls
         return "buoy"
     if b in _NAV_WATER:
@@ -524,16 +526,23 @@ def _shared_nav():
 
 _DISRUPTIVE_KEYWORDS = ("applymovement", "follow")
 _script_body_cache = {}
+_script_lines_cache = {}
+# The leading guard chain of a coord_event script: `checkevent X` /
+# `checkflag X` immediately followed by `iftrue LABEL` / `iffalse LABEL`.
+# Those pairs run BEFORE anything happens, so if the live flag sends the
+# script to a label that does nothing, the trigger is SPENT and its cell
+# is walkable -- which is the whole difference between "the rival ambush
+# is armed" and "I already fought him".
+_GUARD_CHECK = re.compile(r"^(checkevent|checkflag)\s+([A-Z0-9_]+)\s*$")
+_GUARD_JUMP = re.compile(r"^(iftrue|iffalse)\s+([A-Za-z_][\w.]*)\s*$")
 
 
-def script_is_disruptive(repo, camel_file, script_label):
-    """True if the coord_event's script moves the player or makes an NPC
-    follow them (applymovement/follow) -- i.e. it would physically undo
-    progress, like Route 32's Cooltrainer push-back. Pure-dialog triggers
-    (the Slowpoke Tail pitch) are left routable: walk/goto already flush
-    textboxes."""
+def _script_body(repo, camel_file, script_label):
+    """The instruction lines of one script label in maps/<Camel>.asm,
+    comments and blanks dropped, stopping at the next label. None when
+    the file or the label is not there."""
     key = (camel_file, script_label)
-    if key not in _script_body_cache:
+    if key not in _script_lines_cache:
         body = None
         p = Path(repo, "maps", f"{camel_file}.asm")
         try:
@@ -555,11 +564,56 @@ def script_is_disruptive(repo, camel_file, script_label):
                     body.append(s)
         except OSError:
             pass
+        _script_lines_cache[key] = body
+    return _script_lines_cache[key]
+
+
+def script_is_disruptive(repo, camel_file, script_label):
+    """True if the coord_event's script moves the player or makes an NPC
+    follow them (applymovement/follow) -- i.e. it would physically undo
+    progress, like Route 32's Cooltrainer push-back. Pure-dialog triggers
+    (the Slowpoke Tail pitch) are left routable: walk/goto already flush
+    textboxes."""
+    key = (camel_file, script_label)
+    if key not in _script_body_cache:
+        body = _script_body(repo, camel_file, script_label)
         _script_body_cache[key] = (
             False if body is None
             else any(kw in instr for instr in body
                      for kw in _DISRUPTIVE_KEYWORDS))
     return _script_body_cache[key]
+
+
+def script_guards(repo, camel_file, script_label):
+    """``[(check, NAME, jump, target), ...]`` for the script's leading
+    guard chain, in order:
+
+        PlateauRivalBattle1:
+            checkevent EVENT_BEAT_RIVAL_IN_MT_MOON
+            iffalse PlateauRivalScriptDone
+            checkflag ENGINE_INDIGO_PLATEAU_RIVAL_FIGHT
+            iftrue PlateauRivalScriptDone
+        -> [('checkevent', 'EVENT_BEAT_RIVAL_IN_MT_MOON', 'iffalse',
+             'PlateauRivalScriptDone'),
+            ('checkflag', 'ENGINE_INDIGO_PLATEAU_RIVAL_FIGHT', 'iftrue',
+             'PlateauRivalScriptDone')]
+
+    Only the uninterrupted prefix of check/jump PAIRS is reported -- the
+    part that provably runs before the script does anything -- so a
+    caller can evaluate the live flags and find out whether this trigger
+    still has teeth. Anything else (readvar/ifequal weekday tests,
+    actual instructions) ends the chain."""
+    body = _script_body(repo, camel_file, script_label) or []
+    out = []
+    i = 0
+    while i + 1 < len(body):
+        chk = _GUARD_CHECK.match(body[i])
+        jmp = _GUARD_JUMP.match(body[i + 1])
+        if not chk or not jmp:
+            break
+        out.append((chk.group(1), chk.group(2), jmp.group(1), jmp.group(2)))
+        i += 2
+    return out
 
 
 _coord_event_cache = None
@@ -969,6 +1023,14 @@ class Driver:
     last_step_reason = None
     # last_tm_reason: teach_tm's machine-readable diagnosis.
     last_tm_reason = None
+    # last_pc_reason: why the most recent deposit/withdraw answered False
+    # ('deposited' | 'withdrawn' | 'no-such-mon' | 'not-in-box' |
+    # 'last-mon' | 'box-full' | 'party-full' | 'holds-mail' | 'no-pc' |
+    # 'no-list' | 'target-miss' | 'unchanged' | 'over-applied').
+    last_pc_reason = None
+    # last_field_reason: why the most recent use_field_move/waterfall/
+    # whirlpool answered False ('used' on success).
+    last_field_reason = None
     # last_money_delta: money change observed across the last movement
     # call (see _money_watch); non-zero means something SPENT while
     # navigating -- the ¥1200 of ESCAPE ROPEs an A-mash once bought.
@@ -1131,8 +1193,9 @@ class Driver:
 
         `kind`: any word `tile_at` returns ('warp', 'water', 'grass',
         'floor', 'blocked', 'buoy', 'ice', 'pit', 'whirlpool',
-        'waterfall'), the FAMILY names 'ledge'/'sidewall' (which match
-        'ledge-up', 'sidewall-ur', ...), or 'npc' for live sprite cells.
+        'waterfall', 'pc'), the FAMILY names 'ledge'/'sidewall' (which
+        match 'ledge-up', 'sidewall-ur', ...), or 'npc' for live sprite
+        cells.
 
         `find_tiles('warp')` answers off the collision bytes; `exits()`
         answers off the map's warp_events and edge connections. Both are
@@ -1532,6 +1595,28 @@ class Driver:
         reading it made pushed boulders look like they had reset."""
         return live_sprites(self.emu)
 
+    def map_objects(self, map_name=None):
+        """Every ``object_event`` this map DECLARES, read from its own
+        source: ``[{'x','y','sprite','movement','script','event'}]``.
+
+        The static counterpart of `sprites()`: those are live positions,
+        these are the map's definitions -- which is what answers "where
+        does this map keep its nurse/clerk" without hardcoding a layout."""
+        const = self._resolve_map(map_name) if map_name else self._map_const()
+        camel = self.nav.camel.get(const, const)
+        return missables.parse_map_objects(
+            Path(paths.REPO_ROOT, "maps", f"{camel}.asm"))
+
+    def sprite_cell(self, sprite, map_name=None):
+        """(x, y) of the first object_event with sprite constant `sprite`
+        ('SPRITE_NURSE', 'SPRITE_CLERK'), or None. Coordinates are walk
+        cells -- the same space `pos()` and `talk_to` use."""
+        want = str(sprite).strip().upper()
+        for o in self.map_objects(map_name):
+            if o["sprite"].upper() == want:
+                return o["x"], o["y"]
+        return None
+
     def npc_cells(self):
         """Cells occupied by live NPCs (walk-cell coords, player excluded).
         Degrades to empty when the struct table cannot be read, so nav
@@ -1598,6 +1683,32 @@ class Driver:
         bank, addr = self.emu.sym["wEventFlags"]
         return bool(self.emu.read((bank, addr + bit // 8))[0]
                     >> (bit % 8) & 1)
+
+    _engine_flag_index = None
+
+    def engine_flag(self, name):
+        """True if engine flag ENGINE_<name> (or bare <name>) is set.
+
+        The index comes from constants/engine_flags.asm; the (address,
+        mask) pair comes from the ROM's OWN assembled `EngineFlags` table
+        (data/events/engine_flags.asm, 3 bytes per entry: little-endian
+        WRAM address then the mask), so no bit constant is retyped here.
+        All those addresses are WRAM bank 1. Unknown names raise."""
+        if Driver._engine_flag_index is None:
+            from crystalagent.asmconst import parse_const_defs
+            Driver._engine_flag_index = parse_const_defs(
+                paths.REPO_ROOT / "constants" / "engine_flags.asm")
+        table = Driver._engine_flag_index
+        for key in (name, "ENGINE_" + str(name)):
+            if key in table:
+                idx = table[key]
+                break
+        else:
+            raise ValueError(f"unknown engine flag {name!r}")
+        bank, addr = self.emu.sym["EngineFlags"]
+        entry = self.emu.read((bank, addr + 3 * idx), 3)
+        target = int.from_bytes(entry[:2], "little")
+        return bool(self.emu.read((1, target))[0] & entry[2])
 
     def _bag(self):
         """{ITEM: qty} across all pockets; names normalized like
@@ -1883,8 +1994,29 @@ class Driver:
         log.warning(f"  take_warp: {reason}")
         return False
 
+    def _same_map_landing(self, target):
+        """Where a SAME-MAP warp at `target` lands, or None when the warp
+        leaves the map (or is not a warp here).
+
+        A warp_event's destination is (map, warp id), and warp ids are
+        1-based positions in that map's own `def_warp_events` -- the order
+        nav.warps preserves. Victory Road's `warp_event 13, 31,
+        VICTORY_ROAD, 5` therefore lands on the 5th entry, (13,17)."""
+        try:
+            const = self._map_const()
+            table = self.nav.warps.get(const, {})
+        except Exception:
+            return None
+        dest = table.get(tuple(target))
+        if not dest or dest[0] != const:
+            return None
+        cells = list(table)
+        idx = int(dest[1]) - 1
+        return cells[idx] if 0 <= idx < len(cells) else None
+
     @staticmethod
-    def _warp_fired(start_map, start_pos, target, now_map, now_pos):
+    def _warp_fired(start_map, start_pos, target, now_map, now_pos,
+                    landing=None):
         """Did the warp at `target` actually fire?
 
         A different map is the obvious yes. But Victory Road, the Ice Path
@@ -1892,20 +2024,28 @@ class Driver:
         with same-map warp_events, so the map name never changes and only
         the position teleports: stepping onto (13,31) lands on (13,17)
         fourteen rows away. Judging by map alone reported those ladders as
-        failures the caller could not act on (FUCK_I_MESSED_UP #76).
+        failures the caller could not act on (FUCK_I_MESSED_UP #77).
 
-        The tell has to be measured from where we STOOD, not from the warp
-        cell: a walk that merely shuffled two cells is far from the target
-        too, and anchoring on the target made take_warp claim success for
-        a warp it never entered. Warp arrival drifts up to ~2 cells past
-        the modeled landing (gotcha 14), so a same-map jump counts only
-        beyond that."""
+        A same-map yes needs the LANDING CELL, not a distance. "moved more
+        than 3 cells" was the first rule, and it reports success for a
+        walk: re-entering Kurt's house exit (3,7), the tap fallback walks
+        west to (0,7) -- 4 cells from where we stood, same map, no warp --
+        and take_warp answered True with the player still indoors
+        (tests/integration/test_take_warp_entry.py). `landing` comes from
+        the map's own warp table (_same_map_landing); arrival drifts up to
+        ~2 cells past the modeled cell (gotcha 14), so a same-map yes is
+        "we JUMPED, and we came down on the paired cell". Both halves are
+        needed: without the jump, walking two cells away from a landing we
+        were already standing on reads as a teleport. No pairing, same
+        map: not fired."""
         if now_map != start_map:
             return True
-        if now_pos == target:
-            return False                  # standing on it is not entering
-        return abs(now_pos[0] - start_pos[0]) + \
-            abs(now_pos[1] - start_pos[1]) > 3
+        if now_pos == target or landing is None:
+            return False              # standing on it is not entering
+        jumped = abs(now_pos[0] - start_pos[0]) + \
+            abs(now_pos[1] - start_pos[1]) > 2
+        return jumped and abs(now_pos[0] - landing[0]) + \
+            abs(now_pos[1] - landing[1]) <= 2
 
     def take_warp(self, x, y, label=""):
         """ENTER the warp at (x, y) -- and standing on it is not entering.
@@ -1970,8 +2110,9 @@ class Driver:
                     f"battle entering {target} and auto_fight=manual -- "
                     f"decide it, then retry")
         self.settle()
+        landing = self._same_map_landing(target)
         if self._warp_fired(start_map, entry_pos, target, self.map_name(),
-                            self.pos()[2:]):
+                            self.pos()[2:], landing):
             log.info(f"  -> {self.map_name()} {self.pos()[2:]}")
             return True
         if self.pos()[2:] == target:
@@ -2046,7 +2187,8 @@ class Driver:
                 r = self._step_warp_tap(inv[mv])
             self.settle()
             if self._warp_fired(start_map, off, target, self.map_name(),
-                                self.pos()[2:]):
+                                self.pos()[2:],
+                                self._same_map_landing(target)):
                 log.info(f"  -> {self.map_name()} {self.pos()[2:]} "
                          f"(entered {inv[mv]})")
                 return True
@@ -3231,7 +3373,7 @@ class Driver:
                         f"further dumps for this battle")
 
     def fight(self, max_frames=90000, policy=None, require_decision=False,
-              consult_encounter=True):
+              consult_encounter=True, resume=4):
         """Play a battle out with real move selection (best expected
         damage, auto-POTION at low HP, flee hopeless wilds). Pauses at a
         naming keyboard (post-catch nickname prompt) to type
@@ -3255,6 +3397,11 @@ class Driver:
         * with nothing steering, the harness's pick is logged ('auto:
           attack slot 0 (SURF)') -- a pacing loop once reported fights=0
           while ~20 battles fought themselves.
+        * a spent FRAME BUDGET is not a result: `resume` (default 4) more
+          budgets are played out before anything is reported unresolved,
+          because a long trainer battle just needs more frames (live:
+          Lance, five of six down, "UNRESOLVED (timeout)" -- re-calling
+          fight() finished it, FUCK_I_MESSED_UP.md #82).
         Policy shapes: policy(rows, me, enemy) (legacy, still supported)
         or policy(frame) -- a single-argument policy is handed the decide
         frame instead. Returns the lead mon, as before."""
@@ -3291,6 +3438,21 @@ class Driver:
                 break
             self._pending_nickname = None
             self.dismiss_keyboard(name)
+            outcome = b.play(policy=turn_policy, max_frames=max_frames,
+                             text_handler=self._battle_text_handler)
+        # A spent frame budget is a CLOCK, not an outcome: play() stops
+        # after max_frames and re-entering it picks the battle up exactly
+        # where it left off. Doing that here is the difference between
+        # "Lance took a while" and handing the caller a live battle
+        # labelled UNRESOLVED (#82). 'stuck'/'stalled'/'wedged' are NOT
+        # resumed -- those mean the battle stopped changing, and more
+        # frames buy nothing.
+        budgets = 0
+        while outcome == "timeout" and self.battle() and budgets < resume:
+            budgets += 1
+            log.info(f"  [fight] frame budget ({max_frames}) spent with the "
+                     f"battle still live -- resuming "
+                     f"({budgets}/{resume})")
             outcome = b.play(policy=turn_policy, max_frames=max_frames,
                              text_handler=self._battle_text_handler)
         self._pending_nickname = None
@@ -3335,9 +3497,13 @@ class Driver:
             # NEVER report an unresolved fight as if it were over: the
             # caller's next pace()/goto walks straight back into the same
             # live battle (60 'fights', 535s, zero exp on Victory Road).
-            log.warning(f"  [fight] UNRESOLVED ({outcome}) and the battle "
-                        f"is STILL LIVE -- the next step will re-enter it; "
-                        f"drive it manually or change the policy")
+            log.warning(
+                f"  [fight] UNRESOLVED ({outcome}) after {budgets + 1} "
+                f"budget(s) of {max_frames}f and the battle is STILL LIVE "
+                f"-- calling fight() again RESUMES it from here (that is "
+                f"what finished Lance); the next step would re-enter it "
+                f"blind instead. Raise max_frames/resume, drive it "
+                f"manually, or change the policy")
         if not still_live:
             # battle over: the next one gets a fresh diagnostic budget
             self._fight_diag_prints = 0
@@ -4245,40 +4411,80 @@ class Driver:
             f"tmhm_row: no row reading '{tag} {move_name}' came under the "
             f"cursor")
 
-    def _tmhm_use(self):
-        """Confirm the pocket row, take USE, and answer the teach prompt's
-        YES -- ending on the party list."""
-        self.press("A:4 .:80")                        # item submenu
-        for _ in range(6):                            # spin-up can be slow
-            if "USE" in "".join(self.emu.screen_text()).upper():
-                break
-            self.emu.tick(30)
-        else:
-            return self._menu_fail("tmhm_use: USE submenu never drawn")
-        self.press(".:35")                            # gotcha 2: settle
-        self.press("A:6 .:30")                        # USE
-        for _ in range(20):                           # boot texts -> YES/NO
-            s = "".join(self.emu.screen_text()).upper()
-            if "YES" in s and "NO" in s:
-                break
-            self.press("A:4 .:45")
-        else:
-            return self._menu_fail("tmhm_use: teach prompt never appeared")
-        self.press("A:5 .:60")                        # YES: teach
-        if not self._wait_screen(lambda s: "CANCEL" in s and "ABLE" in s):
-            return self._menu_fail("tmhm_use: party list never opened")
-        return True
+    # The party list the TM/HM flow ends on is identified by the tags
+    # PlacePartyMonTMHMCompatibility writes at hlcoord 12, 2 stepping two
+    # rows per mon (engine/pokemon/party_menu.asm:300-347): 'ABLE' or
+    # 'NOT ABLE'. CANCEL is deliberately NOT part of the test -- it is
+    # the row after the last mon, so a SIX-mon party puts it at row 13,
+    # underneath the description textbox, and requiring it made the
+    # predicate unsatisfiable exactly when the party was full.
+    def _tmhm_party_list_up(self, joined=None):
+        if joined is None:
+            joined = "".join(self.emu.screen_text()).upper()
+        return "ABLE" in joined
+
+    def _tmhm_use(self, max_steps=26):
+        """Confirm the pocket row, take USE, answer the teach prompt's
+        YES, and end on the party list.
+
+        Written as a classify-then-act loop instead of a press script,
+        because the press script could not finish the flow: it answered
+        the teach prompt with ONE A and then only TICKED, waiting for the
+        party list. Live (claude-goldeen checkpoint, HM07 -> GOLDEEN --
+        FUCK_I_MESSED_UP.md #71/#68, five failed attempts) the YES/NO box
+        eats the first A the frame it is drawn (gotcha 2), so the box was
+        still up when the ticking started and the list never came.
+
+        Every iteration reads the screen and acts on what is THERE, and
+        the party-list test is checked BEFORE any press -- an A press on
+        that list selects a mon, which is how a probe of this flow put
+        'WATERFALL is not compatible' on screen by picking NOCTOWL."""
+        self.press("A:4 .:60")                  # pocket row -> USE/QUIT
+        for _ in range(max_steps):
+            joined = "".join(self.emu.screen_text()).upper()
+            if self._tmhm_party_list_up(joined):
+                return True
+            if Menus.has_label(self.emu.screen_text(), "YES"):
+                self.press("A:5 .:45")          # teach prompt: YES
+            elif "YES" in joined and "NO" in joined:
+                self.press("U:4 .:16")          # cursor drifted onto NO
+            elif Menus.has_label(self.emu.screen_text(), "USE"):
+                self.press("A:5 .:40")
+            elif self.textbox():
+                self.press("A:4 .:40")          # "Booted up an HM." pages
+            else:
+                self.press(".:20")              # mid-repaint: poll
+        return self._menu_fail(
+            f"tmhm_use: party list never opened in {max_steps} steps "
+            f"(row 14: {self.emu.screen_text()[14].strip()!r})")
 
     def _able_under_cursor(self):
         """Is the party row under the cursor ABLE to learn this TM/HM?
-        The tag renders on the row BELOW the cursor row ('▶ AA' /
-        'L22 ABLE'), and other party members legitimately show NOT ABLE --
-        only the cursor's mon matters."""
+
+        Answered from wMenuCursorY, not from the cursor glyph: mon `n`
+        (1-based, exactly what wMenuCursorY holds and what
+        _party_cursor_to steers) has its name on screen row 2n-1 and its
+        ABLE / NOT ABLE tag on row 2n, because
+        PlacePartyMonTMHMCompatibility starts at hlcoord 12, 2 and adds
+        2 * SCREEN_WIDTH per mon (party_menu.asm:300-330). The glyph scan
+        is kept as a fallback for screens where the cursor row is painted
+        but WRAM has not caught up."""
         rows = self.emu.screen_text()
+
+        def verdict(text):
+            up = text.upper()
+            if "ABLE" not in up:
+                return None
+            return "NOT ABLE" not in up
+        cur = self.emu.read_u8("wMenuCursorY")
+        if 1 <= cur and 2 * cur < len(rows):
+            tag = verdict(rows[2 * cur][12:])
+            if tag is not None:
+                return tag
         for i, r in enumerate(rows):
             if "▶" in r or "▷" in r:
-                tag = rows[i + 1].upper() if i + 1 < len(rows) else ""
-                return "ABLE" in tag and "NOT ABLE" not in tag
+                tag = verdict(rows[i + 1] if i + 1 < len(rows) else "")
+                return bool(tag)
         return False
 
     def _walk_forget_menu(self, move_name, forget=None):
@@ -4566,6 +4772,353 @@ class Driver:
               )
         return ok
 
+    # -- Bill's PC: the boxes ---------------------------------------------
+    # The PC is the one list in the game that RE-ARMS itself. A completed
+    # deposit jumps the jumptable back to .Init with the cursor reset to
+    # 0, so the list comes straight back up on the NEXT party member --
+    # and "press A until the dialog stops changing" deposits again, and
+    # again. That loop put five of six party members in the box in one
+    # live session, including the run's only real fighter
+    # (FUCK_I_MESSED_UP.md #72). It is also unreadable: the selection
+    # cursor is an OAM sprite, so no ▶/▷ glyph exists (#73).
+    #
+    # So every primitive below
+    #   (a) targets by INDEX read out of WRAM, never by press counts,
+    #   (b) presses the confirming A exactly ONCE, and
+    #   (c) decides success from observe()['party'] and the SRAM box,
+    #       never from dialog text -- and refuses to act twice.
+    #
+    # The state machine is the engine's own: _DepositPKMN (bills_pc.asm:1)
+    # and _WithdrawPKMN (:260) each run a five-entry jumptable over
+    # wJumptableIndex --
+    #   0 .Init   1 list joypad   2 prep submenu   3 submenu   4 exit
+    # -- and the list selection is the sum
+    #   wBillsPC_CursorPosition + wBillsPC_ScrollPosition
+    # which is exactly what BillsPC_LoadMonStats (:1113) reads.
+    PC_LIST_STATE = 1
+    PC_SUBMENU_STATE = 3
+    # BillsPC_PlaceString draws the PC's own prompt line at hlcoord 1,16
+    # (bills_pc.asm:962): "Choose a ᴾᴹ." on a list, "It's your last ᴾᴹ!"
+    # and "There's no room!" when the engine refuses.
+    PC_PROMPT_ROW = 16
+
+    def _pc_fail(self, reason, exit_ui=True):
+        self.last_pc_reason = reason
+        if exit_ui:
+            self._pc_exit()
+        log.warning(f"  pc: {reason}")
+        return False
+
+    def _pc_state(self):
+        return self.emu.read_u8("wJumptableIndex")
+
+    def _pc_index(self):
+        """0-based selection in the open PC list (WRAM, not the screen)."""
+        return self.emu.read_u8("wBillsPC_CursorPosition") + \
+            self.emu.read_u8("wBillsPC_ScrollPosition")
+
+    def _pc_prompt(self):
+        rows = self.emu.screen_text()
+        return rows[self.PC_PROMPT_ROW].strip() \
+            if len(rows) > self.PC_PROMPT_ROW else ""
+
+    def _pc_list_up(self):
+        """The DEPOSIT/WITHDRAW mon list is up and polling the joypad."""
+        return self._pc_state() == self.PC_LIST_STATE and \
+            "Choose a" in self._pc_prompt()
+
+    def _pc_closed(self):
+        """The PC session is over and the overworld owns input again.
+
+        Neither half of this can be dropped. close_menus()/menu_open()
+        alone report 'clean' with a box list still on screen (no cursor
+        glyph, and the list's textbox is at row 15, not the row-12 one
+        `textbox()` looks for); wScriptMode alone is useless here -- it
+        reads 1 on a perfectly interactive overworld (live: the
+        claude-indigo-plateau checkpoint)."""
+        return not self._pc_list_up() and not self.menu_open()
+
+    def _pc_exit(self, max_presses=12):
+        """B out of the PC. B is the only safe key here (gotcha 13's
+        shop lesson, one screen over): A on a list confirms a deposit."""
+        for _ in range(max_presses):
+            if self._pc_closed():
+                break
+            self.press("B:6 .:24")
+        self.settle()
+        return self._pc_closed()
+
+    def box_list(self):
+        """The current PC box, read out of SRAM -- ``{'box': n, 'count': k,
+        'capacity': 20, 'mons': [{species, name, nickname, level}, ...]}``.
+
+        Never touches the screen or a menu, so it is safe to call at any
+        time (including before opening the PC, to see whether a deposit
+        even fits) and it is authoritative: the WITHDRAW list paints this
+        same order."""
+        return box_state(self.emu, self.names)
+
+    # observe()['party'] calls them 'nick'/'species'-as-a-name while
+    # game_state()/box_list() call them 'nickname'/'name'; a lookup that
+    # only knew one shape silently found nothing.
+    _NICK_KEYS = ("nickname", "nick")
+    _SPECIES_KEYS = ("name", "species")
+
+    @classmethod
+    def _named_slot(cls, mon, entries):
+        """Index of `mon` (nickname first, then species) in a list of
+        party/box entries, or None. Nickname first because that is what a
+        model says, species second because a box mon may be un-nicknamed."""
+        want = _norm_name(mon)
+
+        def match(entry, keys):
+            return any(_norm_name(entry.get(k) or "") == want for k in keys)
+        for keys in (cls._NICK_KEYS, cls._SPECIES_KEYS):
+            for i, m in enumerate(entries):
+                if match(m, keys):
+                    return i
+        return None
+
+    def _pc_page(self, pred, presses=14):
+        """Advance the PC's text pages with SINGLE A presses until
+        `pred(rows)` holds.
+
+        flush_dialog cannot do this job: cancelling the terminal's
+        "Access whose PC?" menu leaves its ▶ painted behind the page that
+        follows, and a stale glyph outside the box makes
+        dialog_press_safe refuse every press (live: "BILLˢ PC accessed."
+        never advanced). Only text pages sit between the rows this is
+        asked to wait for, so an A press here cannot buy, teach or
+        deposit anything."""
+        for _ in range(presses):
+            if pred(self.emu.screen_text()):
+                return True
+            self.press("A:4 .:40")
+        return pred(self.emu.screen_text())
+
+    def _pc_open(self, action):
+        """Open BILL's PC and take `action` ('DEPOSIT' or 'WITHDRAW'),
+        leaving its mon list up. Reuses a list that is already up (the
+        flow re-arms itself after every confirm, so recovery from a bad
+        deposit is a second target on the SAME list)."""
+        if self._pc_list_up():
+            return True
+        if not self._pc_closed() and not self._pc_exit():
+            return self._pc_fail("busy: a menu owns the screen and B would "
+                                 "not clear it", exit_ui=False)
+        cell = self._pc_tile()
+        if cell is None:
+            return self._pc_fail(
+                f"no-pc: no COLL_PC ($93) tile on {self.map_name()} -- "
+                f"stand in a Pokécenter or Bill's house "
+                f"(find_tiles('pc'))", exit_ui=False)
+        if self.talk_to(*cell, label="PC") != "talked":
+            return self._pc_fail(f"no-pc: could not reach/use the PC at "
+                                 f"{cell}", exit_ui=False)
+
+        def box_menu(rows):
+            return any("WITHDRAW" in r for r in rows)
+        # terminal menu: "BILL's PC / <PLAYER>'s PC / PROF.OAK's PC /
+        # TURN OFF" (engine/events/pokecenter_pc.asm:59-68), reached
+        # after the "turned on the PC" page. Bill's own house PC skips
+        # it, so it is optional -- the box menu's rows are the real gate.
+        if not box_menu(self.emu.screen_text()) and \
+                any("BILL" in r for r in self.emu.screen_text()):
+            if not self.select_menu_row("BILL", max_presses=6):
+                return self._pc_fail("no-list: the BILL's PC row would not "
+                                     "confirm")
+        if not self._pc_page(box_menu):
+            return self._pc_fail(
+                f"no-list: BILL's PC never drew its WITHDRAW/DEPOSIT menu "
+                f"(row 14: {self.emu.screen_text()[14].strip()!r})")
+        if not self.select_menu_row(action, max_presses=8):
+            return self._pc_fail(f"no-list: the {action} row would not "
+                                 f"confirm")
+        f0 = self.emu.frame
+        while self.emu.frame - f0 < 900:
+            if self._pc_list_up():
+                return True
+            self.press(".:20")
+        return self._pc_fail(f"no-list: {action} never drew a mon list "
+                             f"(prompt: {self._pc_prompt()!r})")
+
+    def _pc_tile(self):
+        """The nearest PC tile on this map, or None. Journal #45 had to
+        find this by hand because find_tiles had no word for $93."""
+        here = self.pos()[2:]
+        cells = self.find_tiles("pc")
+        if not cells:
+            return None
+        return min(cells, key=lambda c: abs(c[0] - here[0])
+                   + abs(c[1] - here[1]))
+
+    def _pc_cursor_to(self, index, expect=None, max_steps=30):
+        """Put the PC list's selection on 0-based `index`, verified against
+        WRAM after every single press. `expect` (a species name) is
+        cross-checked against the info panel PCMonInfo redraws, which is
+        the only thing on screen that tracks this cursor (#73)."""
+        for _ in range(max_steps):
+            cur = self._pc_index()
+            if cur == index:
+                break
+            self.press("D:4 .:18" if cur < index else "U:4 .:18")
+        if self._pc_index() != index:
+            return self._pc_fail(
+                f"target-miss: the PC cursor stopped at {self._pc_index()} "
+                f"short of {index}")
+        if expect:
+            self.press(".:24")            # let PCMonInfo finish repainting
+            shown = self.menu.pc_info()["name"]
+            if shown.upper() != str(expect).upper():
+                return self._pc_fail(
+                    f"target-miss: index {index} shows {shown!r}, expected "
+                    f"{expect!r} -- the list is not what memory says")
+        return True
+
+    def _pc_confirm(self, action):
+        """One A press to open the DEPOSIT/STATS/RELEASE/CANCEL box, then
+        the labelled row. That box IS glyph-driven (a STATICMENU_CURSOR
+        VerticalMenu, bills_pc.asm:228), so select_menu_row can read it --
+        unlike the list behind it."""
+        self.press("A:4 .:40")
+        f0 = self.emu.frame
+        while self.emu.frame - f0 < 600:
+            if self._pc_state() == self.PC_SUBMENU_STATE:
+                break
+            self.press(".:15")
+        else:
+            return self._pc_fail(
+                f"no-list: the {action} submenu never opened "
+                f"(jumptable {self._pc_state()})")
+        self.press(".:20")
+        if not self.select_menu_row(action, max_presses=6):
+            return self._pc_fail(f"no-list: no {action} row in the submenu")
+        self.press(".:60")
+        return True
+
+    def deposit(self, mon):
+        """Put the party member named `mon` (nickname or species) into the
+        current box. True only when observe()['party'] really lost it.
+
+        Refuses BEFORE pressing anything when the game would refuse or the
+        result would be a whiteout risk; `last_pc_reason` says which:
+
+          'no-such-mon'  nobody in the party answers to that name
+          'last-mon'     it is the only mon that can fight
+          'box-full'     the current box already holds 20
+          'holds-mail'   the engine refuses to box a mail carrier
+
+        Exactly ONE mon moves per call: the deposit list re-arms itself on
+        the next party member, and a blind confirm loop empties the party
+        (#72)."""
+        self.last_pc_reason = None
+        party = self.observe()["party"]
+        slot = self._named_slot(mon, party)
+        if slot is None:
+            return self._pc_fail(
+                f"no-such-mon: no party member named {mon!r} "
+                f"(party: {[m['nick'] for m in party]})", exit_ui=False)
+        entry = party[slot]
+        if sum(1 for m in party if not m.get("egg")) <= 1 \
+                and not entry.get("egg"):
+            return self._pc_fail(
+                f"last-mon: {entry['nick']} is the only mon that can fight "
+                f"-- the engine refuses ('It's your last ᴾᴹ!')",
+                exit_ui=False)
+        box = self.box_list()
+        if box["count"] >= box["capacity"]:
+            return self._pc_fail(
+                f"box-full: box {box['box']} already holds "
+                f"{box['count']}/{box['capacity']} -- CHANGE BOX first",
+                exit_ui=False)
+        # observe()['party'] carries no held item; game_state does, and
+        # BillsPC_CheckMail_PreventBlackout refuses a mail carrier outright
+        held = (game_state(self.emu, self.names)["party"][slot].get("item")
+                or "")
+        if "MAIL" in held.upper():
+            return self._pc_fail(f"holds-mail: {entry['nick']} carries "
+                                 f"{held}", exit_ui=False)
+        log.info(f"[deposit] {entry['nick']} ({entry['species']} "
+                 f"L{entry['level']}) -> box {box['box']} "
+                 f"({box['count']}/{box['capacity']})")
+        if not self._pc_open("DEPOSIT"):
+            return False
+        if not self._pc_cursor_to(slot, expect=entry["species"]):
+            return False
+        if not self._pc_confirm("DEPOSIT"):
+            return False
+        return self._pc_settled("deposited", party, box,
+                                gone=entry["nick"], delta=-1)
+
+    def withdraw(self, mon):
+        """Take the mon named `mon` (nickname or species) out of the
+        current box and into the party. True only when
+        observe()['party'] really gained it.
+
+        `last_pc_reason`: 'not-in-box' (nothing in the box answers to that
+        name -- box_list() shows what does), 'party-full' (six already).
+        One mon per call, same reason as deposit."""
+        self.last_pc_reason = None
+        party = self.observe()["party"]
+        box = self.box_list()
+        index = self._named_slot(mon, box["mons"])
+        if index is None:
+            return self._pc_fail(
+                f"not-in-box: nothing named {mon!r} in box {box['box']} "
+                f"(holds: {[m['nickname'] for m in box['mons']]})",
+                exit_ui=False)
+        if len(party) >= 6:
+            return self._pc_fail(
+                "party-full: six already -- deposit one first", exit_ui=False)
+        entry = box["mons"][index]
+        log.info(f"[withdraw] {entry['nickname']} ({entry['name']} "
+                 f"L{entry['level']}) <- box {box['box']} slot {index + 1}")
+        if not self._pc_open("WITHDRAW"):
+            return False
+        if not self._pc_cursor_to(index, expect=entry["name"]):
+            return False
+        if not self._pc_confirm("WITHDRAW"):
+            return False
+        return self._pc_settled("withdrawn", party, box,
+                                gained=entry["nickname"], delta=+1)
+
+    def _pc_settled(self, done, party0, box0, gone=None, gained=None,
+                    delta=0):
+        """Did EXACTLY the one intended mon move? Judged on observed state
+        (the live party plus the SRAM box), never on dialog text -- and
+        loudly when more than one moved, because that is the #72 wound and
+        a caller must not learn about it from a level-up log 20 minutes
+        later."""
+        self.press(".:60")
+        party1 = self.observe()["party"]
+        box1 = self.box_list()
+        moved = len(party1) - len(party0)
+        nicks0 = [m["nick"] for m in party0]
+        nicks1 = [m["nick"] for m in party1]
+        if moved != delta:
+            if moved and abs(moved) > abs(delta):
+                self._pc_exit()
+                self.last_pc_reason = "over-applied"
+                raise RuntimeError(
+                    f"pc {done}: {abs(moved)} mons moved, not 1 "
+                    f"({nicks0} -> {nicks1}) -- the PC list re-armed and "
+                    f"something pressed A twice (FUCK_I_MESSED_UP.md #72)")
+            return self._pc_fail(
+                f"unchanged: party {nicks0} -> {nicks1}, box "
+                f"{box0['count']} -> {box1['count']} (prompt: "
+                f"{self._pc_prompt()!r})")
+        if gone and _norm_name(gone) in [_norm_name(n) for n in nicks1]:
+            return self._pc_fail(f"unchanged: {gone} is still in the party")
+        if gained and _norm_name(gained) not in [_norm_name(n)
+                                                 for n in nicks1]:
+            return self._pc_fail(f"unchanged: {gained} did not join the "
+                                 f"party")
+        self._pc_exit()
+        self.last_pc_reason = done
+        log.info(f"  {done}: party {nicks0} -> {nicks1}, box "
+                 f"{box0['count']} -> {box1['count']}")
+        return True
+
     def use_cut(self, tree_x, tree_y, label="", forget_move=None):
         """Cut down the small tree at (tree_x, tree_y) on the current map:
         teaches HM01 CUT via the pack flow if nobody knows it yet (deleting
@@ -4679,6 +5232,156 @@ class Driver:
         log.info(f"  [cut] tree at {(tree_x, tree_y)} removed; stepped {r} "
               f"-> {self.map_name()} {self.pos()[2:]}")
         return True
+
+    # -- water HMs: the overworld A press, never the party menu ----------
+    # The A button is a FIRST-CLASS field-move entry point. The overworld
+    # A handler dispatches on wFacingTileID
+    # (engine/overworld/events.asm:1085-1125):
+    #     CheckCutTreeTile      -> TryCutOW
+    #     CheckWhirlpoolTile    -> TryWhirlpoolOW
+    #     CheckWaterfallTile    -> TryWaterfallOW
+    #     CheckHeadbuttTreeTile -> TryHeadbuttOW
+    #     otherwise             -> TrySurfOW
+    # and each of those checks the party move and the badge itself before
+    # asking "Do you want to use X?".
+    #
+    # The MENU path (START -> POKéMON -> mon -> move, WaterfallFunction /
+    # WhirlpoolFunction) reaches the same CheckMapCanWaterfall, but that
+    # predicate reads wTileUp / wPlayerDirection -- surrounding-tile state
+    # GetMovementPermissions maintains for the overworld loop
+    # (home/map.asm:1565) -- and from inside the menu it answers "Can't
+    # use that here." Live, twice: at TOHJO_FALLS (9,12) facing UP at a
+    # 0x33 COLL_WATERFALL tile the menu refused while a single plain A
+    # press from the identical tile and facing answered "Do you want to
+    # use WATERFALL?" and climbed (9,12) -> (9,7)
+    # (FUCK_I_MESSED_UP.md #75, which retracts #70's wrong "the tile is
+    # wrong" conclusion for WHIRLPOOL).
+    #
+    # wFacingTileID itself is only meaningful for a few frames after an A
+    # press, so nothing here reads it; the FACED CELL's collision byte
+    # (static grid, stable) and wPlayerDirection (stable) are the inputs.
+    OW_FIELD_MOVES = {
+        # move: (tile kind faced, badge the engine checks)
+        "WATERFALL": ("waterfall", "RISING"),
+        "WHIRLPOOL": ("whirlpool", "GLACIER"),
+    }
+    # wPlayerDirection holds direction << 2 (DOWN 0, UP 4, LEFT 8,
+    # RIGHT 12); CheckMapCanWaterfall masks it with $c.
+    FACING_BYTE = {"D": 0x0, "U": 0x4, "L": 0x8, "R": 0xC}
+
+    def _field_fail(self, reason):
+        """Field-move refusal. Closes menus on the way out: a field move
+        that fails leaves its menu open, and an open menu eats all
+        movement input (AGENTS.md gotcha 17)."""
+        self.last_field_reason = reason
+        self.close_menus()
+        log.warning(f"  field move: {reason}")
+        return False
+
+    def facing(self):
+        """Which way the player is facing: 'U' | 'D' | 'L' | 'R'."""
+        raw = self.emu.read_u8("wPlayerDirection") & 0xC
+        return {v: k for k, v in self.FACING_BYTE.items()}.get(raw, "?")
+
+    def face(self, mv):
+        """Turn to face `mv` without stepping (a short directional press
+        against anything turns in place) and confirm via
+        wPlayerDirection. True when we really face that way."""
+        for _ in range(4):
+            if self.facing() == mv:
+                return True
+            self.press(f"{mv}:6 .:12")
+        return self.facing() == mv
+
+    def use_field_move(self, move, facing=None):
+        """Use a water HM (WATERFALL, WHIRLPOOL) on the tile we are
+        FACING, through the overworld A press. True only when the world
+        actually changed -- the waterfall moved us, or the whirlpool is
+        gone from the live map.
+
+        `facing` ('U'/'D'/'L'/'R') turns first. Everything checkable is
+        checked before the A press; `last_field_reason` says which:
+
+          'unknown-move'  not an A-dispatched field move
+          'no-knower'     nobody in the party knows it (field_moves())
+          'no-badge'      the engine's badge gate would refuse
+          'no-facing'     could not turn to the requested direction
+          'wrong-tile'    the faced cell is not that obstacle
+          'no-prompt'     the A press produced no "use it?" question
+          'unchanged'     the prompt was answered and nothing moved
+        """
+        self.last_field_reason = None
+        move = str(move).strip().upper()
+        spec = self.OW_FIELD_MOVES.get(move)
+        if spec is None:
+            return self._field_fail(
+                f"unknown-move: {move!r} is not an A-dispatched field move "
+                f"({'/'.join(self.OW_FIELD_MOVES)})")
+        want_kind, badge = spec
+        knower = self.field_moves().get(move)
+        if not knower:
+            return self._field_fail(f"no-knower: nobody in the party knows "
+                                    f"{move}")
+        badges = game_state(self.emu, self.names)["player"]["johto_badges"]
+        if badge and badge not in badges:
+            return self._field_fail(f"no-badge: {move} needs the {badge} "
+                                    f"badge (have: {badges})")
+        if facing and not self.face(facing):
+            return self._field_fail(f"no-facing: could not turn {facing} "
+                                    f"(facing {self.facing()})")
+        mv = self.facing()
+        if mv not in STEP:
+            return self._field_fail(f"no-facing: wPlayerDirection reads "
+                                    f"{self.emu.read_u8('wPlayerDirection'):#04x}")
+        x, y = self.pos()[2:]
+        dx, dy = STEP[mv]
+        target = (x + dx, y + dy)
+        kind = self.tile_at(*target)
+        if kind != want_kind:
+            return self._field_fail(
+                f"wrong-tile: facing {mv} at {(x, y)} the cell {target} is "
+                f"{kind!r}, not {want_kind!r}")
+        log.info(f"[{move.lower()}] {knower} at {(x, y)} facing {mv} -> "
+                 f"{target}")
+        self.press("A:4 .:40")
+        prompted = False
+        for _ in range(14):
+            rows = self.emu.screen_text()
+            if Menus.has_label(rows, "YES"):
+                prompted = True
+                self.press("A:5 .:60")
+            elif self.textbox():
+                self.press("A:4 .:45")
+            else:
+                break
+        self.settle()
+        if self.pos()[2:] != (x, y):              # waterfall climbed
+            log.info(f"  [{move.lower()}] moved {(x, y)} -> "
+                     f"{self.pos()[2:]}")
+            self.last_field_reason = "used"
+            return True
+        self.sync_grid()                          # whirlpool dissolved
+        if self.tile_at(*target) != want_kind:
+            log.info(f"  [{move.lower()}] {target} is now "
+                     f"{self.tile_at(*target)!r}")
+            self.last_field_reason = "used"
+            return True
+        if not prompted:
+            return self._field_fail(
+                f"no-prompt: A at {(x, y)} facing {mv} never asked to use "
+                f"{move} (row 14: {self.emu.screen_text()[14].strip()!r})")
+        return self._field_fail(
+            f"unchanged: {move} was confirmed but {target} is still "
+            f"{self.tile_at(*target)!r} and we are still at {(x, y)}")
+
+    def waterfall(self, facing="U"):
+        """Climb the waterfall above us (HM07). Waterfalls only go UP --
+        CheckMapCanWaterfall requires FACE_UP."""
+        return self.use_field_move("WATERFALL", facing)
+
+    def whirlpool(self, facing=None):
+        """Dissolve the whirlpool we are facing (HM06)."""
+        return self.use_field_move("WHIRLPOOL", facing)
 
 
     def _wait_screen(self, pred, frames=500):
@@ -5595,6 +6298,38 @@ class Driver:
     # until a goto has run (class default so fresh/old drivers both read)
     last_goto_reason = None
 
+    def _scene_spent(self, camel, script):
+        """True when the coord_event's OWN leading guard chain proves it
+        does nothing right now.
+
+        This is what makes a scene block expire. `nav.blocked` is
+        recomputed from the map source on every goto, so a cell whose
+        scene token still matches came back forever -- at
+        INDIGO_PLATEAU_POKECENTER_1F the map declares exactly one scene
+        (id 0 = RIVAL_BATTLE) and its post-battle script sets the scene
+        to that same id, so (16,4)/(17,4) -- the only corridor to the
+        League door -- were re-severed after every single failed goto and
+        had to be cleared by hand three times (session claude pt12).
+
+        The script says so itself:
+            checkevent EVENT_BEAT_RIVAL_IN_MT_MOON / iffalse ...Done
+            checkflag ENGINE_INDIGO_PLATEAU_RIVAL_FIGHT / iftrue ...Done
+        Evaluate those live: if a guard jumps to a label that is not
+        disruptive, walking the cell cannot push us anywhere. Flags that
+        cannot be resolved are left alone (assume the worst)."""
+        for check, name, jump, target in script_guards(self.nav._repo,
+                                                       camel, script):
+            try:
+                val = (self._event_flag(name) if check == "checkevent"
+                       else self.engine_flag(name))
+            except Exception:
+                continue                   # unknown flag: assume armed
+            if val is not (jump == "iftrue"):
+                continue                   # this guard falls through
+            if not script_is_disruptive(self.nav._repo, camel, target):
+                return True
+        return False
+
     def _refresh_nav_blocks(self):
         """Mark every coord_event cell that would fire RIGHT NOW unwalkable
         for planning: its scene token matches the map's live scene id (or
@@ -5633,6 +6368,8 @@ class Driver:
                     continue
                 if not script_is_disruptive(self.nav._repo, camel, script):
                     continue
+                if self._scene_spent(camel, script):
+                    continue               # guard chain already answered
                 if self.trip_scenes:
                     log.info(f"  [trip_scenes] crossing {const} scene cell "
                           f"{(x, y)} unblocked")
@@ -5641,6 +6378,16 @@ class Driver:
             if cells:
                 blocks[const] = cells
         self.nav.blocked = blocks
+
+    def blocked_cells(self, map_name=None):
+        """The coord_event cells nav currently refuses to plan through,
+        ``{map: {(x, y), ...}}`` (or one map's set). Refreshed from live
+        scene/flag state first, so this is what BFS will actually see --
+        the answer to "why is there no path" when the grid looks open."""
+        self._refresh_nav_blocks()
+        if map_name is None:
+            return {m: set(c) for m, c in self.nav.blocked.items()}
+        return set(self.nav.blocked.get(self._resolve_map(map_name), ()))
 
     def _mg_edges(self):
         """{from_map_const: [routable edges]} over data/mapgraph.json."""
@@ -6374,6 +7121,44 @@ class Driver:
                 return i
         return -1
 
+    # The buy list is the only shop screen that shows the money window
+    # ('¥nnnnn' at the top right) together with priced rows; the clerk's
+    # BUY/SELL/QUIT menu shows neither. "How many?" plus the '×NN' glyph
+    # is the quantity picker, which MUST NOT be left open: it holds the
+    # script open and then every movement press is swallowed silently
+    # (session claude pt12).
+    def _shop_list_up(self, rows=None):
+        rows = self.emu.screen_text() if rows is None else rows
+        return any("¥" in r for r in rows)
+
+    def _shop_picker_up(self, rows=None):
+        rows = self.emu.screen_text() if rows is None else rows
+        return any("How many?" in r or "×" in r for r in rows)
+
+    def _shop_exit(self, max_presses=12):
+        """B out of every shop screen -- picker, list, clerk menu, page --
+        and verify. B only: A on a list buys whatever the cursor sits on
+        (gotcha 13), and A on the picker buys `qty` of it.
+
+        Returns True when nothing shop-shaped and nothing modal is left.
+        The old loop stopped at "no ¥ and no cursor", which a quantity
+        picker satisfies while still owning the input."""
+        for _ in range(max_presses):
+            rows = self.emu.screen_text()
+            if not (self._shop_list_up(rows) or self._shop_picker_up(rows)
+                    or self.textbox() or self.menu_open()):
+                self.press(".:40")            # outlast a closing repaint
+                if not self._shop_list_up() and not self._shop_picker_up() \
+                        and not self.menu_open():
+                    return True
+                continue
+            self.press("B:6 .:16")
+        left = self.emu.screen_text()
+        if self._shop_picker_up(left):
+            log.warning("  mart: a QUANTITY PICKER is still open -- "
+                        "movement will be swallowed until it closes")
+        return not self._shop_list_up(left) and not self._shop_picker_up(left)
+
     def mart_buy(self, x, y, item_name, qty=1, label=""):
         """Talk to the clerk at (x,y) and buy `qty` of `item_name`.
         Returns True if the bag ended up holding the item."""
@@ -6396,19 +7181,29 @@ class Driver:
         before = bag_count()
         bought = False
         want = _norm_item(item_name)
-        shop_open = any("¥" in r for r in self.emu.screen_text())
+        shop_open = self._shop_list_up()
         if not shop_open:
             if self.talk_to(x, y, label or "clerk") != "talked":
                 return False
             opened = False
             for _attempt in range(2):
-                # the list pops in frames AFTER talk_to's flush returns;
-                # wait it out passively -- an A press here buys whatever
-                # the cursor sits on (gotcha 13, cost a session 1800 yen)
+                # The clerk's own menu comes FIRST: "Welcome! How may I
+                # help you?" over BUY / SELL / QUIT (a glyph menu, so
+                # talk_to's flush_dialog correctly stops there). The
+                # buy list only exists after BUY is taken, and taking it
+                # has to be DELIBERATE -- a blind A here is gotcha 13.
+                # Waiting passively for a '¥' that only BUY can produce
+                # is what made this raise "FULL RESTORE x6 failed (bag
+                # 0 -> 0)" at the Indigo Plateau mart with the item in
+                # stock (session claude pt12).
                 for _ in range(20):
-                    if any("¥" in r for r in self.emu.screen_text()):
+                    if self._shop_list_up():
                         opened = True
                         break
+                    if Menus.has_label(self.emu.screen_text(), "BUY") \
+                            or any("BUY" in r for r in
+                                   self.emu.screen_text()):
+                        self.select_menu_row("BUY", max_presses=6)
                     self.press(".:8")
                 if opened or _attempt:
                     break
@@ -6423,15 +7218,23 @@ class Driver:
                 if self.talk_to(x, y, label or "clerk") != "talked":
                     break
             if not opened:
-                self.press("B:4 .:10 .:20")
+                self._shop_exit()
                 raise RuntimeError(
-                    f"mart_buy: shop menu did not open at ({x},{y}) -- "
+                    f"mart_buy: buy list did not open at ({x},{y}) -- "
                     f"clerk talk failed twice (registry actions must not "
                     f"fail as a silent log line)")
+        # Only the LIST rows: the description textbox at the bottom
+        # (rows 12-17) also carries item words, and the list itself is
+        # name-row/price-row pairs in a 4-item window with a '▼' when
+        # there is more below (live: ULTRA BALL / MAX REPEL / HYPER
+        # POTION / MAX POTION, with FULL RESTORE off-window).
+        list_rows = 12
+        seen, flipped, direction = None, False, "D"
         for _ in range(40):                       # bounded item search
             rows = self.emu.screen_text()
-            cur = self._shop_cursor_row(rows)
-            target = next((i for i, r in enumerate(rows)
+            window = rows[:list_rows]
+            cur = self._shop_cursor_row(window)
+            target = next((i for i, r in enumerate(window)
                            if want in _norm_item(r)), None)
             if cur >= 0 and target is not None and target == cur:
                 self.press("A:4 .:40")           # open quantity picker
@@ -6467,20 +7270,40 @@ class Driver:
                 if picker_qty() != qty:
                     break
                 self.press(".:10")
-                self.press("A:6 .:30")
-                self.flush_dialog(3000)
+                self.press("A:6 .:40")           # confirm the quantity
+                # ...which opens "N ITEM(S) will be ¥NNNN." over a
+                # YES/NO box (live at the Indigo Plateau mart). Nothing
+                # answered it before, so the purchase never happened and
+                # `bought` was set anyway -- "bag 0 -> 0, bought=True".
+                # flush_dialog cannot answer it either: a choice box is
+                # exactly what it refuses to touch (gotcha 13).
+                for _ in range(6):
+                    rows = self.emu.screen_text()
+                    if Menus.has_label(rows, "YES"):
+                        self.press("A:6 .:40")
+                        break
+                    if any("YES" in r for r in rows):
+                        self.press("U:4 .:14")   # cursor sat on NO
+                        continue
+                    self.press(".:15")
+                self.flush_dialog(3000)          # "Here you are! Thanks!"
                 bought = True
                 break                             # one purchase per call
             if cur < 0:
                 break
-            self.press("D:6 .:12" if (target is None or target > cur)
-                       else "U:6 .:12")
-        for _ in range(10):                       # leave the shop cleanly:
-            rows = self.emu.screen_text()         # B only -- flush_dialog's
-            if not (any("¥" in r or "▶" in r or "▷" in r for r in rows)
-                    or self.textbox()):
-                break                             # A-mashing buys things!
-            self.press("B:6 .:16")
+            if target is None:
+                # off-window: walk the list, and REVERSE once it pins --
+                # scrolling one way forever is how an in-stock item below
+                # the window reported "not for sale"
+                if window == seen:
+                    if flipped:
+                        break
+                    direction, flipped = "U", True
+                seen = window
+                self.press(f"{direction}:6 .:12")
+                continue
+            self.press("D:6 .:12" if target > cur else "U:6 .:12")
+        self._shop_exit()
         self.press(".:40")
         after = bag_count()
         ok = bought and after >= before + qty
@@ -6553,14 +7376,40 @@ def heal_pokecenter(d, tries=2):
             d.emu.tick(10)
         return False
 
+    def _nurse_cell():
+        """The nurse's own coordinates, from this map's object_events.
+
+        (3,3) was hardcoded, which is the Johto town layout: it put
+        INDIGO_PLATEAU_POKECENTER_1F -- counter on row 8, nurse behind
+        (3,7) -- permanently out of reach, and heal_pokecenter raised
+        'party not fully healed' after routing to a cell with no nurse in
+        front of it (FUCK_I_MESSED_UP.md #78). The map declares where she
+        stands; ask it."""
+        try:
+            cell = d.sprite_cell("SPRITE_NURSE")
+        except Exception as e:               # unparsed/absent map source
+            log.info(f"  heal: cannot read {d.map_name()}'s objects ({e})")
+            return None
+        if cell is None:
+            log.info(f"  heal: no SPRITE_NURSE object_event on "
+                     f"{d.map_name()}")
+        return cell
+
     def _nurse():
-        d.goto(3, 3, "nurse counter")
-        d.step_dir("U")        # face her (blocked step = turn)
-        d.press("A:2 .:20")
-        d.flush_dialog()       # intro page(s) -- stops ("menu") at the
-        # heal prompt. The YES/NO box is a deliberate choice: cursor
-        # defaults to YES, but an extra stray A earlier can leave it on
-        # NO (omp-fresh variant), so navigate explicitly.
+        cell = _nurse_cell()
+        if cell is None:
+            # last resort: the Johto counter layout this used to assume
+            d.goto(3, 3, "nurse counter")
+            d.step_dir("U")    # face her (blocked step = turn)
+            d.press("A:2 .:20")
+            d.flush_dialog()
+        elif not d.talk_to(*cell, label="nurse"):
+            raise HealError(d.map_name(),
+                            f"could not reach the nurse at {cell}")
+        # intro page(s) done -- flush stops ("menu") at the heal prompt.
+        # The YES/NO box is a deliberate choice: cursor defaults to YES,
+        # but an extra stray A earlier can leave it on NO (omp-fresh
+        # variant), so navigate explicitly.
         if d.menu.wait_for(lambda rows: any("YES" in r for r in rows),
                            260):
             d.menu.select_label("YES", max_presses=4)
@@ -6594,12 +7443,14 @@ def heal_pokecenter(d, tries=2):
         raise RuntimeError(
             f"heal_pokecenter: party not fully healed "
             f"({[(m['species'], m['hp'], m['max_hp']) for m in hurt]})")
-    # success: the player is still ON the counter tile facing the nurse;
-    # the next A-bearing routine re-opens her prompt (two leg-2 wedges).
-    # Step off south -- every center's counter row is y=3 with open
-    # floor below -- and settle so no residual prompt stays armed.
-    if d.step_dir("D") != "moved":
-        d.step_dir("D")            # first press may only turn in place
+    # success: the player is still standing in front of the nurse facing
+    # her, and the next A-bearing routine re-opens her prompt (two leg-2
+    # wedges). Step AWAY from whatever direction we are facing -- not
+    # blindly south, which only held for the y=3 Johto counter -- and
+    # settle so no residual prompt stays armed.
+    away = {"U": "D", "D": "U", "L": "R", "R": "L"}.get(d.facing(), "D")
+    if d.step_dir(away) != "moved":
+        d.step_dir(away)           # first press may only turn in place
     d.settle()
 
 

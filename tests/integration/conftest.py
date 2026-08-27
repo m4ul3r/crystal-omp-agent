@@ -20,7 +20,27 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-SAVES = REPO / "claude_saves"
+
+
+def _saves_dir():
+    """Where the lane's milestone savestates live.
+
+    `claude_saves/` is where the wren run wrote them; this checkout keeps
+    them under `backup/claude_saves/`, and the lane ERRORed 16 times on
+    the missing path instead of running (FUCK_I_MESSED_UP.md #53). Try
+    the documented location, then the archive, then let the caller point
+    at anything else with CRYSTAL_MILESTONES."""
+    import os
+    env = os.environ.get("CRYSTAL_MILESTONES")
+    candidates = [Path(env)] if env else []
+    candidates += [REPO / "claude_saves", REPO / "backup" / "claude_saves"]
+    for path in candidates:
+        if path.is_dir():
+            return path
+    return candidates[-1]
+
+
+SAVES = _saves_dir()
 
 
 def _digest(path):

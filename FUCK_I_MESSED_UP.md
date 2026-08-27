@@ -1331,3 +1331,156 @@ One harness wrinkle: `d.fight()` timed out mid-Lance ("UNRESOLVED
 (timeout) and the battle is STILL LIVE") with five of six down. Re-calling
 `d.fight()` in a loop resumed it correctly -- the timeout is a frame
 budget, not a failure.
+
+---
+
+# Part 13 — the harness session that closed pt11/pt12's grievances
+
+Not a play session: a harness session driven from the pt11/pt12 list
+above. Everything below was reproduced live on a fork of the checkpoint
+named, then fixed, then re-run on the same fork. Unit lane 691 passed;
+integration lane 16 passed.
+
+## 83. `_tmhm_use` answered the teach prompt once and then only TICKED
+**[closes #68, #71]**
+
+Reproduced on `claude-goldeen` with `teach_tm('HM07','GOLDEEN')`, frame by
+frame: after USE the pages are "Booted up an HM." → "It contained
+WATERFALL." → a YES/NO box. **The box eats the first A it is given**
+(gotcha 2), so one press left it up -- and `_wait_screen` presses nothing,
+so the party list never came and the reason was
+`tmhm_use: party list never opened`. Second cause in the same predicate:
+it required `'CANCEL' and 'ABLE'`, and CANCEL is the row after the last
+mon, so a SIX-mon party puts it under the description textbox and the
+wait can never succeed.
+
+Now a classify-then-act loop (the by-hand recipe of #71): read the
+screen, act on what is there, and test for the party list BEFORE any
+press -- an A press on that list selects a mon, which is how a probe of
+this flow put "WATERFALL is not compatible" on screen by picking NOCTOWL.
+`_able_under_cursor` reads the row `wMenuCursorY` points at (mon n's tag
+is on screen row 2n, `party_menu.asm:300-330`) instead of trusting a
+glyph. Live: GOLDEEN forgot PECK, learned WATERFALL,
+`field_moves()['WATERFALL']` None → 'GOLDEEN'.
+
+## 84. The PC has an API now **[closes #72, #73, #45]**
+
+`d.deposit(nick)` / `d.withdraw(nick)` / `d.box_list()`.
+
+- The box is read from **SRAM** (`sBox`, bank 1) through named symbols,
+  never off the screen -- `emu.read` could not reach SRAM banks at all
+  before (an unbanked `sBoxCount` read returns $ff garbage).
+- The list is targeted by `wBillsPC_CursorPosition + wBillsPC_ScrollPosition`
+  (the sum `BillsPC_LoadMonStats` itself reads), verified after every
+  single press, and cross-checked against the info panel.
+- The confirming A is pressed **exactly once**, then the result is judged
+  from `observe()['party']` and the box count. If more than one mon ever
+  moves, it raises instead of reporting success.
+- Refusals happen before anything is pressed: `no-such-mon`, `last-mon`,
+  `box-full`, `party-full`, `not-in-box`, `holds-mail`.
+- `find_tiles('pc')` finds the terminal ($93 COLL_PC) -- #45 had to do
+  that by hand.
+
+`Menus.pc_info()` / `select_pc_mon()` implement #73's info-panel read
+(species at hlcoord 1,14, level at 1,12) as first-class API.
+
+## 85. Water HMs: the A press is a first-class entry point
+**[closes #70, #75]**
+
+`engine/overworld/events.asm:1085-1125` dispatches A on the FACED TILE
+to `TryCutOW` / `TryWhirlpoolOW` / `TryWaterfallOW` / `TryHeadbuttOW` /
+`TrySurfOW`, each of which checks the party move and the badge itself.
+`d.use_field_move(move, facing=)` + `d.waterfall()` / `d.whirlpool()`
+drive that path: face the tile, verify the FACED CELL's collision (not
+`wFacingTileID`, which is only valid for a few frames after an A press),
+press A, answer the prompt, and prove it worked by the position (a climb)
+or the live grid (a dissolved whirlpool).
+
+Live: DRAGONS_DEN_B1F (10,20) -- the exact tile #70 wrote off as
+decorative -- went `whirlpool` → `water` from (10,19) facing D.
+
+## 86. heal_pokecenter asks the map where the nurse is **[closes #78]**
+
+`missables.parse_map_objects()` + `d.sprite_cell('SPRITE_NURSE')`. Live at
+INDIGO_PLATEAU_POKECENTER_1F: nurse (3,7), `talk_to` routed to (3,9)
+across the row-8 counter, party healed, and the step-away is now the
+opposite of `d.facing()` rather than a blind D (that only held for the
+y=3 Johto counter).
+
+## 87. Scene blocks expire when the script's own guards say so
+**[closes the pt12 stale-nav-marks grievance]**
+
+The (16,4)/(17,4) marks were not stale state -- they were RECOMPUTED
+every goto and always matched, because the map declares exactly one scene
+(id 0 = RIVAL_BATTLE) and `PlateauRivalPostBattle` sets the scene to that
+same id. The scripts say what they need:
+
+```
+PlateauRivalBattle1:
+    checkevent EVENT_BEAT_RIVAL_IN_MT_MOON / iffalse PlateauRivalScriptDone
+    checkflag ENGINE_INDIGO_PLATEAU_RIVAL_FIGHT / iftrue PlateauRivalScriptDone
+```
+
+`script_guards()` parses that leading chain and `_scene_spent()` evaluates
+it live (`d.engine_flag()` reads `ENGINE_*` off the ROM's own `EngineFlags`
+table). CLAUDE never went to Kanto, so the first guard jumps to a
+do-nothing label and the corridor is open: `blocked_cells(...)` is now
+empty there and `goto(17,4)` walks it. Route 32's guard-less push-back
+scene still blocks (10 maps still have blocked cells).
+
+## 88. mart_buy never chose BUY, and never answered the purchase box
+**[closes the pt12 mart grievance]**
+
+Reproduced at the Indigo Plateau clerk (11,7) with FULL RESTORE x6, which
+`data/items/marts.asm` confirms is in stock:
+
+1. the clerk's **BUY/SELL/QUIT** menu comes first, and nothing chose BUY.
+   mart_buy waited passively for a `¥` that only the buy list can draw,
+   re-talked once, and raised. (The buy list scrolls fine -- FULL RESTORE
+   is the 5th of 7 in a 4-row window and the cursor reaches it.)
+2. confirming the quantity opens "6 FULL RESTORE(S) will be ¥18000." over
+   a YES/NO box. `flush_dialog` refuses choice boxes (gotcha 13), so the
+   purchase never happened -- while `bought = True` was set anyway, which
+   is where "bag 0 -> 0, bought=False/True" came from.
+
+Now: BUY is selected deliberately, the YES box is answered, the search
+reverses when the list pins, and `_shop_exit` keeps pressing B until no
+list AND no quantity picker is left (a picker satisfied the old "no ¥, no
+cursor" test while still eating every movement press). Live: bag 0 → 6,
+¥29370 → ¥11370.
+
+## 89. `fight()` resumes a spent frame budget **[closes #82's wrinkle]**
+
+`fight(resume=4)`: a `timeout` with the battle still live re-enters
+`play()` instead of reporting UNRESOLVED, and the message -- if the cap is
+ever reached -- now says plainly that calling `fight()` again RESUMES from
+there. `stuck`/`stalled`/`wedged` are never resumed: those mean the battle
+stopped changing.
+
+## 90. The integration lane was never broken -- its savestate dir was
+**[closes #53]**
+
+`tests/integration/conftest.py` hardcoded `claude_saves/`, which is
+`backup/claude_saves/` in this checkout, so 16 tests ERRORed on
+FileNotFoundError and the lane got written off as unrunnable. It now
+tries `claude_saves/`, then `backup/claude_saves/`, then
+`$CRYSTAL_MILESTONES`.
+
+And with it running, it immediately earned its keep:
+
+## 91. The same-map ladder rule reported a WALK as a fired warp
+**[fixes a regression from #77]**
+
+`_warp_fired`'s same-map test was "moved more than 3 cells from where we
+stood". At Kurt's house exit (3,7) the tap fallback walks west to (0,7) --
+4 cells, same map, no warp -- and `take_warp` answered **True** with the
+player still indoors. A false "warp fired" is worse than a false failure:
+the caller walks on believing the map changed.
+
+A same-map warp TELEPORTS to its PAIRED cell, and that pairing is data:
+warp ids are 1-based positions in the map's own `def_warp_events`
+(`warp_event 13, 31, VICTORY_ROAD, 5` → the 5th entry, (13,17)).
+`_same_map_landing()` resolves it and a same-map yes now needs both a jump
+and a landing on that cell (±2 for gotcha 14's arrival drift). Victory
+Road's ladders still pass; Kurt's house re-enter now really warps out to
+AZALEA_TOWN.

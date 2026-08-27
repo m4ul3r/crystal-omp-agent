@@ -193,6 +193,54 @@ def game_state(emu, names, include_screen=False):
     return validate_game_state(s, include_screen)
 
 
+# -- PC boxes ---------------------------------------------------------------
+# The box the PC is looking at is the CURRENT box, `sBox` in SRAM bank 1;
+# boxes 1-14 are copies in SRAM banks 2-3 that CHANGE BOX swaps in
+# (engine/pokemon/bills_pc.asm GetBoxPointer). One banked read therefore
+# answers "what is in the box a deposit lands in" without touching the
+# screen -- the deposit list's own selection cursor is an OAM sprite, so
+# the tilemap cannot be trusted for box contents at all.
+MONS_PER_BOX = 20
+
+
+def box_mons(emu, names):
+    """The current PC box's contents, read from SRAM through named
+    symbols: ``[{species, name, nickname, level}, ...]`` in box order
+    (which is the order the WITHDRAW list paints them in)."""
+    sym = emu.sym
+    stride = sym.offset("sBoxMon2Species", "sBoxMon1Species")
+    level_off = sym.offset("sBoxMon1Level", "sBoxMon1Species")
+    mon_bank, mon_base = sym["sBoxMon1Species"]
+    nick_bank, nick_base = sym["sBoxMonNicknames"]
+    count = min(emu.read_u8("sBoxCount"), MONS_PER_BOX)
+    mons = []
+    for i in range(count):
+        base = mon_base + i * stride
+        species = emu.read((mon_bank, base), 1)[0]
+        mons.append({
+            "species": species,
+            "name": names.species.get(species, "?"),
+            "nickname": emu.charmap.decode(
+                emu.read((nick_bank, nick_base + i * MON_NAME_LENGTH),
+                         MON_NAME_LENGTH)),
+            "level": emu.read((mon_bank, base + level_off), 1)[0],
+        })
+    return mons
+
+
+def box_state(emu, names):
+    """``{'box': n, 'count': k, 'capacity': 20, 'mons': [...]}`` for the
+    current box. `box` is 1-based, decoded the way the engine does it
+    (`wCurBox & $f`, then +1 -- engine/pokemon/bills_pc.asm:_MovePKMNWithoutMail)."""
+    mons = box_mons(emu, names)
+    return {
+        "box": (emu.read_u8("wCurBox") & 0x0F) + 1,
+        "count": len(mons),
+        "capacity": MONS_PER_BOX,
+        "mons": mons,
+    }
+
+
 def status_line(state):
     loc = state["location"]
     line = f"frame={state['frame']} map={loc['map']} pos=({loc['x']},{loc['y']})"

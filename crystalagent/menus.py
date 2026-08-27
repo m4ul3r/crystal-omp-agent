@@ -98,6 +98,72 @@ class Menus:
         return self.emu.read_u8("wMenuScrollPosition") + \
             self.emu.read_u8("wMenuCursorY") - 1
 
+    # -- glyph-less PC lists ----------------------------------------------
+    # Bill's PC paints its list selection with an OAM SPRITE cursor
+    # (engine/pokemon/bills_pc.asm BillsPC_UpdateSelectionCursor, drawn
+    # right after ClearSprites), so NEITHER ▷ nor ▶ ever reaches the
+    # tilemap: cursor_row/cursor_labels/select_label are BLIND on the
+    # DEPOSIT and WITHDRAW lists. A live session read that as "the A
+    # press did nothing", mashed A, and deposited five of six party
+    # members (FUCK_I_MESSED_UP.md #72, #73).
+    #
+    # What does track the selection is the info panel PCMonInfo redraws
+    # on every cursor move (engine/pokemon/bills_pc.asm:1076-1090):
+    #   hlcoord 1, 14  species name (GetBasePokemonName -- NOT the nickname)
+    #   hlcoord 1, 12  PrintLevel, then gender at col 5, item icon at col 7
+    # The list itself lives in a textbox at cols 8-18, rows 4-12 stepping
+    # two (hlcoord 9, 4 + 2*SCREEN_WIDTH per entry), so row 14 is the
+    # panel alone while row 12 must be sliced to the panel's columns.
+    PC_INFO_NAME_ROW = 14
+    PC_INFO_LEVEL_ROW = 12
+    PC_PANEL_COLS = 8
+
+    def pc_info(self, rows=None):
+        """``{'name': SPECIES, 'level': int|None}`` for the mon under a PC
+        list's sprite cursor, read off the info panel.
+
+        `name` is the SPECIES, never the nickname, and is '' when no panel
+        is up (not a PC list, or the pic is still cascading in). The
+        species alone is ambiguous when a box holds duplicates -- target
+        by index (wBillsPC_CursorPosition + wBillsPC_ScrollPosition) and
+        use this to CONFIRM."""
+        rows = self.screen() if rows is None else rows
+
+        def row(i):
+            return rows[i] if len(rows) > i else ""
+        name = row(self.PC_INFO_NAME_ROW).strip()
+        m = re.search(r"(\d+)", row(self.PC_INFO_LEVEL_ROW)[:self.PC_PANEL_COLS])
+        return {"name": name, "level": int(m.group(1)) if m else None}
+
+    def select_pc_mon(self, name, max_presses=24, confirm=False):
+        """Move a PC list's selection until its info panel names `name`
+        (species). The glyph-less counterpart of select_label: presses
+        DOWN, re-reading the panel after every press, and reverses once
+        when the panel stops changing (the list has pinned at an end).
+        `confirm=False` by default -- an A press on a PC list opens the
+        DEPOSIT/WITHDRAW submenu, and blind confirmation is exactly the
+        #72 wound."""
+        self.last_reason = None
+        want = name.strip().upper()
+        prev, flipped, direction = None, False, "D"
+        for _ in range(max_presses + 1):
+            info = self.pc_info()
+            if info["name"].upper() == want:
+                if confirm:
+                    self.press("A:2 .:20")
+                return True
+            if info == prev:            # panel unchanged: the list pinned
+                if flipped:
+                    return self._fail(
+                        f"select_pc_mon({name}): not in the list -- the "
+                        f"panel pinned scrolling both ways (last: "
+                        f"{info['name']!r})")
+                direction, flipped = "U", True
+            prev = info
+            self.press(f"{direction}:4 .:16")
+        return self._fail(f"select_pc_mon({name}): panel never named it in "
+                          f"{max_presses} presses")
+
     # -- actions -----------------------------------------------------------
 
     def wait_for(self, predicate, timeout_frames=600):
@@ -111,11 +177,16 @@ class Menus:
         return self._fail(f"wait_for: predicate never true in "
                           f"{timeout_frames} frames")
 
-    def has_label(self, rows, label):
+    @staticmethod
+    def has_label(rows, label):
         """Is a cursor sitting immediately before `label` on any row?
         EVERY glyph on the row is checked: a battle party list keeps its
         own ▷ painted while a submenu draws ▶ over it, so a leftmost-only
-        read answers about the wrong list (AGENTS.md gotcha 1)."""
+        read answers about the wrong list (AGENTS.md gotcha 1).
+
+        Static on purpose: it reads nothing but `rows`, so helpers can
+        call `Menus.has_label(rows, 'YES')` without an instance (a plain
+        `self.menu.has_label(...)` still works)."""
         for row in rows:
             for x in _cursor_xs(row):
                 if row[x + 1:].strip().startswith(label):

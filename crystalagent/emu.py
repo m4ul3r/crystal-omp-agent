@@ -137,6 +137,21 @@ class Crystal:
             return 0, name_or_addr
         return self.sym[name_or_addr]
 
+    @staticmethod
+    def _banked(bank, addr):
+        """Does PyBoy need an explicit bank for this address?
+
+        ROM ($0000-$7FFF), cartridge SRAM ($A000-$BFFF) and SVBK-switched
+        WRAM ($D000-$DFFF) are all banked; everything else is single-banked
+        and PyBoy wants a bare address. SRAM matters because the Pokémon
+        BOXES live there (`sBox` in SRAM bank 1, `sBox1`-`sBox14` in banks
+        2-3): an unbanked read of sBoxCount returns whatever bank the MBC
+        happens to have mapped -- $ff garbage, live-verified -- while
+        `mem[1, $ad10]` returns the real count.
+        """
+        return (addr < 0x8000 or 0xA000 <= addr < 0xC000
+                or (0xD000 <= addr < 0xE000 and bank >= 1))
+
     def read(self, name_or_addr, length=1):
         bank, addr = self.resolve(name_or_addr)
         mem = self.py.memory
@@ -144,7 +159,7 @@ class Crystal:
             raise ValueError(
                 f"$D000-$DFFF is SVBK-switched WRAM; read it through a "
                 f"banked symbol (`crystal sym`), not raw address {addr:#06x}")
-        if addr < 0x8000 or (0xD000 <= addr < 0xE000 and bank >= 1):
+        if self._banked(bank, addr):
             data = mem[bank, addr] if length == 1 else mem[bank, addr:addr + length]
         else:
             data = mem[addr] if length == 1 else mem[addr:addr + length]
@@ -170,7 +185,7 @@ class Crystal:
                 f"$D000-$DFFF is SVBK-switched WRAM; write it through a "
                 f"banked symbol (`crystal sym`), not raw address {addr:#06x}")
         targets = [(bank, addr + i) for i in range(len(data))] \
-            if addr < 0x8000 or (0xD000 <= addr < 0xE000 and bank >= 1) \
+            if self._banked(bank, addr) \
             else [addr + i for i in range(len(data))]
         for t, b in zip(targets, data):
             mem[t] = b

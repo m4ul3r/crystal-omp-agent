@@ -67,6 +67,11 @@ class FakeWorldDriver:
         self.steps.append(mv)
         return "moved" if mv == "D" else "blocked"
 
+    def facing(self):
+        # heal steps AWAY from whatever it faces; this fake models the
+        # Johto counter (nurse above, floor below), so it faces UP
+        return "U"
+
     def press(self, seq):
         self.emu.tick(5)
 

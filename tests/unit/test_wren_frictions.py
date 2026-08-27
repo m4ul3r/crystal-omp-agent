@@ -479,6 +479,9 @@ class FakeHealDriver:
             return "moved"
         return "blocked"                  # facing turn only
 
+    def facing(self):
+        return "U"                        # facing the nurse over a counter
+
     def press(self, seq):
         self.emu.tick(5)
 
@@ -543,7 +546,7 @@ def test_mart_buy_retalks_once_when_shop_never_opens():
     d.press = lambda seq: d.emu.tick(5)
     talks = []
     d.talk_to = lambda x, y, label="": talks.append((x, y)) or "talked"
-    with pytest.raises(RuntimeError, match="shop menu did not open"):
+    with pytest.raises(RuntimeError, match="did not open"):
         d.mart_buy(1, 3, "POTION")    # registry actions fail LOUDLY now
     assert len(talks) == 2            # first call + exactly one retry
 

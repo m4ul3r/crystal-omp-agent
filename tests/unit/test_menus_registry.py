@@ -29,18 +29,18 @@ def test_cursor_leftmost_of_any_glyph():
     assert _cursor_x(row("▶x▷y")) == 0
 
 
-# -- Menus.has_label (module-level helper exercised via plain rows) ---------
+# -- Menus.has_label (a staticmethod: no instance, just rows) ---------------
 
 def test_has_label_prefix_match():
     rows = [row(""), row("  ▶SAVE"), row("  SYSTEM")]
-    assert Menus.has_label(None, rows, "SAVE")
-    assert not Menus.has_label(None, rows, "SYSTEM")     # cursor sits on SAVE's row
+    assert Menus.has_label(rows, "SAVE")
+    assert not Menus.has_label(rows, "SYSTEM")     # cursor sits on SAVE's row
 
 
 def test_has_label_requires_immediate_prefix():
     # POKéMON starts with "POKé" but not with "POKéDEX"
     rows = [row("  ▶POKéMON")]
-    assert not Menus.has_label(None, rows, "POKéDEX")
+    assert not Menus.has_label(rows, "POKéDEX")
 
 
 def test_battle_menu_classifier():
@@ -120,6 +120,11 @@ REQUIRED_KWARGS = {
     "resolve_choice": {"choice": "YES"},
     "drain_scene": {},
     "catch_up": {},
+    "deposit": {"mon": "TOGEPI"},
+    "withdraw": {"mon": "PANIC"},
+    "box_list": {},
+    "use_field_move": {"move": "WATERFALL"},
+    "teach_tm": {"tm": "HM07", "mon": "GOLDEEN"},
 }
 
 
