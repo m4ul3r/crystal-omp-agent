@@ -19,11 +19,16 @@ matching `live`.
 
 - Fixed the documented half: `Driver(state_path, fresh=False)` now skips the
   savestate load (`Crystal(..., None)`) so a fresh power-on boot works.
-- Did **not** rebuild the LiveFeed plumbing (nobody is watching this run).
-  Wrote `scripts/newgame_claude.py`, the same intro driver without `live=`.
+- Did **not** rebuild the LiveFeed plumbing at the time (nobody was watching)
+  and forked `scripts/newgame_claude.py`, the same intro driver without
+  `live=`. **Later corrected (#54): the LiveFeed now exists, the fork is
+  deleted, and `newgame_bedroom.py` runs as documented.**
 
 **Lesson:** the docs describe a superset of this checkout. Verify an API with
-`inspect.signature` before trusting a doc table.
+`inspect.signature` before trusting a doc table. But "the docs lie" was only
+half the story: the docs described a feature whose PUBLISHER was fully written
+and merely unattached, and forking a script around it kept it dead for another
+six sessions (#54).
 
 ## 2. `d.menu.resolve_choice('YES')` — wrong object **[open, docs]**
 
@@ -217,7 +222,7 @@ declined because nothing was armed, so the party now holds a plain
 appears in nearly every battle in this session; it is noise at best and a
 broken menu wait at worst.
 
-## 19. Two unit tests are red on a clean tree **[open, not mine]**
+## 19. Two unit tests are red on a clean tree **[fixed in #54]**
 
 `tests/unit/test_live_feed.py::test_tick_slices_and_renders_only_the_owed_frame`
 and `::test_tick_slice_never_overshoots_the_request` fail with
@@ -225,6 +230,11 @@ and `::test_tick_slice_never_overshoots_the_request` fail with
 pre-existing by stashing my `trek.py` changes and re-running. `crystalagent/
 live.py`, `scripts/newgame_bedroom.py` and that test file are all **untracked**
 — a half-landed LiveFeed feature (see #1). Everything else: **593 passed**.
+
+**Closed in #54, and I was wrong to shelve it as "not mine".** The
+publisher was complete; `Crystal` was missing a 12-line observer hook. I
+carried these two failures through seven journal entries as background
+noise instead of reading the traceback once.
 
 ---
 
@@ -778,3 +788,55 @@ before touching any code. Pre-existing and environmental (those are
 another run's milestones), but it means map/nav changes can only be
 verified against `saves/claude-*.state` by hand, which is what I did: 53
 states swept, 0 render errors, 0 drift.
+
+---
+
+# Part 8 — the "2 pre-existing failures" were a missing 12-line hook
+
+## 54. I reported a red suite as background noise for the whole run **[fixed]**
+
+Every test line in this file up to Part 7 says "**593/625 passed**, same 2
+pre-existing `test_live_feed` failures". I never opened them. They said:
+
+```
+AttributeError: 'Crystal' object has no attribute 'observe'
+```
+
+`crystalagent/live.py` -- a complete, tested frame publisher -- wants an
+emulator that slices its own `tick()` so a viewer can be handed ~20 fps out
+of an emulator running thousands. `crystalagent/emu.py` had:
+
+```python
+def tick(self, frames=1):
+    self.py.tick(frames, False)
+```
+
+No observer, ever. The whole watch pipeline was dead on arrival, and #1
+recorded that as "the docs describe a superset of this checkout" and forked
+a script around it. Wrong diagnosis: the publisher was written, the
+*attachment* was missing, and it was 12 lines:
+
+- `Crystal.observe(obs)` + a sliced `tick()` (chunks of `obs.slice_frames`,
+  `obs.due()` decides whether the chunk renders, `after_slice(n, rendered)`
+  reports what PyBoy actually did, never overshoot the request).
+- `Driver(state, live={...})`, `live_attach()`, `live_detach()` -- both
+  AGENTS.md and HANDBOOK.md already documented these.
+- `paths.LIVE_DIR`, which `feed_paths()` referenced and nobody had defined.
+
+Two bugs surfaced the moment it ran:
+- a narration handler still attached at interpreter shutdown writes to
+  closed streams: `Error in sys.excepthook` x3 after a clean leg.
+  `live_attach` now registers an atexit detach.
+- `detach()` left the viewer on whatever frame the fps throttle last owed --
+  end a leg after a menu and the viewer stares at that menu forever.
+  `detach()` now publishes a final frame first.
+
+**Now: 627 passed, 0 failed** -- the suite is green for the first time in
+this run -- and `scripts/newgame_bedroom.py` drives a fresh power-on
+through the title, Oak's speech, the clock and the naming keyboard while
+publishing every frame, including the keyboard, which is never savestated.
+`scripts/newgame_claude.py` is deleted; the documented script works.
+
+**Lesson:** a failing test you did not read is not "pre-existing noise", it
+is an unread bug report. Two lines of traceback would have bought a
+watchable run six sessions earlier.

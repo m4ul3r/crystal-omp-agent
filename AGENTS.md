@@ -34,6 +34,19 @@ recipes for catch/train/shop/moves.
 ./crystal input "A:4" --until "FIGHT" --max-frames 3000
 ```
 
+Watching a run happen (dashboard + live frames from the DRIVING emulator):
+
+```sh
+.venv/bin/python watch.py                            # http://127.0.0.1:8123/
+.venv/bin/python -c "import trek; d = trek.Driver('saves/claude.state', \
+    live={'fps': 12, 'speed': 2}); d.travel('MAHOGANY_TOWN')"
+```
+
+The emulator doing the work publishes its own frames/state/log to
+`live/<name>.*` and the viewer only reads them, so the title screen, Oak's
+speech and the naming keyboard are all visible even though none of them is
+ever savestated.
+
 For anything longer than a couple of inputs use the persistent-process
 driver (loads the ROM once, seconds instead of per-call overhead):
 
@@ -110,6 +123,8 @@ from the leg's own arguments.
 |Does the decoded map match the ENGINE's map?|`d.grid_drift()` → `[(x,y,static,live), ...]` from `d.live_grid()` (the block map in WRAM). Empty is normal — audited 0 drift over 53 savestates. `d.sync_grid()` pushes any drift into nav so PATHING sees it; only `changeblock` cells can drift and `nav.conditional()` names them in advance|
 |What is walkable that I cannot reach from here?|The `,`/`o` glyphs and the `offregion:` lines of `d.map_view()` — cell count, bounding box, and the warps or changeblock that open each unreachable component. A blank is wall, never a hidden wing (gotcha 11)|
 | Go through a door | `d.take_warp(x, y)` — routes adjacent, enters with the held/tapped step, tries each side, verifies the map changed; `d.last_warp_reason` on failure. Standing on a warp never fires it (gotcha 15) |
+|Let a human watch the run|`Driver(state, live={'fps':12,'speed':2})` or `d.live_attach(...)` + `watch.py` — the DRIVING emulator publishes frames/state/log to `live/<name>.*`; the viewer never re-simulates a savestate, so intro/keyboard/cutscene frames are visible. `d.live_detach()` (also run at exit) closes it|
+|Start a brand-new game|`Driver(state, fresh=True)` — power-on reset, no savestate. `scripts/newgame_bedroom.py` drives title → NEW GAME → clock/gender → naming keyboard → control in `PLAYERS_HOUSE_2F` (3,3) and saves there|
 
 Battle math comes from the repo itself: type chart parsed from
 `data/types/type_matchups.asm`, move power/type/accuracy read out of the

@@ -1,3 +1,49 @@
+## session claude2 - OWNS fresh save -> starter -> Route 29 (Aug 26 2026)
+
+Claiming: boot a FRESH save as `saves/claude2.state` (+ `.meta`), drive
+power-on -> New Bark Town -> claim a starter from Elm's lab, then walk out
+toward Route 29. Working state: `saves/claude2.state`. Touches neither
+`saves/default.state` nor `saves/claude.state`.
+
+## session claude pt8 - the live feed was dead; landed it, suite green (Aug 26 2026)
+
+Harness-only. Still 6/8 badges, `saves/claude.state` untouched.
+
+**The "2 pre-existing `test_live_feed` failures" every pt1-pt7 entry
+reported were a missing 12-line hook, not noise.** `crystalagent/live.py`
+is a complete frame publisher that needs an emulator slicing its own
+`tick()`; `crystalagent/emu.py` had `tick()` = one batch, no observer. So
+the whole watch pipeline -- documented in AGENTS.md and HANDBOOK.md, used
+by `watch.py` and `scripts/newgame_bedroom.py` -- could never attach.
+
+Landed:
+- `Crystal.observe(obs)` + sliced `tick()`: `obs.slice_frames` chunks,
+  `obs.due()` decides whether the chunk renders, `after_slice(n, rendered)`
+  reports what PyBoy did, never overshoots. No observer = old behaviour.
+- `Driver(state, live={...})`, `Driver.live_attach()/live_detach()`.
+- `paths.LIVE_DIR` (`$CRYSTAL_LIVE_DIR`, default `crystal-agent/live/`),
+  referenced by `feed_paths()` and never defined.
+- `live_attach` registers an atexit detach (a handler attached at
+  interpreter shutdown printed `Error in sys.excepthook` x3).
+- `LiveFeed.detach()` publishes a final frame, so a leg that ends after a
+  menu no longer leaves the viewer on that menu.
+- deleted `scripts/newgame_claude.py`: the fork exists only because
+  `newgame_bedroom.py` was broken, and it now runs as documented.
+
+**Tests: 627 passed, 0 failed** -- green for the first time this run.
+Verified live: `newgame_bedroom.py --state saves/livetest.state --name
+LIVE` boots from power-on to control in PLAYERS_HOUSE_2F (3,3) while
+publishing `live/livetest.{png,json,jsonl}`; the published frame during
+the run is the naming keyboard, which is never savestated and which the
+old re-simulating viewer could not show.
+
+To watch a run now:
+```sh
+.venv/bin/python watch.py                       # http://127.0.0.1:8123/
+.venv/bin/python -c "import trek; d=trek.Driver('saves/claude.state', \
+    live={'fps':12,'speed':2}); d.travel('MAHOGANY_TOWN')"
+```
+
 ## session claude pt7 - the map view was accurate and INCOMPLETE; fixed (Aug 26 2026)
 
 Harness-only, no game progress. Still 6/8 badges, `saves/claude.state`
@@ -40,8 +86,10 @@ line out (`if g != " "`).
   `FakeNav` borrows the real `region_map`/`regions_at` so it cannot drift
   from `MapData`.
 
-Tests: unit lane **595 passed**, same 2 pre-existing `test_live_feed`
-failures. The integration lane cannot run in this checkout at all --
+Tests: unit lane **625 passed** at the time, plus the 2 `test_live_feed`
+failures I was still calling pre-existing (pt8 shows they were a missing
+emu hook, now fixed: 627/0).
+The integration lane cannot run in this checkout at all --
 `tests/integration/conftest.py:23` forks `claude_saves/wren-*.state` and
 there is no `claude_saves/` here (16 ERRORs, pre-existing). Verified
 instead by sweeping all 53 states live: 0 render errors, 0 drift.
@@ -443,10 +491,10 @@ balls in Violet before leaving.
    and `scripts/newgame_bedroom.py` called it, but the constructor only
    took `state_path` -- a new game was impossible. `fresh=True` skips the
    savestate load. (That script also wants a `live=` kwarg and `d.live`,
-   neither of which exists in this checkout; I did NOT rebuild the
-   LiveFeed, I wrote `scripts/newgame_claude.py` without it. `crystalagent/
-   live.py`, `scripts/newgame_bedroom.py` and `tests/unit/test_live_feed.py`
-   are all UNTRACKED and the two live-feed tests are red on a clean tree.)
+   which did not exist then; I forked `scripts/newgame_claude.py` without
+   it and called `crystalagent/live.py` a half-landed feature. **pt8
+   corrects that**: the publisher was complete, only the emu observer hook
+   was missing, the LiveFeed is landed and the fork is deleted.)
 2. **Gift Pokémon can be named.** `flush_dialog` always confirmed a
    naming keyboard with the empty/default name, and `_pending_nickname`
    was only read by `fight`/`catch` -- so Elm's starter came out named
