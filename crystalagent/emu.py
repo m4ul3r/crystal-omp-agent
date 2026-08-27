@@ -113,6 +113,20 @@ class Crystal:
                         f"{key}={ours!r}; refusing to load (savestate format "
                         "is version-coupled)")
         self._start_count = self.py.frame_count
+        self._observer = None
+
+    # -- frame observers ---------------------------------------------------
+
+    def observe(self, obs):
+        """Attach a per-slice observer (crystalagent.live.LiveFeed).
+
+        `tick()` then runs in `obs.slice_frames` chunks instead of one
+        batch, asks `obs.due()` whether THIS chunk owes a rendered frame,
+        and reports what PyBoy actually did to `obs.after_slice(n,
+        rendered)`. Rendering only the owed frame is the point: a viewer
+        wants ~20 fps out of an emulator running thousands.
+        """
+        self._observer = obs
 
     # -- memory ------------------------------------------------------------
 
@@ -168,7 +182,17 @@ class Crystal:
         return self._base_frames + (self.py.frame_count - self._start_count)
 
     def tick(self, frames=1):
-        self.py.tick(frames, False)
+        obs = getattr(self, "_observer", None)
+        if obs is None:
+            self.py.tick(frames, False)
+            return
+        left = frames
+        while left > 0:
+            n = min(obs.slice_frames, left)   # never overshoot the request
+            rendered = bool(obs.due())
+            self.py.tick(n, rendered)
+            obs.after_slice(n, rendered)
+            left -= n
 
     def run_sequence(self, steps):
         """Execute parsed input steps; returns frames advanced."""

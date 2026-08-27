@@ -824,11 +824,17 @@ def _load_heal_table(rom_path, sym, names):
 
 
 class Driver:
-    def __init__(self, state_path=None, fresh=False):
+    def __init__(self, state_path=None, fresh=False, live=None):
         """fresh=True: power-on reset (no savestate loaded); `state_path` is
         then only the file a later save() writes to. Documented in AGENTS.md's
         capabilities map (`Driver(state, fresh=True)`) and used by
-        scripts/newgame_bedroom.py."""
+        scripts/newgame_bedroom.py.
+
+        live={...}: attach a LiveFeed with those kwargs (name/fps/speed/
+        state_hz/directory) so watch.py can show THIS emulator's frames.
+        `live={}` takes the defaults; `d.live_attach(**kw)` does the same
+        after construction. Both AGENTS.md and HANDBOOK.md promised this and
+        the kwarg did not exist -- every watched leg died on TypeError."""
         self.state_path = Path(state_path or paths.DEFAULT_STATE)
         sym = Symbols(paths.SYM)
         cm = Charmap(paths.CHARMAP)
@@ -867,6 +873,35 @@ class Driver:
         # slot-based policies. Never cleared automatically.
         self.move_changes = []
         self.hooks = hookevents.install(self.emu)
+        self.live = None
+        if live is not None:
+            self.live_attach(**live)
+
+    def live_attach(self, **kw):
+        """Publish this emulator's frames/state/log to `live/<name>.*` for
+        watch.py; returns the LiveFeed. The DRIVING emulator does the
+        rendering (inside emu.tick's slices), so the viewer never has to
+        re-simulate a savestate and can show the title screen, Oak's
+        speech and the naming keyboard -- none of which is ever saved.
+
+        `name` defaults to the working state's stem. Idempotent: a second
+        call detaches the previous feed first, and an atexit hook detaches
+        the last one -- a narration handler still attached at interpreter
+        shutdown writes to closed streams and prints `Error in
+        sys.excepthook` three times after an otherwise clean leg."""
+        import atexit
+        from crystalagent.live import LiveFeed
+        if getattr(self, "live", None) is not None:
+            self.live.detach()
+        kw.setdefault("name", self.state_path.stem)
+        self.live = LiveFeed(self.emu, self.names, self.nav, **kw).attach()
+        atexit.register(self.live_detach)
+        return self.live
+
+    def live_detach(self):
+        if getattr(self, "live", None) is not None:
+            self.live.detach()
+            self.live = None
 
     # -- decision defaults (session claude-wren pt6) ------------------------
     # The harness must never decide a battle the model did not ask it to.

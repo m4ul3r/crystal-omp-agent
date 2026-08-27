@@ -11,4 +11,5 @@ SYM = Path(os.environ.get("CRYSTAL_SYM", REPO_ROOT / "pokecrystal.sym"))
 CHARMAP = REPO_ROOT / "constants" / "charmap.asm"
 MAP_CONSTANTS = REPO_ROOT / "constants" / "map_constants.asm"
 SAVES_DIR = Path(os.environ.get("CRYSTAL_SAVES", TOOL_DIR / "saves"))
+LIVE_DIR = Path(os.environ.get("CRYSTAL_LIVE_DIR", TOOL_DIR / "live"))
 DEFAULT_STATE = Path(os.environ.get("CRYSTAL_STATE", SAVES_DIR / "default.state"))
