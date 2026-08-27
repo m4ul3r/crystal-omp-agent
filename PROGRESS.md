@@ -1,3 +1,45 @@
+## session claude pt12 - CHAMPION. Elite Four cleared, Hall of Fame registered (Aug 27 2026)
+
+**The run is won.** CLAUDE is Johto Champion: 8/8 badges, Lance beaten,
+Hall of Fame registered, in-game save confirmed on the CONTINUE screen
+(`PLAYER CLAUDE / BADGES 8 / POKéDEX 10 / TIME 26:28`). Resumed in
+NEW_BARK_TOWN (13,6).
+
+`saves/claude.state` == `saves/claude-champion.state`. Also new:
+`claude-e4-stocked` (pre-League, full item kit), `claude-lance-beaten`.
+
+Party: **PANIC TYPHLOSION L67** (CUT / FLAME WHEEL / FLAMETHROWER /
+DYNAMICPUNCH) carried the whole gauntlet solo; GOLDEEN L22, NOCTOWL L16,
+TENTACOOL L10, GEODUDE L7 never fought. 13 Hyper Potions and ¥17,610 left.
+
+### How the gauntlet went (three attempts)
+1. **Wiped on Karen.** My policy healed on *status presence*, so
+   Vileplume's powder turned it into an infinite item loop -- 19 heals
+   spent, PANIC never attacked (journal #79).
+2. **Wiped on Karen again.** Policy fixed, Will/Koga/Bruno swept for zero
+   items, then I entered a 5-mon fight at 47% HP with a full bag (#80).
+3. **Won.** `d.heal_party()` before every room + heal on HP only with a
+   per-battle item cap + `d.tactics.recommend` driving the turns.
+   Will/Koga/Bruno/Karen cost **zero items**; Lance took 5 Hyper Potions.
+
+Facts worth keeping:
+- **The E4 rooms seal behind you** -- D from KARENS_ROOM (5,13) is refused
+  by the engine. No PP refill between Will and Lance (#81).
+- **Lance resists fire**; the recommender correctly chose 50-power CUT
+  over FLAME WHEEL for Gyarados/Dragonite/Charizard (#82).
+- `d.fight()`'s "UNRESOLVED (timeout) ... battle is STILL LIVE" is a frame
+  budget, not a loss: re-call it in a loop.
+- Stale `nav.blocked` marks at INDIGO_PLATEAU_POKECENTER_1F (16,4)/(17,4)
+  sever the only corridor to the League door; clear them before routing.
+
+### Next objective (post-game)
+Kanto: the S.S. Aqua from Olivine, the 8 Kanto badges (`badges=8/8+0/8`),
+then Red on Mt. Silver. The team needs real work first -- one L67
+Typhlosion and four unused mons will not clear Kanto's gyms, and PANIC's
+own PP (FLAMETHROWER 15 / DYNAMICPUNCH 5) is the binding constraint in
+every long fight. `crystal missables` still lists BICYCLE, BLUE_CARD and
+the COIN_CASE among 20+ uncollected items.
+
 ## session claude pt11 - 8 badges, WATERFALL, Tohjo Falls crossed, at INDIGO PLATEAU (Aug 27 2026)
 
 **8/8 Johto badges** (ZEPHYR HIVE PLAIN FOG MINERAL STORM GLACIER RISING).

@@ -1254,3 +1254,80 @@ raised `party not fully healed`. `d.talk_to(3,7)` + A through
 "Shall we heal your POKéMON?" healed all five. The helper should find the
 nurse from the map's own `object_event`s instead of assuming the Johto
 town layout.
+
+---
+
+# Part 12 — the Elite Four, beaten on the third attempt
+
+## 79. A heal-on-status rule is an infinite item sink **[mine]**
+
+My own battle policy, first attempt at Karen:
+
+```python
+if (pct < 50 or st) and bag.get('FULLRESTORE'):
+    return ('item', 'FULL RESTORE')
+```
+
+`st` is the status list. Karen's **VILEPLUME** spams powder, so every turn
+PANIC had a status, every turn the policy cured it, and Vileplume
+re-applied it. PANIC **never attacked once**: 19 heals (6 Full Restores,
+14 Hyper Potions, ¥26,400) burned while Vileplume sat at 127/127, then
+PANIC fainted and the L7-L22 rest of the party was wiped.
+
+The fix is a rule the recommender already knew: cure a status only when it
+is *eating turns and nothing lethal is incoming*, never on presence alone.
+Mine now heals on **HP only**, with a per-battle item cap:
+
+```python
+if pct < 55 and state['items'] < 6:      # HP, never status
+    state['items'] += 1
+    return ('item', 'FULL RESTORE')
+```
+
+Any "keep pressing until X" rule against an opponent that can re-create X
+is a loop. This is gotcha 13 (blind A in a shop) wearing a different hat,
+and the third time this session I paid for it (#72 was the PC).
+
+## 80. I entered a 5-mon gauntlet fight at 47% HP **[mine]**
+
+Second attempt: policy fixed, Will/Koga/Bruno swept for **zero items** --
+and then I walked into Karen's room at 94/201 with 19 heals in the bag and
+let the damage-optimising recommender attack instead of topping up.
+PANIC died on turn 5. Whiteout.
+
+`d.heal_party()` out of battle is FREE (no turn, cheapest sufficient item
+per mon). The winning run just called it before every room.
+
+## 81. The Elite Four rooms seal behind you **[known]**
+
+Arriving at Karen with FLAMETHROWER on 1 PP and DYNAMICPUNCH on 0, I
+tried to walk back to the Pokécenter for a PP refill. `take_warp(5,17)`
+stormed, and a hand probe showed why: at KARENS_ROOM (5,13) the engine
+refuses **D** while U/L/R all work. The gauntlet is one-way -- there is no
+PP refill between Will and Lance, so the PP you walk in with is the PP you
+have for 25 Pokémon.
+
+(The whiteout turned out to be the cheapest PP restore available: it heals
+the party, refills PP, keeps every item, and only halves money.)
+
+## 82. Lance is a fire wall, and CUT won it **[known]**
+
+Nothing Lance owns is weak to fire and four of six resist it, so the
+recommender's own numbers put PANIC's 50-power normal **CUT** ahead of
+FLAME WHEEL for most of the fight:
+
+```
+GYARADOS   CUT x1        57-68 (46.3%)   3 hits
+AERODACTYL FLAME WHEEL   x0.5 55-65      3 hits
+DRAGONITE  CUT x1        47-56 (36.8%)   4 hits
+CHARIZARD  CUT x1        57-67 (48.9%)   3 hits
+```
+
+`d.tactics.recommend` + `d.outlook()` picked that on its own; my earlier
+hand-rolled `power * effect_mult` heuristic would have spent 22 PP of
+resisted FLAME WHEEL instead. **Use the recommender for real fights.**
+
+One harness wrinkle: `d.fight()` timed out mid-Lance ("UNRESOLVED
+(timeout) and the battle is STILL LIVE") with five of six down. Re-calling
+`d.fight()` in a loop resumed it correctly -- the timeout is a frame
+budget, not a failure.
