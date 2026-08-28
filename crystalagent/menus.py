@@ -166,16 +166,26 @@ class Menus:
 
     # -- actions -----------------------------------------------------------
 
-    def wait_for(self, predicate, timeout_frames=600):
-        """Tick until predicate(screen_text) is true; returns success."""
+    def wait_for(self, predicate, timeout_frames=600, quiet=False):
+        """Tick until predicate(screen_text) is true; returns success.
+
+        `quiet` is for PROBES whose timeout is the normal outcome (is the
+        move disabled? did the switch get refused?): the reason is still
+        recorded, but it is not logged -- three of those per battle turned
+        the watched narration feed into "wait_for: predicate never true"
+        noise around the one line that mattered."""
         self.last_reason = None
         start = self.emu.frame
         while self.emu.frame - start < timeout_frames:
             if predicate(self.screen()):
                 return True
             self.press(".:4")
-        return self._fail(f"wait_for: predicate never true in "
-                          f"{timeout_frames} frames")
+        reason = (f"wait_for: predicate never true in "
+                  f"{timeout_frames} frames")
+        if quiet:
+            self.last_reason = reason
+            return False
+        return self._fail(reason)
 
     @staticmethod
     def has_label(rows, label):

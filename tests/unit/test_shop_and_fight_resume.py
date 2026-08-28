@@ -126,7 +126,7 @@ def buying_driver(monkeypatch, stock=6):
     class M:
         """Only wait_for is used by mart_buy."""
 
-        def wait_for(self, pred, timeout_frames=600):
+        def wait_for(self, pred, timeout_frames=600, quiet=False):
             for _ in range(8):
                 if pred(d.emu.screen_text()):
                     return True

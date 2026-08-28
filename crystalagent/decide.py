@@ -165,12 +165,16 @@ def read_party(emu, names):
             moves = []
             stats = dict.fromkeys(
                 ("attack", "defense", "speed", "spatk", "spdef"), 0)
+        nick = emu.charmap.decode(
+            emu.read((nick_bank, nick_base + i * MON_NAME_LENGTH),
+                     MON_NAME_LENGTH))
+        species_name = names.species.get(species, "?")
         party.append({
             "index": i,
-            "nickname": emu.charmap.decode(
-                emu.read((nick_bank, nick_base + i * MON_NAME_LENGTH),
-                         MON_NAME_LENGTH)),
-            "species": names.species.get(species, "?"),
+            "nickname": nick,
+            "nick": nick,                 # observe()'s spelling
+            "species": species_name,
+            "name": species_name,         # game_state()'s spelling
             "species_id": species,
             "level": rd("Level")[0],
             "hp": hp,
@@ -198,7 +202,9 @@ def _party_entry(mon, index):
     return {
         "index": mon.get("index", index),
         "nickname": mon.get("nickname", ""),
+        "nick": mon.get("nickname", ""),      # observe()'s spelling
         "species": species,
+        "name": species,                      # game_state()'s spelling
         "species_id": species_id,
         "level": mon.get("level", 0),
         "hp": hp,
@@ -333,10 +339,17 @@ def battle_frame(emu_or_battle, names=None, bdata=None, party=None, *,
     except Exception:
         wild = False
 
+    # `name` mirrors `species` on both sides, and `nick` mirrors
+    # `nickname`: the three surfaces a policy reads (observe()['party']
+    # uses `nick`, game_state() uses `name`/`nickname`, this frame used
+    # `species`/`nickname` only) disagreed, and a live policy died on
+    # KeyError('name') mid-battle. One shape, all three spellings.
     return {
         "me": {
             "nickname": me["nickname"],
+            "nick": me["nickname"],
             "species": me["name"],
+            "name": me["name"],
             "species_id": me["species"],
             "party_slot": active,
             "level": me["level"],
@@ -347,7 +360,9 @@ def battle_frame(emu_or_battle, names=None, bdata=None, party=None, *,
         },
         "enemy": {
             "nickname": enemy["nickname"],
+            "nick": enemy["nickname"],
             "species": enemy["name"],
+            "name": enemy["name"],
             "species_id": enemy["species"],
             "level": enemy["level"],
             "hp": enemy["hp"],

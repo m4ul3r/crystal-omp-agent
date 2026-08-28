@@ -191,7 +191,7 @@ def field_world(d, monkeypatch, *, qty=2, start_row=0, pocket_index=0,
         def wait_for_label(self, label, timeout_frames=300):
             return True
 
-        def wait_for(self, pred, timeout_frames=600):
+        def wait_for(self, pred, timeout_frames=600, quiet=False):
             start = d.emu.frame
             while d.emu.frame - start < timeout_frames:
                 if pred(d.emu.screen_text()):

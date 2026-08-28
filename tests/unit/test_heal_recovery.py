@@ -37,7 +37,7 @@ class FakeWorldDriver:
         self.names = None
 
         class M:
-            def wait_for(self, pred, timeout_frames=600):
+            def wait_for(self, pred, timeout_frames=600, quiet=False):
                 return False
 
             def select_label(self, label, **kw):

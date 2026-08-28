@@ -17,8 +17,8 @@ import re
 from pathlib import Path
 
 from .asmconst import parse_const_defs
-from .menus import (Menus, battle_menu_up, naming_keyboard_up, _cursor_x,
-                    _cursor_xs)
+from .menus import (Menus, battle_menu_up, naming_keyboard_up, textbox_up,
+                    _cursor_outside_box, _cursor_x, _cursor_xs)
 from .state import EGG, MON_NAME_LENGTH, _status
 
 log = logging.getLogger("trek")
@@ -519,6 +519,31 @@ class Battle:
         self.menu.press(".:10")   # let the cursor settle
         return ok
 
+    def _await_turn_end(self, timeout_frames=2000):
+        """Let the turn resolve back to the battle menu (or the battle's
+        end), PAGING the text it produces instead of idling through it.
+
+        The killing blow opens "<mon> fainted!", the EXP bar and the
+        level-up panels, and every one of those waits for a BUTTON. A
+        passive tick loop therefore sat out the entire 2000-frame budget
+        on every battle-ending turn -- 33 s of emulated time each, plus a
+        "wait_for: predicate never true in 2000 frames" line in the live
+        feed for what is the NORMAL path. A is pressed only while a
+        textbox is up and no menu cursor sits outside it, so a choice box
+        ("learn a new move?", "choose next PKMN") is left to its own
+        decider (gotcha 13) rather than blind-answered."""
+        start = self.emu.frame
+        while self.emu.frame - start < timeout_frames:
+            rows = self.emu.screen_text()
+            if battle_menu_up(rows) or not self.active():
+                return True
+            if textbox_up(rows) and not _cursor_outside_box(rows) \
+                    and not naming_keyboard_up(rows):
+                self.menu.press("A:2 .:10")
+            else:
+                self.menu.press(".:4")
+        return False
+
     def _move_menu_select(self, slot_idx, max_steps=10):
         """Highlight move slot (0-based) in the open move list."""
         steps = 0
@@ -561,7 +586,7 @@ class Battle:
         rejected = self.menu.wait_for(
             lambda r: any(m in "".join(r).upper()
                           for m in ("NO PP", "DISABLED")),
-            timeout_frames=90)
+            timeout_frames=90, quiet=True)      # timeout = the normal turn
         return not rejected
 
     def attack_forced(self):
@@ -875,7 +900,8 @@ class Battle:
         # trapped branch is a StdBattleTextbox call right after the A -- so
         # a short window is enough, and it costs the SUCCESS path nothing
         # but idle frames while the send-out starts.
-        if self.menu.wait_for(self._recall_refused, timeout_frames=120):
+        if self.menu.wait_for(self._recall_refused, timeout_frames=120,
+                              quiet=True):     # timeout = switch accepted
             self.switch_refused = True
             log.warning("[battle] switch refused: the active mon can't be "
                         "recalled (trapped) -- dropping switches until the "
@@ -1029,17 +1055,42 @@ class Battle:
     STALL_SUBSTITUTE = 2        # no-change turns before trying something else
     STALL_STRIKES = 5           # no-change turns before bailing out
 
+    def _enemy_party_hp(self):
+        """Total HP left in the ENEMY's party, or None off a trainer team.
+
+        Needed because a trainer can field IDENTICAL mons: Sprout Tower's
+        sages carry three BELLSPROUT of the same level, so KO-ing one and
+        seeing the next sent out leaves (species, hp) unchanged and the
+        stall detector called a KO "nothing changed" -- it substituted
+        SMOKESCREEN for the move that was winning. This total only ever
+        drops, so a KO is always visible."""
+        try:
+            bank, base = self.emu.sym["wOTPartyMon1"]
+            stride = self.emu.sym.offset("wOTPartyMon2", "wOTPartyMon1")
+            hp_off = self.emu.sym.offset("wOTPartyMon1HP", "wOTPartyMon1")
+            count = min(self.emu.read_u8("wOTPartyCount"), 6)
+            if not count:
+                return None
+            total = 0
+            for i in range(count):
+                raw = self.emu.read((bank, base + i * stride + hp_off), 2)
+                total += (raw[0] << 8) | raw[1]
+            return total
+        except Exception:
+            return None
+
     def _vitals(self):
         """"Did that turn change anything?" fingerprint: both mons'
-        species and HP plus which party slot is out. Cheap, and blind to
-        the text layer -- a refused RUN/SWITCH repaints the menu but moves
-        none of these."""
+        species and HP, which party slot is out, and the HP left in the
+        enemy's whole party. Cheap, and blind to the text layer -- a
+        refused RUN/SWITCH repaints the menu but moves none of these."""
         try:
             me, enemy = self.me(), self.enemy()
         except Exception:
             return None
         return (me.get("species"), me.get("hp"), me.get("party_slot"),
-                enemy.get("species"), enemy.get("hp"))
+                enemy.get("species"), enemy.get("hp"),
+                self._enemy_party_hp())
 
     @staticmethod
     def _stall_alternative(act, me, nth=1):
@@ -1197,7 +1248,8 @@ class Battle:
                 # escalating -- an animation moves within the window.
                 if self.menu.wait_for(
                         lambda r: self._wedge_snapshot(r) != wedge_snap,
-                        timeout_frames=self.WEDGE_CONFIRM_FRAMES):
+                        timeout_frames=self.WEDGE_CONFIRM_FRAMES,
+                        quiet=True):    # timeout = a real freeze, logged below
                     wedge_snap, wedge_reps = None, 0
                     continue
                 if wedge_fixes < self.WEDGE_RECOVERIES:
@@ -1360,9 +1412,7 @@ class Battle:
                 fails = 0
             last_action = kind
             # let the turn resolve back to the main menu (or the battle end)
-            self.menu.wait_for(
-                lambda r: battle_menu_up(r) or not self.active(),
-                timeout_frames=2000)
+            self._await_turn_end()
             was_menu = False
             # (c) the MENU accepted the action but the battle state did not
             # move at all. A refused RUN or SWITCH does exactly this:

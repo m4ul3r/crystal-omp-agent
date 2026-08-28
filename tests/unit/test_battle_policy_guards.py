@@ -36,7 +36,7 @@ class FakeMenu:
         self.presses.append(seq)
         self.emu.frame += 10
 
-    def wait_for(self, predicate, timeout_frames=600):
+    def wait_for(self, predicate, timeout_frames=600, quiet=False):
         start = self.emu.frame
         while self.emu.frame - start < timeout_frames:
             if predicate(self.emu.screen_text()):

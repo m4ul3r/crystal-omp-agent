@@ -60,7 +60,9 @@ _SYMS = {
            "spdef": "wBattleMonSpclDef", "type1": "wBattleMonType1",
            "type2": "wBattleMonType2", "moves": "wBattleMonMoves",
            "pp": "wBattleMonPP", "acc_level": "wPlayerAccLevel",
-           "eva_level": "wPlayerEvaLevel", "sub3": "wPlayerSubStatus3"},
+           "eva_level": "wPlayerEvaLevel", "sub3": "wPlayerSubStatus3",
+           "fury_cutter": "wPlayerFuryCutterCount",
+           "rollout": "wPlayerRolloutCount"},
     "enemy": {"level": "wEnemyMonLevel", "status": "wEnemyMonStatus",
               "hp": "wEnemyMonHP", "max_hp": "wEnemyMonMaxHP",
               "attack": "wEnemyMonAttack", "defense": "wEnemyMonDefense",
@@ -68,7 +70,9 @@ _SYMS = {
               "spdef": "wEnemyMonSpclDef", "type1": "wEnemyMonType1",
               "type2": "wEnemyMonType2", "moves": "wEnemyMonMoves",
               "pp": "wEnemyMonPP", "acc_level": "wEnemyAccLevel",
-              "eva_level": "wEnemyEvaLevel", "sub3": "wEnemySubStatus3"},
+              "eva_level": "wEnemyEvaLevel", "sub3": "wEnemySubStatus3",
+              "fury_cutter": "wEnemyFuryCutterCount",
+              "rollout": "wEnemyRolloutCount"},
 }
 
 # Effects whose damage does NOT come from the formula.
@@ -79,6 +83,22 @@ FIXED = {
     "EFFECT_SUPER_FANG": "half",
     "EFFECT_OHKO": "ohko",
 }
+# Moves whose power DOUBLES per consecutive hit, and the side counter the
+# engine keeps for them. FURY CUTTER doubles `count-1` times with the
+# count capped at 5 (x16 max, engine/battle/move_effects/fury_cutter.asm),
+# ROLLOUT the same over MAX_ROLLOUT_COUNT=5. A miss (or any other move)
+# RESETS the counter -- which is why spending a turn on an item throws the
+# whole ramp away, and why a damage model that ignores it recommends
+# exactly that (live: Whitney's MILTANK survived three attempts because a
+# scheduled potion turned an 80-damage hit into a 5-damage one).
+CHAIN = {"EFFECT_FURY_CUTTER": "fury_cutter", "EFFECT_ROLLOUT": "rollout"}
+CHAIN_CAP = 5
+
+
+def chain_power(power, count):
+    """Power of the NEXT hit of a ramping move after `count` landed ones."""
+    return power * (2 ** (min(int(count or 0) + 1, CHAIN_CAP) - 1))
+
 # Effects that make a damage estimate a lie in one direction or another.
 RISKY = {
     "EFFECT_SELFDESTRUCT": "user faints",
@@ -406,11 +426,18 @@ class Tactics:
         eff = self.by_effect_id.get(rec["effect"], "?")
         mult = self.bdata.effectiveness(mtype, defender["types"])
         stab = mtype in attacker["types"]
+        chain_key = CHAIN.get(eff)
+        chain_count = int(attacker.get(chain_key) or 0) if chain_key else 0
+        if chain_key:
+            # the NEXT hit's power, ramp included -- an un-ramped 10 is
+            # what made a live FURY CUTTER chain look worthless
+            power = chain_power(power, chain_count)
         view = {
             "move": name, "id": move_id, "type": mtype,
             "type_name": self._type_name(mtype), "power": power,
             "accuracy": acc, "effect": eff, "mult": mult, "stab": stab,
             "category": self.category(mtype), "note": "",
+            "chain": chain_key, "chain_count": chain_count,
             # What the move ACTUALLY lands at, after the attacker's
             # accuracy stage and the target's evasion stage.
             "effective_accuracy": acc_percent(effective_accuracy(
@@ -812,7 +839,17 @@ class Tactics:
                 f"doomed: {their['move']} does {their['min']}-{their['max']} "
                 f"vs my {me['hp']} HP and nothing KOs first -- {tail}")
         lethal = bool(their and their["min"] >= me["hp"])
-        hurt = me["hp"] <= heal_at * me["max_hp"]
+        # Heal on the FRACTION or on the THREAT, whichever bites first: a
+        # flat 30% is far too late against a 2HKO. Live (rival Croconaw,
+        # WATER GUN 15-18 into a 62 HP QUILAVA): by the time 30% was
+        # reached the sacrifice line owned the turn and healing stopped
+        # forever, so the run whited out three times with TEN potions in
+        # the bag. Healing while two of their best hits still fit in my
+        # HP bar wins that fight -- and `lethal` keeps a doomed turn from
+        # being wasted on a potion.
+        threatened = bool(their and their["max"]
+                          and me["hp"] <= 2 * their["max"])
+        hurt = me["hp"] <= heal_at * me["max_hp"] or threatened
         # The frame's bag is keyed by normalised names ('FULLRESTORE'), so
         # match through norm_item rather than hoping about spacing.
         from .battle import norm_item
@@ -821,10 +858,25 @@ class Tactics:
         potion = next((n for n in ("FULL RESTORE", "MAX POTION",
                                    "HYPER POTION", "SUPER POTION", "POTION")
                        if bag.get(norm_item(n))), None)
-        if hurt and potion and not lethal:
-            return ("item", potion), (
-                f"{me['hp']}/{me['max_hp']} HP with {potion} in the bag and "
-                f"nothing lethal incoming")
+        # A LIVE ramp is worth more than the potion: an item turn costs the
+        # turn AND resets the chain to zero (fury_cutter.asm resets on
+        # anything but a landed hit). Live: two scheduled SUPER POTIONs
+        # turned a chained FURY CUTTER that had just done 41 into one that
+        # did 5, and Whitney's MILTANK won three times over it.
+        chained = next((m for m in live
+                        if m.get("chain") and m.get("chain_count")), None)
+        if hurt and potion and not lethal and not chained:
+            why = (f"{me['hp']}/{me['max_hp']} HP with {potion} in the bag "
+                   f"and nothing lethal incoming")
+            if threatened and me["hp"] > heal_at * me["max_hp"]:
+                why += (f" -- two {their['move']} hits ({their['max']} each) "
+                        f"would finish me")
+            return ("item", potion), why
+        if hurt and potion and not lethal and chained:
+            return ("attack", chained["slot"]), (
+                f"{chained['move']} is {chained['chain_count'] + 1} hits "
+                f"into its ramp ({chained['min']}-{chained['max']} now) -- "
+                f"a {potion} would reset it, and nothing lethal is incoming")
         # A turn-eating status is worth an item when nothing is about to
         # kill me and no kill is available: PAR alone throws away a quarter
         # of my turns, SLP/FRZ all of them. PSN/BRN cost HP, not turns --

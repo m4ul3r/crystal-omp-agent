@@ -424,7 +424,9 @@ def test_read_side_decodes_big_endian_and_drops_empty_move_slots():
             # accuracy/evasion stages and SubStatus3 (confusion) --
             # CheckHit reads these live, nothing else in WRAM carries them
             "wPlayerAccLevel": 7, "wPlayerEvaLevel": 9,
-            "wPlayerSubStatus3": 0x80}
+            "wPlayerSubStatus3": 0x80,
+            # the ramping-move counters the engine keeps per side
+            "wPlayerFuryCutterCount": 3, "wPlayerRolloutCount": 0}
     side = read_side(FakeEmu(vals), "me")
     assert side["hp"] == 211 and side["max_hp"] == 256
     assert side["moves"] == [17, 225, 86]          # empty 4th slot dropped
@@ -433,6 +435,7 @@ def test_read_side_decodes_big_endian_and_drops_empty_move_slots():
     assert side["types"] == [26, 2]
     assert side["acc_level"] == 7 and side["eva_level"] == 9
     assert side["sub3"] == 0x80
+    assert side["fury_cutter"] == 3 and side["rollout"] == 0
 
 
 # -- the recommendation ------------------------------------------------
@@ -690,3 +693,102 @@ def test_explain_prints_one_row_per_move_and_the_threats():
     assert "IRON TAIL" in text and "DRAGONBREATH" in text
     assert "I move first" in text
     assert text.count("<-") == 2                    # both enemy moves shown
+
+
+# -- healing must track the THREAT, not just a flat HP fraction ----------
+
+def test_heals_while_two_of_their_hits_still_fit_in_my_bar():
+    """A flat 30% trigger is too late against a 2HKO: by the time it is
+    reached the sacrifice line owns the turn and healing stops forever.
+    Live cost: the rival's CROCONAW (WATER GUN 15-18 into a 62 HP QUILAVA)
+    whited the run out three times with TEN potions in the bag."""
+    t = _tactics(heal_table=HEAL_TABLE)
+    me = _mon(hp=55, max_hp=100, moves=(2,))          # 55% -- above heal_at
+    foe = _mon(types=("NORMAL", "NORMAL"), hp=300, defense=200, spdef=200,
+               moves=(10,))
+    analysis = t_analysis(t, me, foe)
+    their = analysis["their_best"]
+    assert their["min"] < me["hp"] <= 2 * their["max"], their
+    action, why = t.recommend(analysis, {"bag": {"POTION": 5}})
+    assert action == ("item", "POTION"), why
+    assert "would finish me" in why
+
+
+def test_a_healthy_mon_does_not_waste_the_turn_on_a_potion():
+    t = _tactics(heal_table=HEAL_TABLE)
+    me = _mon(hp=100, max_hp=100, moves=(2,))
+    foe = _mon(types=("NORMAL", "NORMAL"), hp=300, defense=200, spdef=200,
+               moves=(10,))
+    action, _ = t.recommend(t_analysis(t, me, foe), {"bag": {"POTION": 5}})
+    assert action[0] == "attack"
+
+
+def test_a_doomed_turn_still_refuses_the_potion():
+    """Their MIN roll already kills: the sacrifice line owns the turn and
+    a 20 HP potion changes nothing (BATTLE.md §9)."""
+    t = _tactics(heal_table=HEAL_TABLE)
+    me = _mon(hp=8, max_hp=100, moves=(2,))
+    foe = _mon(types=("NORMAL", "NORMAL"), hp=300, defense=200, spdef=200,
+               moves=(10,))
+    action, why = t.recommend(t_analysis(t, me, foe), {"bag": {"POTION": 5}})
+    assert action[0] == "attack" and "doomed" in why
+
+
+# -- ramping moves: the ROM doubles them, so the model must too ----------
+
+FURY = {11: ("EFFECT_FURY_CUTTER", 10, "BUG", 95)}
+
+
+def _fury_tactics():
+    from crystalagent.tactics import parse_effects
+    names = SimpleNamespace(moves={**NAMES, 11: "FURY CUTTER"},
+                            items={}, species={})
+    effects = parse_effects(REPO_ROOT)
+    moves = {mid: {"effect": effects[eff], "power": pw,
+                   "type": TYPES[ty], "accuracy": acc}
+             for mid, (eff, pw, ty, acc) in {**MOVES, **FURY}.items()}
+    b = SimpleNamespace(types=TYPES, matchups=MATCHUPS, moves=moves)
+    b.effectiveness = lambda atk, dfn: _eff(atk, dfn)
+    return Tactics(b, names, REPO_ROOT, heal_table=HEAL_TABLE)
+
+
+def test_fury_cutter_power_doubles_with_the_engines_own_count():
+    """`count-1` doublings, capped at 5 (16x) --
+    engine/battle/move_effects/fury_cutter.asm."""
+    from crystalagent.tactics import chain_power
+    assert [chain_power(10, n) for n in range(7)] == [
+        10, 20, 40, 80, 160, 160, 160]
+
+
+def test_a_chained_fury_cutter_is_scored_at_its_ramped_power():
+    t = _fury_tactics()
+    foe = _mon(types=("NORMAL", "NORMAL"), hp=300, defense=100, spdef=100)
+    cold = t.outlook(11, _mon(moves=(11,)), foe)
+    hot = t.outlook(11, {**_mon(moves=(11,)), "fury_cutter": 3}, foe)
+    assert hot["chain"] == "fury_cutter" and hot["chain_count"] == 3
+    assert hot["power"] == 8 * cold["power"]
+    assert hot["max"] > cold["max"] * 4
+
+
+def test_a_live_ramp_beats_a_scheduled_potion():
+    """An item turn costs the turn AND resets the chain: two scheduled
+    SUPER POTIONs turned a 41-damage chained FURY CUTTER into a 5-damage
+    one and lost the Whitney fight three times."""
+    t = _fury_tactics()
+    me = _mon(hp=40, max_hp=100, moves=(11,))
+    me["fury_cutter"] = 3
+    foe = _mon(types=("NORMAL", "NORMAL"), hp=300, defense=100, spdef=100,
+               moves=(10,))
+    action, why = t.recommend(t_analysis(t, me, foe), {"bag": {"POTION": 5}})
+    assert action == ("attack", 0), why
+    assert "reset it" in why
+
+
+def test_without_a_live_ramp_the_potion_still_wins():
+    t = _fury_tactics()
+    me = _mon(hp=40, max_hp=100, moves=(11,))
+    me["fury_cutter"] = 0
+    foe = _mon(types=("NORMAL", "NORMAL"), hp=300, defense=100, spdef=100,
+               moves=(10,))
+    action, _ = t.recommend(t_analysis(t, me, foe), {"bag": {"POTION": 5}})
+    assert action == ("item", "POTION")

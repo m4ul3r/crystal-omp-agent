@@ -154,7 +154,7 @@ def use_item_world(d, monkeypatch, consumed):
         def wait_for_label(self, label, timeout_frames=300):
             return True
 
-        def wait_for(self, pred, timeout_frames=600):
+        def wait_for(self, pred, timeout_frames=600, quiet=False):
             return True                    # target party list appeared
 
         def scroll_abs(self):
