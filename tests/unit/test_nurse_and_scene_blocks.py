@@ -59,7 +59,7 @@ class NurseDriver:
         self.names = None
 
         class M:
-            def wait_for(self, pred, timeout_frames=600):
+            def wait_for(self, pred, timeout_frames=600, quiet=False):
                 return False
 
             def select_label(self, label, **kw):
@@ -227,3 +227,28 @@ def test_unreadable_flags_assume_the_scene_is_armed():
     d.engine_flag = boom
     assert d._scene_spent("IndigoPlateauPokecenter1F",
                           "PlateauRivalBattle1") is False
+
+
+def test_heal_answers_a_residual_nurse_prompt(monkeypatch):
+    """A live heal returned with "Shall we heal your POKéMON?" still on
+    screen, and an open choice box blocks every later step: the next
+    travel reported "blocked by choice menu" from inside the Pokécenter
+    and the gym leg never started."""
+    d = NurseDriver()
+    monkeypatch.setattr(trek, "game_state",
+                        lambda emu, names: {"party": d.party()})
+    rows = ["", "", "┌────┐", "│▶YES│", "│ NO │", "└────┘"]
+    d._choice_box = lambda r: {"cursor": 3, "options": [(3, "YES"), (4, "NO")],
+                               "span": (0, 5)}
+    d.emu.screen_text = lambda: list(rows)
+    answered = []
+
+    def resolve(choice="YES"):
+        answered.append(choice)
+        d._choice_box = lambda r: None
+        return {"answered": True, "chose": choice, "options": ["YES", "NO"]}
+
+    d.resolve_choice = resolve
+    d.close_menus = lambda: answered.append("close_menus")
+    trek.heal_pokecenter(d)
+    assert answered == ["NO"], answered

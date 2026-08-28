@@ -18,6 +18,7 @@ Fakes only -- no emulator boots.
 """
 import pytest
 
+import trek
 from trek import Driver
 
 pytestmark = pytest.mark.unit
@@ -295,7 +296,7 @@ def test_pace_never_leaves_its_box():
 def test_pace_box_of_one_cell_is_boxed_in_not_a_drift():
     d = pace_driver(x=5, y=5)
     r = d.pace(10, box=(5, 5, 5, 5))
-    assert r == {"steps": 0, "battles": 0, "stopped": "boxed-in"}
+    assert {k: r[k] for k in ("steps", "battles", "stopped")} == {"steps": 0, "battles": 0, "stopped": "boxed-in"}
     assert d.moves == []
 
 
@@ -319,7 +320,7 @@ def test_pace_walks_back_into_a_box_it_starts_outside_of():
 def test_pace_returns_on_the_first_battle():
     d = pace_driver(script={3: "battle"}, auto_fight=True)
     r = d.pace(20, box=(1, 9, 1, 9))
-    assert r == {"steps": 2, "battles": 1, "stopped": "battle"}
+    assert {k: r[k] for k in ("steps", "battles", "stopped")} == {"steps": 2, "battles": 1, "stopped": "battle"}
     assert d.fight_calls == 0
     assert d.emu.u8["wBattleMode"] == 1     # still up: the model decides
     assert len(d.moves) == 3                # stopped dead, did not walk on
@@ -328,7 +329,7 @@ def test_pace_returns_on_the_first_battle():
 def test_pace_on_battle_fight_keeps_stepping():
     d = pace_driver(script={2: "battle", 5: "battle"}, auto_fight=True)
     r = d.pace(6, box=(1, 9, 1, 9), on_battle="fight")
-    assert r == {"steps": 6, "battles": 2, "stopped": "steps"}
+    assert {k: r[k] for k in ("steps", "battles", "stopped")} == {"steps": 6, "battles": 2, "stopped": "steps"}
     assert d.fight_calls == 2                # routed through _on_battle
     assert len(d.moves) == 8                 # 6 steps + 2 battle turns
 
@@ -344,7 +345,7 @@ def test_pace_fight_mode_routes_through_the_one_battle_path():
 def test_pace_fight_mode_declines_when_auto_fight_is_manual():
     d = pace_driver(script={2: "battle"}, auto_fight=False)
     r = d.pace(9, box=(1, 9, 1, 9), on_battle="fight")
-    assert r == {"steps": 1, "battles": 1, "stopped": "declined"}
+    assert {k: r[k] for k in ("steps", "battles", "stopped")} == {"steps": 1, "battles": 1, "stopped": "declined"}
     assert d.fight_calls == 0
     assert "auto_fight=manual" in d.last_goto_reason
 
@@ -371,7 +372,9 @@ def test_pace_gives_up_on_walls_instead_of_spinning():
 
 def test_pace_zero_steps_is_a_no_op():
     d = pace_driver()
-    assert d.pace(0) == {"steps": 0, "battles": 0, "stopped": "steps"}
+    r = d.pace(0)
+    assert {k: r[k] for k in ("steps", "battles", "stopped")} == {
+        "steps": 0, "battles": 0, "stopped": "steps"}
     assert d.moves == []
 
 
@@ -419,3 +422,34 @@ def test_decision_default_attributes_exist_on_bare_drivers():
     assert d.auto_fight_steps is False
     assert d.encounter_policy is None
     assert d.decide_all is False
+
+
+def test_pace_names_the_cell_and_directions_when_boxed_in():
+    """A caller that re-calls pace() on a cell with no legal move spins
+    forever (live: seven real minutes of '0/30 steps, stopped=blocked' in
+    a Route 34 pocket). The result must carry enough to act on."""
+    d = pace_driver(walls=(5, 5, 5, 5))   # a one-cell pocket: no move lands
+    r = d.pace(10)
+    assert r["stopped"] == "blocked" and r["steps"] == 0
+    assert r["pos"] == (5, 5)
+    assert set(r["blocked_dirs"]) == set("UDLR")
+
+
+def test_goto_stops_when_a_naming_keyboard_eats_the_steps():
+    """An egg hatching mid-walk opens the naming keyboard, which eats every
+    step exactly like a stray menu -- but it must never be blind-pressed
+    (gotcha 18). Live cost: TOGEPI hatched on ROUTE_34 and the run spent
+    seven minutes storming 'unexplained blocked step' replans."""
+    d = pace_driver(walls=(5, 5, 5, 5))
+    d.keyboard_open = lambda: True
+    d.nav = trek.TrekNav(trek.paths.REPO_ROOT)
+    d.nav.blocked = {}
+    d._refresh_nav_blocks = lambda: None
+    d.map_name = lambda: "ROUTE_34"
+    d._map_const = lambda: "ROUTE_34"
+    d.pos = lambda: (0, 0, 8, 10)
+    d._step = lambda mv, **kw: "blocked"
+    d.settle = lambda *a, **kw: None
+    assert d.goto(8, 12) is False
+    assert "naming-keyboard" in d.last_goto_reason
+    assert "dismiss_keyboard" in d.last_goto_reason

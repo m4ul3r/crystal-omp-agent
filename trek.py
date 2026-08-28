@@ -205,6 +205,10 @@ def _tile_kind(b):
         return "grass"
     if b == 0x00:
         return "floor"
+    if b in (0x12, 0x1A):               # COLL_CUT_TREE / COLL_CUT_TREE_1A
+        return "cut-tree"               # a wall until someone CUTs it
+    if b == 0x15:                       # COLL_HEADBUTT_TREE
+        return "headbutt-tree"
     if b == 0x24:                       # COLL_WHIRLPOOL
         return "whirlpool"
     if b == 0x33:                       # COLL_WATERFALL
@@ -582,6 +586,101 @@ def script_is_disruptive(repo, camel_file, script_label):
             else any(kw in instr for instr in body
                      for kw in _DISRUPTIVE_KEYWORDS))
     return _script_body_cache[key]
+
+
+_SETSCENE = re.compile(r"^setscene\s+([A-Za-z0-9_]+)")
+_SCRIPT_JUMP = re.compile(
+    r"^(?:scall|sjump|jump|farsjump|farscall|iftrue|iffalse|ifequal|"
+    r"ifnotequal|ifgreater|ifless)\s+(?:[^,]+,\s*)?(\.?[A-Za-z_][\w.]*)\s*$")
+# instructions after which control does NOT reach the next label
+_SCRIPT_TERMINATORS = ("end", "endall", "endcallback", "sjump", "jump",
+                       "farsjump", "returnafterbattle", "halloffame",
+                       "reloadmapafterbattle", "warpfacing", "warp")
+_scene_advance_cache = {}
+_label_order_cache = {}
+
+
+def _label_order(repo, camel_file):
+    """Labels of maps/<Camel>.asm in file order -- needed because scripts
+    FALL THROUGH into the label below them (`MeetCopScript2` steps left,
+    then walks straight into `MeetCopScript`, then into `CopScript`, which
+    is where the setscene lives)."""
+    if camel_file not in _label_order_cache:
+        out = []
+        try:
+            for line in Path(repo, "maps",
+                             f"{camel_file}.asm").read_text(
+                                 errors="replace").splitlines():
+                s = line.split(";")[0].rstrip()
+                if s.endswith(":") and not s[:1].isspace():
+                    out.append(s[:-1].strip())
+                elif s.strip().endswith(":") and s.strip().startswith("."):
+                    out.append(s.strip()[:-1])
+        except OSError:
+            pass
+        _label_order_cache[camel_file] = out
+    return _label_order_cache[camel_file]
+
+
+def _fallthrough_label(repo, camel_file, script_label, body):
+    """The label control reaches when `script_label`'s body just runs off
+    its end (no end/jump), or None."""
+    if body and body[-1].split()[0] in _SCRIPT_TERMINATORS:
+        return None
+    labels = _label_order(repo, camel_file)
+    try:
+        i = labels.index(script_label)
+    except ValueError:
+        return None
+    return labels[i + 1] if i + 1 < len(labels) else None
+
+
+def script_advances_scene(repo, camel_file, script_label, token, depth=8):
+    """True when a coord_event's own script advances the map's scene to a
+    DIFFERENT id, i.e. it is a ONE-SHOT cutscene: crossing the cell fires
+    it once and the trigger is then gone for good.
+
+    Such a cell must not be a permanent wall. Elm's lab hands you the
+    aide's POTION on the way out (SCENE_ELMSLAB_AIDE_GIVES_POTION at
+    (4,8)/(5,8), `setscene SCENE_ELMSLAB_NOOP`) and those two cells are
+    the lab's ONLY corridor to its door -- blocking them made every fresh
+    game's first journey unroutable ("no path from (5,3) to (5,10)"), and
+    the officer scene at (4,5)/(5,5) does the same to the corridor back to
+    Elm with the egg.
+
+    Two shapes stay blocked, and both are why this is a token comparison
+    over the reachable script rather than "contains setscene":
+      * Route 32's Cooltrainer push-back never sets a scene at all, so it
+        re-fires forever;
+      * the Indigo Plateau rival sets the scene back to its OWN id.
+    `scall`/`sjump`/`jump`, branch targets AND fallthrough into the next
+    label are followed inside the same file (the lab's two setscenes live
+    one scall and two fallthroughs away)."""
+    key = (camel_file, script_label, token)
+    if key in _scene_advance_cache:
+        return _scene_advance_cache[key]
+    seen, queue, found = set(), [(script_label, 0)], False
+    while queue and not found:
+        label, d = queue.pop()
+        if label in seen or d > depth:
+            continue
+        seen.add(label)
+        body = _script_body(repo, camel_file, label)
+        for instr in body or ():
+            m = _SETSCENE.match(instr)
+            if m:
+                if m.group(1) != token:
+                    found = True
+                    break
+                continue
+            j = _SCRIPT_JUMP.match(instr)
+            if j:
+                queue.append((j.group(1), d + 1))
+        nxt = _fallthrough_label(repo, camel_file, label, body)
+        if nxt:
+            queue.append((nxt, d + 1))
+    _scene_advance_cache[key] = found
+    return found
 
 
 def script_guards(repo, camel_file, script_label):
@@ -1597,25 +1696,55 @@ class Driver:
 
     def map_objects(self, map_name=None):
         """Every ``object_event`` this map DECLARES, read from its own
-        source: ``[{'x','y','sprite','movement','script','event'}]``.
+        source: ``[{'x','y','sprite','movement','script','event',
+        'masked'}]``.
 
         The static counterpart of `sprites()`: those are live positions,
         these are the map's definitions -- which is what answers "where
-        does this map keep its nurse/clerk" without hardcoding a layout."""
+        does this map keep its nurse/clerk" without hardcoding a layout.
+
+        `masked` answers whether the object is actually THERE right now:
+        the engine hides an object whose event flag is SET
+        (`CheckObjectFlag`, engine/overworld/map_objects_2.asm:31-56 --
+        flag set => masked), so a declared NPC can be absent and a
+        declared item ball long gone. None means "no flag, or unreadable"
+        -- an object with no flag is always present. Live positions still
+        come from `sprites()`/`npc_cells()`, which only see the sprites
+        the game has instantiated near the camera."""
         const = self._resolve_map(map_name) if map_name else self._map_const()
         camel = self.nav.camel.get(const, const)
-        return missables.parse_map_objects(
+        out = missables.parse_map_objects(
             Path(paths.REPO_ROOT, "maps", f"{camel}.asm"))
+        for o in out:
+            flag = o.get("event")
+            masked = None
+            if flag:
+                try:
+                    masked = bool(self._event_flag(flag))
+                except Exception:
+                    masked = None
+            o["masked"] = masked
+        return out
 
     def sprite_cell(self, sprite, map_name=None):
-        """(x, y) of the first object_event with sprite constant `sprite`
-        ('SPRITE_NURSE', 'SPRITE_CLERK'), or None. Coordinates are walk
-        cells -- the same space `pos()` and `talk_to` use."""
+        """(x, y) of the first PRESENT object_event with sprite constant
+        `sprite` ('SPRITE_NURSE', 'SPRITE_CLERK'), or None. Coordinates
+        are walk cells -- the same space `pos()` and `talk_to` use.
+
+        An object whose event flag is set is masked out by the engine and
+        is not standing there at all, so it is skipped; a masked one is
+        only returned when nothing else matches (better a stale guess
+        than None for callers that just want the counter's layout)."""
         want = str(sprite).strip().upper()
+        fallback = None
         for o in self.map_objects(map_name):
-            if o["sprite"].upper() == want:
-                return o["x"], o["y"]
-        return None
+            if o["sprite"].upper() != want:
+                continue
+            if o.get("masked"):
+                fallback = fallback or (o["x"], o["y"])
+                continue
+            return o["x"], o["y"]
+        return fallback
 
     def npc_cells(self):
         """Cells occupied by live NPCs (walk-cell coords, player excluded).
@@ -2047,6 +2176,27 @@ class Driver:
         return jumped and abs(now_pos[0] - landing[0]) + \
             abs(now_pos[1] - landing[1]) <= 2
 
+    def _slide_is_clear(self, start, target):
+        """Is every cell strictly between `start` and the aligned warp
+        `target` free of OTHER warp tiles?
+
+        A held slide stops on the first warp it touches, so a door whose
+        pair sits between the two (Sprout Tower's (9,15)/(10,15) exit)
+        can never be reached that way. Unknown map data answers True --
+        the caller's fallback is a proper adjacent approach anyway."""
+        (sx, sy), (tx, ty) = start, target
+        dx = (tx > sx) - (tx < sx)
+        dy = (ty > sy) - (ty < sy)
+        x, y = sx + dx, sy + dy
+        while (x, y) != (tx, ty):
+            try:
+                if self.tile_at(x, y) == "warp":
+                    return False
+            except Exception:
+                return True
+            x, y = x + dx, y + dy
+        return True
+
     def take_warp(self, x, y, label=""):
         """ENTER the warp at (x, y) -- and standing on it is not entering.
 
@@ -2089,13 +2239,24 @@ class Driver:
         if self.pos()[2:] == target:
             return self._reenter_warp(target, start_map)
         px, py = self.pos()[2:]
+        # An aligned cell may enter with one held slide, but ONLY when
+        # nothing between here and the door is itself a warp: at Sprout
+        # Tower's exit the door's PAIRED tile sits in the way, so sliding
+        # L from (11,15) toward (9,15) stopped dead on (10,15), fired
+        # nothing (a south-wall door answers only to DOWN, gotcha 15) and
+        # `travel` retried the same slide four times before giving up on a
+        # perfectly open door.
         aligned = ((px == target[0]) != (py == target[1])) and \
-            abs(px - target[0]) + abs(py - target[1]) <= 3
+            abs(px - target[0]) + abs(py - target[1]) <= 3 and \
+            self._slide_is_clear((px, py), target)
         if not aligned:
             for mv, (dx, dy) in STEP.items():
                 nx, ny = target[0] + dx, target[1] + dy
-                if self.tile_at(nx, ny) in ("blocked", "off-map"):
-                    continue
+                try:                    # duck-typed driver: no map data
+                    if self.tile_at(nx, ny) in ("blocked", "off-map"):
+                        continue
+                except Exception:
+                    pass
                 if self.goto(nx, ny, label or f"approach warp {target}"):
                     break
             else:
@@ -2115,9 +2276,19 @@ class Driver:
                             self.pos()[2:], landing):
             log.info(f"  -> {self.map_name()} {self.pos()[2:]}")
             return True
+        if self.pos()[2:] != target:
+            # This side did not fire it. Get ONTO the tile so the
+            # exhaustive side walk can run -- it is the only code that
+            # knows a door answers to one axis only.
+            try:
+                self.goto(*target)
+            except Exception:
+                pass
+            if self.map_name() != start_map:      # walking on fired it
+                self.settle()
+                log.info(f"  -> {self.map_name()} {self.pos()[2:]}")
+                return True
         if self.pos()[2:] == target:
-            # we are standing on it now: re-enter properly instead of
-            # reporting a failure the caller cannot act on
             return self._reenter_warp(target, start_map)
         return self._warp_fail(
             f"entered {target} from {self.pos()[2:]} but the map is still "
@@ -2494,9 +2665,20 @@ class Driver:
                 if blocked >= 8:
                     stopped = "blocked"
                     break
+        out = {"steps": taken, "battles": battles, "stopped": stopped,
+               "pos": self.pos()[2:]}
+        if stopped == "blocked":
+            # A caller that just re-calls pace() here spins forever on a
+            # cell with no legal move (live: 7 real minutes of
+            # "0/30 steps, stopped=blocked" in a Route 34 pocket). Name
+            # the cell and the directions that were legal to TRY.
+            out["blocked_dirs"] = list(self._pace_dirs(picks, box))
+            log.info(f"  pace: boxed in at {out['pos']} -- every legal "
+                     f"direction {out['blocked_dirs']} is a wall; move "
+                     f"before pacing again")
         log.info(f"  pace: {taken}/{budget} steps, {battles} battles, "
                  f"stopped={stopped}")
-        return {"steps": taken, "battles": battles, "stopped": stopped}
+        return out
 
     def keyboard_open(self):
         s = self.emu.screen_text()
@@ -2504,23 +2686,47 @@ class Driver:
 
 
     @staticmethod
-    def _choice_labels(rows):
-        """Options of an open choice box: cursor-row text plus neighbor
-        rows inside the same frame ('│▶YES│'/'│ NO │' -> ['YES','NO']).
-        Empty when no cursor glyph is on screen."""
+    def _choice_box(rows):
+        """Geometry of an open choice box, or None when no cursor glyph is
+        on screen: {'cursor': row index, 'options': [(row index, label)],
+        'span': (left, right)}.
+
+        A box drawn OVER the overworld shares its rows with map art
+        ('▃▄◖▛▛◪▃▄▂▂▂▂λλ│ YES│'), so labels are read from the BOX's own
+        column span -- the vertical bars either side of the cursor --
+        never from the whole row. Reading whole rows made mom's
+        day-picker unanswerable: 'YES' never equalled the decoded
+        option, so `travel` died in PLAYERS_HOUSE_1F."""
         idx = next((i for i, r in enumerate(rows)
                     if any(c in r for c in CURSORS)), None)
         if idx is None:
-            return []
-        labels = []
+            return None
+        bars = "│┃"
+        row = rows[idx]
+        cx = min(row.index(c) for c in CURSORS if c in row)
+        left = max((i for i, ch in enumerate(row[:cx]) if ch in bars),
+                   default=-1)
+        right = next((i for i in range(cx + 1, len(row))
+                      if row[i] in bars), len(row))
+        opts = []
         for j in range(max(0, idx - 3), min(len(rows), idx + 4)):
-            t = rows[j]
+            t = rows[j][left + 1:right]
             for c in CURSORS:
                 t = t.replace(c, "")
             t = t.strip().strip("│┃").strip()
-            if t and "─" not in t and "┌" not in t and "└" not in t:
-                labels.append(t)
-        return labels
+            # a box overlapping blank map tiles decodes them as 'λλλλ'
+            # (Greek is alnum!): a real option carries ASCII text
+            if t and "─" not in t and "┌" not in t and "└" not in t \
+                    and any(ch.isalnum() and ch.isascii() for ch in t):
+                opts.append((j, t))
+        return {"cursor": idx, "options": opts, "span": (left, right)}
+
+    @classmethod
+    def _choice_labels(cls, rows):
+        """Options of an open choice box ('│▶YES│'/'│ NO │' ->
+        ['YES','NO']); empty when no cursor glyph is on screen."""
+        box = cls._choice_box(rows)
+        return [t for _, t in box["options"]] if box else []
 
     def resolve_choice(self, choice="YES"):
         """Deliberately answer an open choice box: verify `choice` is
@@ -2541,26 +2747,48 @@ class Driver:
             if any(c in r for r in rows for c in CURSORS):
                 break
             self.emu.tick(6)
-        rows = self.emu.screen_text()
-        opts = self._choice_labels(rows)
-        if choice not in opts or \
-                not any(c in r for r in rows for c in CURSORS):
+        box = self._choice_box(self.emu.screen_text())
+        opts = [t for _, t in box["options"]] if box else []
+        if choice not in opts:
             return {"answered": False, "chose": None, "options": opts,
                     "note": "no choice cursor settled on screen"}
         # gotcha-2 variant: the box may still be settling when labels
         # first decode -- confirm-then-verify, one bounded retry
         for _attempt in range(2):
             self.press(".:12")
-            ok = bool(self.menu.select_label(choice, max_presses=6))
+            if not self._point_at_choice(choice):
+                opts = self._choice_labels(self.emu.screen_text()) or opts
+                continue
+            self.press("A:2 .:12")
             self.emu.tick(20)
             still = self._choice_labels(self.emu.screen_text())
-            if ok and choice not in still:
-                return {"answered": True, "chose": choice,
-                        "options": opts}
+            if choice not in still:
+                return {"answered": True, "chose": choice, "options": opts}
             opts = still or opts
         return {"answered": False, "chose": None, "options": opts,
                 "rows": [r.strip() for r in self.emu.screen_text()
                          if r.strip()][:8]}
+
+    def _point_at_choice(self, choice, max_presses=8):
+        """Walk the cursor onto `choice` inside an open choice box, UP or
+        DOWN as the geometry demands. A YES/NO box does NOT wrap -- with
+        the cursor defaulted onto NO, a DOWN-only walk (`select_label`)
+        can never reach YES, which is exactly how mom's day-picker
+        stalled every fresh game."""
+        for _ in range(max_presses + 1):
+            box = self._choice_box(self.emu.screen_text())
+            if box is None:
+                return False
+            here = next((t for j, t in box["options"]
+                         if j == box["cursor"]), None)
+            if here == choice:
+                return True
+            target = next((j for j, t in box["options"] if t == choice),
+                          None)
+            if target is None:
+                return False
+            self.press(("U" if target < box["cursor"] else "D") + ":2 .:8")
+        return False
 
     def who_fights(self):
         """Rank the party against the CURRENT battle's foe using the repo
@@ -3476,9 +3704,12 @@ class Driver:
         if wiped and not self.battle():
             self.whiteouts += 1
             self._whiteout_pending = True
-            log.warning(f"  [WHITEOUT] wiped -> {self.map_name()} "
-                  f"{self.pos()[2:]}; auto-healed at last Pokécenter",
-                  )
+            healed = self._settle_whiteout()
+            log.warning(
+                f"  [WHITEOUT] wiped -> {self.map_name()} {self.pos()[2:]}; "
+                + ("party healed at the Pokécenter" if healed else
+                   "party still DOWN -- the whiteout cutscene never "
+                   "finished; heal before doing anything else"))
         elif outcome == "wedged":
             # battle.py already printed its own capped wedge diagnostic
             # (frozen screen + vitals fingerprint); don't re-dump the
@@ -3534,6 +3765,36 @@ class Driver:
                 "battle_live": still_live,
             })
         return lead
+
+    def _settle_whiteout(self, max_frames=12000):
+        """Play the whiteout cutscene out, and answer whether the party is
+        actually back up.
+
+        Losing warps the player to the last Pokécenter and heals the
+        party, but the fade, the warp and the heal take thousands of
+        frames and nothing waited for them: fight() logged "auto-healed at
+        last Pokécenter" the instant it saw the wipe, while the party was
+        still at 0 HP standing on the cell the battle happened on (live:
+        AZALEA_TOWN (5,11) with QUILAVA 0/59 and the log claiming a heal).
+        A press only pages text, never a choice box (gotcha 13)."""
+        f0 = self.emu.frame
+        while self.emu.frame - f0 < max_frames:
+            rows = self.emu.screen_text()
+            if dialog_press_safe(rows):
+                self.press("A:2 .:16")
+            else:
+                self.press(".:20")
+            if self.battle():
+                continue
+            try:
+                party = [m for m in game_state(self.emu, self.names)["party"]
+                         if not m["egg"]]
+            except Exception:
+                continue
+            if party and all(m["hp"] > 0 for m in party):
+                self.settle()
+                return True
+        return False
 
     def _whiteout_stop(self, where):
         """Consume a pending wipe flag (set by fight()). Under the default
@@ -4524,7 +4785,9 @@ class Driver:
         learner already knows four (default: whatever the cursor starts
         on, slot 1). Label/WRAM-driven throughout: menus remember their
         last cursor slot, so blind press counts are never safe.
-        Raises RuntimeError (with menus closed) if the flow fails.
+        Raises RuntimeError (with menus closed) if the flow fails, and
+        returns the NICKNAME that ended up knowing the move (the first
+        ABLE member -- which is often not the one you had in mind).
 
         For a NAMED party member and a machine-readable failure instead
         of an exception, use teach_tm -- both drive the same steps."""
@@ -4553,6 +4816,13 @@ class Driver:
         if not learned:
             raise RuntimeError(f"teach_hm {move_name}: teaching failed "
                                "verification")
+        # Say WHO learned it. Returning None read as failure at a glance
+        # ("teach HM01 to SPROUT: None" while CUT had in fact landed on
+        # EMBER), and the answer matters: this teaches the first ABLE
+        # member, not the one the caller had in mind.
+        knower = self.field_moves().get(move_name.upper())
+        log.info(f"  [teach_hm] {move_name} -> {knower}")
+        return knower or True
 
     _tmhm_table = None      # {'TM01': 'DYNAMICPUNCH', ...}, lazily parsed
     _species_tmhm = None    # {SPECIES: [MOVE_CONST, ...]}
@@ -5262,6 +5532,7 @@ class Driver:
     # (static grid, stable) and wPlayerDirection (stable) are the inputs.
     OW_FIELD_MOVES = {
         # move: (tile kind faced, badge the engine checks)
+        "CUT": ("cut-tree", "HIVE"),
         "WATERFALL": ("waterfall", "RISING"),
         "WHIRLPOOL": ("whirlpool", "GLACIER"),
     }
@@ -5382,6 +5653,58 @@ class Driver:
     def whirlpool(self, facing=None):
         """Dissolve the whirlpool we are facing (HM06)."""
         return self.use_field_move("WHIRLPOOL", facing)
+
+    def cut(self, x=None, y=None, facing=None):
+        """CUT the tree at (x, y) -- or the one we are facing (HM01).
+
+        Cut trees are `COLL_CUT_TREE` ($12): a WALL to the pathfinder, so
+        a route that needs one is simply "no path" (live: Ilex Forest's
+        north exit, with HM01 in the bag and CUT on the lead). With
+        coordinates this routes adjacent, faces the tree and presses A;
+        the opened cell is then pushed into nav (`set_cell`) so the very
+        next `goto` can plan through it. `last_field_reason` explains
+        every False, including `no-tree` when nothing adjacent is one."""
+        if x is not None and y is not None:
+            target = (int(x), int(y))
+            kind = self.tile_at(*target)
+            if kind != "cut-tree":
+                return self._field_fail(
+                    f"wrong-tile: {target} is {kind!r}, not a cut tree")
+            here = self.pos()[2:]
+            if abs(here[0] - target[0]) + abs(here[1] - target[1]) != 1:
+                spot = next((c for c in ((target[0], target[1] + 1),
+                                         (target[0], target[1] - 1),
+                                         (target[0] - 1, target[1]),
+                                         (target[0] + 1, target[1]))
+                             if self._standable(self.map_name(), c)
+                             and self.goto(*c, f"approach tree {target}")),
+                            None)
+                if spot is None:
+                    return self._field_fail(
+                        f"no-approach: nothing walkable next to {target} "
+                        f"(last goto: {self.last_goto_reason})")
+                here = self.pos()[2:]
+            facing = {(0, 1): "D", (0, -1): "U", (1, 0): "R",
+                      (-1, 0): "L"}[(target[0] - here[0],
+                                     target[1] - here[1])]
+        elif facing is None:
+            here = self.pos()[2:]
+            facing = next((mv for mv, (dx, dy) in STEP.items()
+                           if self.tile_at(here[0] + dx,
+                                           here[1] + dy) == "cut-tree"),
+                          None)
+            if facing is None:
+                return self._field_fail(
+                    f"no-tree: no cut tree next to {here}")
+        ok = self.use_field_move("CUT", facing)
+        if ok:
+            # use_field_move already ran sync_grid(), which patches nav
+            # from the LIVE block map -- do not hand-write the cell. A cut
+            # tree REGROWS when the map is re-entered, and a hand-written
+            # override made nav believe in a gap that was not there:
+            # ROUTE_35 (17,6) storm-blocked twenty replans on the way back.
+            self.sync_grid()
+        return ok
 
 
     def _wait_screen(self, pred, frames=500):
@@ -5811,6 +6134,18 @@ class Driver:
                                                  self.names)
         return _field_heal_table
 
+    def heal(self, tries=2):
+        """Nurse cycle: walk into the local Pokécenter if needed, talk to
+        the nurse the MAP declares, and come back out with a full party.
+
+        A method because every doc promised one -- the capability table
+        reads `d.heal()` and the only implementation was the module-level
+        `trek.heal_pokecenter(d)`, so a session hit
+        `AttributeError: 'Driver' object has no attribute 'heal'` in the
+        middle of a gym run. Same function, reachable where it is
+        documented."""
+        return heal_pokecenter(self, tries=tries)
+
     def heal_party(self, items=None, max_items_per_mon=6):
         """Top every damaged/statused party member back up out of the bag,
         cheapest sufficient item first. Returns {mon label: outcome}:
@@ -5972,6 +6307,7 @@ class Driver:
                     f"or use travel for cross-map goals", strict)
         entry_map = self.map_name()
         replans = idle = passes = drains = occupied = 0
+        synced = False      # one live-grid re-sync per call, on a mystery
         edge_counts = {}    # (from_map, to_map): crossings this one call
         last_block = ""     # diagnosis text from the most recent blocked step
         reason = "unspecified"
@@ -6114,6 +6450,18 @@ class Driver:
                     # (gotcha 7), a textbox, or an NPC on the target cell
                     bx, by = self.pos()[2:]
                     dx, dy = STEP[mv]
+                    if self.keyboard_open():
+                        # An EGG HATCHES mid-walk and the naming keyboard
+                        # eats every step, exactly like a stray menu --
+                        # but it must never be blind-pressed (gotcha 18),
+                        # so nav stops and hands the decision back. Live
+                        # cost: TOGEPI hatched on ROUTE_34 and the run
+                        # spent seven minutes and ~1200 "unexplained
+                        # blocked step" replans walking into a keyboard.
+                        return self._goto_fail(
+                            "naming-keyboard: an egg hatched (or a catch "
+                            "is naming) -- answer it with "
+                            "dismiss_keyboard(name) and relaunch", strict)
                     if self.textbox():
                         cause = " [textbox]"
                     elif self.menu_open():
@@ -6162,6 +6510,24 @@ class Driver:
                     elif self.menu_open():
                         self.close_menus()
                     else:
+                        # Unexplained: no textbox, no menu, no NPC. Either
+                        # a wanderer is mid-step, or nav's grid is STALE --
+                        # a cut tree REGROWS on map re-entry and nav still
+                        # had the gap, so twenty replans walked into a tree
+                        # that was standing right there. Re-sync from the
+                        # engine's own block map once per goto, then let a
+                        # wanderer move.
+                        if not synced:
+                            synced = True
+                            try:
+                                stale = self.sync_grid()
+                            except Exception:
+                                stale = None   # reduced driver: no live map
+                            if stale:
+                                log.info("  grid was stale here; replanning "
+                                         "against the live map")
+                                replans += 1
+                                break
                         self.press(".:40")  # let a wandering NPC step aside
                     replans += 1
                     break
@@ -6370,6 +6736,8 @@ class Driver:
                     continue
                 if self._scene_spent(camel, script):
                     continue               # guard chain already answered
+                if script_advances_scene(self.nav._repo, camel, script, tok):
+                    continue     # one-shot: it fires once, then it is gone
                 if self.trip_scenes:
                     log.info(f"  [trip_scenes] crossing {const} scene cell "
                           f"{(x, y)} unblocked")
@@ -6783,16 +7151,22 @@ class Driver:
                     f"expected {st['to']}, on {here} {(mx, my)} "
                     f"(step result: {r})")
             drift = abs(mx - expected[0]) + abs(my - expected[1])
-            if drift > 3:
-                raise TravelError(
-                    f"leg {i}: landed {here} {(mx, my)}, modeled landing "
-                    f"{expected} (drift {drift} > 3)")
             log.info(f"  -> {here} {(mx, my)} (drift {drift})")
             if here == dest:
                 return steps      # landed on the destination: done
+            # The map CHANGED to the expected one, so the crossing fired;
+            # where it put us is arrival drift (gotcha 14), not a failure.
+            # Failing the leg on drift > 3 aborted a perfectly good
+            # Azalea -> ROUTE_33 crossing that landed 5 cells along the
+            # border band. Replan the remainder from the live cell -- the
+            # same thing the region-seam case below does.
+            if drift > 3:
+                log.info(f"  landing drifted {drift} from the model "
+                         f"{expected}; replanning the remainder")
+                steps = steps[:i + 1] + self.route(dest)
             # the glide can carry the landing across a region seam: the
             # rest of the plan then walks the wrong side of a wall.
-            if drift and set(self._regions(here, mx, my)).isdisjoint(
+            elif drift and set(self._regions(here, mx, my)).isdisjoint(
                     self._regions(here, *expected)):
                 log.info("  landing crossed a region seam; replanning "
                          "remainder from live cell")
@@ -6956,30 +7330,49 @@ class Driver:
                 return True
         raise RuntimeError("enable_surf: nobody in the party knows SURF")
 
-    def _approach_cell(self, x, y):
-        """Cell to stand on to talk to the NPC at (x,y): an adjacent
-        walkable cell if one exists, else (counters!) two cells out along
-        a ray whose middle cell is blocked."""
+    def _approach_cells(self, x, y):
+        """Every cell worth standing on to talk to (x,y), best first: the
+        one already occupied, then adjacent walkable cells by PATH length,
+        then (counters!) two cells out along a ray whose middle is blocked.
+
+        A ranked LIST, not one pick, because the first choice can lose a
+        race: Ilex Forest's Farfetch'd sat one cell above the player while
+        the pick was its far side, the walk there was blocked by the bird
+        itself, and `talk_to` gave up with a cell it never needed. The old
+        fixed U/D/L/R scan had the same shape at Violet Gym's Abe."""
         here = self.pos()[2:]
         name = self.map_name()
         npcs = self.npc_cells()
         grid = self.nav.grid(name)
         wid, hgt = len(grid[0]), len(grid)
-        for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
-            c = (x + dx, y + dy)
-            if self._standable(name, c) and \
-                    self.nav.find_path(name, here, c, npcs) is not None:
-                return c
+        out = []
+        sides = [(x + dx, y + dy)
+                 for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0))]
+        if here in sides and self._standable(name, here):
+            out.append(here)
+        ranked = []
+        for c in sides:
+            if c in out or not self._standable(name, c):
+                continue
+            path = self.nav.find_path(name, here, c, npcs)
+            if path is not None:
+                ranked.append((len(path), c))
+        out += [c for _n, c in sorted(ranked, key=lambda p: p[0])]
         for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
             mid, far = (x + dx, y + dy), (x + 2 * dx, y + 2 * dy)
             if not (0 <= far[0] < wid and 0 <= far[1] < hgt):
                 continue
             if mid in npcs or grid[mid[1]][mid[0]] in WARPS:
                 continue   # would need to pass an NPC or a warp
-            if self._standable(name, far) and \
+            if far not in out and self._standable(name, far) and \
                     self.nav.find_path(name, here, far, npcs) is not None:
-                return far
-        return None
+                out.append(far)
+        return out
+
+    def _approach_cell(self, x, y):
+        """Best single cell to talk to (x,y) from, or None."""
+        cells = self._approach_cells(x, y)
+        return cells[0] if cells else None
 
     def talk_to(self, x, y, label="", facing=None):
         """Walk next to the NPC at (x,y) (or across a counter from them),
@@ -6998,15 +7391,33 @@ class Driver:
             fdx, fdy = STEP[facing]
             spot = (x - fdx, y - fdy)     # stand opposite the facing dir
             if not self._standable(self.map_name(), spot):
-                log.info(f"  facing={facing} spot {spot} not standable",
-                      )
+                log.info(f"  facing={facing} spot {spot} not standable")
                 return False
+            spots = [spot]
         else:
-            spot = self._approach_cell(x, y)
-        if spot is None:
+            spots = self._approach_cells(x, y)
+        if not spots:
             log.info(f"  no approach to ({x},{y})")
             return False
-        if not self.goto(*spot, label or f"approach ({x},{y})"):
+        # A chosen side can lose a race with a wanderer (or with the very
+        # NPC being addressed): walk to the next candidate instead of
+        # reporting failure with three untried sides left. But a GLOBAL
+        # blocker -- an open choice box, a naming keyboard, a wipe -- is
+        # not about the side, and retrying seven more of them multiplies
+        # the storm (live: Route 34's phone-number YES/NO turned five
+        # trainer talks into forty replan storms).
+        for spot in spots:
+            if self.goto(*spot, label or f"approach ({x},{y})"):
+                break
+            reason = self.last_goto_reason or ""
+            if any(k in reason for k in ("choice menu", "naming-keyboard",
+                                         "whiteout", "battle during")):
+                log.info(f"  approach {spot} blocked by {reason} -- that is "
+                         f"not side-specific, stopping")
+                return False
+            log.info(f"  approach {spot} failed ({reason}); "
+                     f"trying the next side")
+        else:
             return False
         fdx = (x > spot[0]) - (x < spot[0])
         fdy = (y > spot[1]) - (y < spot[1])
@@ -7023,6 +7434,15 @@ class Driver:
             self.fight()
             if self._whiteout_stop(f"talk_to ({x},{y})"):
                 return False
+            # The NPC's script CONTINUES after the battle, and its tail is
+            # the payoff: Falkner's ZEPHYR badge + TM31, Sage Li's HM05,
+            # every gift trainer. Nothing pressed through it, so talk_to
+            # returned 'battle' with the reward still pending and the
+            # caller had to know to talk a second time (live: the badge
+            # only arrived on the retry). flush_dialog stops on a choice
+            # box, so this cannot blind-answer one (gotcha 13).
+            self.settle()
+            self.flush_dialog(8000)
             return "battle"
         return "talked"
 
@@ -7303,6 +7723,12 @@ class Driver:
                 self.press(f"{direction}:6 .:12")
                 continue
             self.press("D:6 .:12" if target > cur else "U:6 .:12")
+        # The clerk's refusal ("You don't have enough money.") is the last
+        # thing on screen; capture it BEFORE exiting or the reason is lost
+        # and the caller only learns "bought=True, bag 0 -> 0" (live: six
+        # SUPER POTIONs at 700 each on a 2506 wallet).
+        note = " ".join(r.strip() for r in self.emu.screen_text()[13:]
+                        if r.strip())[:120]
         self._shop_exit()
         self.press(".:40")
         after = bag_count()
@@ -7310,9 +7736,15 @@ class Driver:
         log.info(f"  mart_buy {item_name} x{qty}: "
               f"{'ok' if ok else 'FAILED'} ({before} -> {after})")
         if not ok:
+            try:      # duck-typed drivers may not model the money read
+                money = game_state(self.emu, self.names)["player"]["money"]
+                purse = f", ¥{money} on hand"
+            except Exception:
+                purse = ""
             raise RuntimeError(
                 f"mart_buy: {item_name} x{qty} failed "
-                f"(bag {before} -> {after}, bought={bought})")
+                f"(bag {before} -> {after}{purse})"
+                + (f" -- last screen: {note!r}" if note else ""))
         return True
 
 
@@ -7452,6 +7884,19 @@ def heal_pokecenter(d, tries=2):
     if d.step_dir(away) != "moved":
         d.step_dir(away)           # first press may only turn in place
     d.settle()
+    # ...and if her question is STILL on screen, answer it. A live heal
+    # returned with "Shall we heal your POKéMON?" open, and an open
+    # choice box blocks every subsequent step: the next `travel` reported
+    # "blocked by choice menu ['YES','NO']" from inside the Pokécenter
+    # and the gym leg never started. Declining a heal we do not need is
+    # always safe; anything else gets closed.
+    # (guarded: reduced/duck-typed drivers do not model choice boxes)
+    reader = getattr(d, "_choice_box", None)
+    if reader and reader(d.emu.screen_text()):
+        if not d.resolve_choice("NO").get("answered"):
+            d.close_menus()
+        d.flush_dialog(1500)
+        d.settle()
 
 
 def leg_to_violet(d):

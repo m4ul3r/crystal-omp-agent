@@ -389,7 +389,7 @@ def use_item_world(d, monkeypatch, start_cursor=3, consume_on_use=True):
         def wait_for_label(self, label, timeout_frames=300):
             return True
 
-        def wait_for(self, pred, timeout_frames=600):
+        def wait_for(self, pred, timeout_frames=600, quiet=False):
             return True                   # target party list appeared
 
         def scroll_abs(self):
@@ -451,7 +451,7 @@ class FakeHealDriver:
         self.names = None
 
         class M:
-            def wait_for(self, pred, timeout_frames=600):
+            def wait_for(self, pred, timeout_frames=600, quiet=False):
                 return False              # no YES/NO box in the fake flow
 
             def select_label(self, label, **kw):
@@ -751,7 +751,7 @@ def test_talk_to_intercept_uses_default_policy(monkeypatch):
         return None
 
     d.default_policy = custom
-    d._approach_cell = lambda x, y: (x - 1, y)
+    d._approach_cells = lambda x, y: [(x - 1, y)]
     d.goto = lambda *a, **k: True
     d.step_dir = lambda f: "moved"
 
@@ -812,7 +812,7 @@ def revive_world(d, monkeypatch, start_row=3):
         def wait_for_label(self, label, timeout_frames=300):
             return True
 
-        def wait_for(self, pred, timeout_frames=600):
+        def wait_for(self, pred, timeout_frames=600, quiet=False):
             return True
 
         def scroll_abs(self):
