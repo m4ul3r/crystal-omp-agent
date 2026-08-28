@@ -1,3 +1,434 @@
+## Session persona-LARRY — trainer contract created
+
+Created `persona_LARRY.md` for a future fresh run. LARRY is a methodical
+field-survey archivist whose starter is **Chikorita**. The binding policies
+are a team cap of six, declared-role catches, boss-level preparation,
+frugal supply spending, and named healed checkpoints before risky fights.
+The deterministic nickname table includes LEDGER, QUILL, INK, LANTERN, CLIP,
+BRICK, and INDEX, with uppercase species names as the fallback. Goals:
+complete the Johto errand, build the roster, earn all eight badges, reach the
+Hall of Fame without a whiteout, and defeat Red.
+
+## session omp-live pt3 - PLAIN badge, seven more bugs found by playing (Aug 28 2026)
+
+Same watched run (`saves/omplive.state`, feed `live:omplive`, viewer on
+`0.0.0.0:31337`). **3 badges**, EMBER the QUILAVA L29
+(CUT/MUD-SLAP/FURY CUTTER/EMBER), TOGE the TOGEPI L5 (hatched), SPROUT
+L7. HM01 CUT + HM05 FLASH in hand, Ilex Forest cleared, Whitney beaten.
+Milestones: `omplive-cut`, `omplive-goldenrod`, `omplive-pre-whitney`,
+`omplive-pre-whitney2`, `omplive-plain-badge`.
+Tests: **742 unit passed**, **16 integration passed**.
+
+### the fixes (each found live, each unit-tested)
+1. **The whiteout log LIED.** `fight()` printed "auto-healed at last
+   Pokécenter" the instant it saw the wipe; the party was still at 0 HP
+   standing on the battle cell (AZALEA_TOWN (5,11), QUILAVA 0/59) because
+   the fade + warp + heal take thousands of frames and nothing waited.
+   `Driver._settle_whiteout()` now pages the cutscene (A only on a
+   textbox with no cursor outside it) and the log says which of "party
+   healed at the Pokécenter" / "party still DOWN" actually happened.
+2. **CUT did not exist as a field move.** `COLL_CUT_TREE` ($12) read as
+   'blocked', so Ilex Forest's north exit was "no path" with HM01 in the
+   bag and CUT on the lead -- and the savestate search cannot cut either.
+   `_tile_kind` now names `cut-tree`/`headbutt-tree`, `CUT` is in
+   `OW_FIELD_MOVES` (HIVE badge), and `d.cut(x, y)` routes, faces,
+   presses A and pushes the opened cell into nav so the next `goto` plans
+   through it.
+3. **`travel` failed legs it had actually completed.** A connection
+   crossing that lands >3 cells from the modeled cell raised TravelError
+   even though the MAP had changed -- arrival drift is gotcha 14, not a
+   failure (live: AZALEA_TOWN -> ROUTE_33 landed 5 cells along the border
+   band). It now replans the remainder, like the region-seam case beside
+   it.
+4. **A naming keyboard ate 1200 replans.** TOGEPI hatched mid-walk on
+   ROUTE_34; the keyboard swallows every step, and goto's blocked-step
+   diagnosis had no case for it, so it reported "unexplained blocked
+   step" and stormed -- seven real minutes across one `pace` loop and
+   eight `talk_to` calls. `goto` now stops with
+   `naming-keyboard: ... dismiss_keyboard(name)`.
+5. **`talk_to` retries multiplied global blockers.** The new
+   nearest-side-first walk (pt2) tries other sides when one fails, which
+   is right for a wanderer and catastrophic for an open YES/NO box: one
+   Route 34 phone-number prompt became forty replan storms. Side retries
+   now stop on choice menus, naming keyboards, whiteouts and battles.
+6. **`heal_pokecenter` could return with the nurse's box still open**,
+   which blocks every later step ("blocked by choice menu" from inside
+   the Pokécenter, gym leg never started). It now answers a residual
+   prompt with NO and settles.
+7. **`pace` gave a caller nothing to act on.** Repeated `stopped:
+   'blocked'` with 0 steps spun a loop for minutes; the result now
+   carries `pos` and `blocked_dirs` and logs the cell once.
+   `mart_buy`'s failure now names the money on hand and the clerk's last
+   line ("You don't have enough money") instead of only `bought=True`.
+8. **`tactics.recommend` healed too late** (pt2 threat rule) -- kept, and
+   proven again: the rival's CROCONAW fight was won on it after three
+   whiteouts.
+
+### what the battle audit taught (policy, not code)
+`d.last_battle.rows()` decided the Whitney fight. Three attempts died the
+same way and the table showed why: FURY CUTTER doubles per CONSECUTIVE
+hit, and every potion turn RESET it (T4 dealt 41, the two item turns
+dropped T7 to 5). A pure "never break the chain" policy KO'd the Miltank
+on the fourth chained hit at the same level and with no items spent. The
+harness's tactics engine does not model ramping moves (FURY CUTTER /
+ROLLOUT), so a heal it recommends can be strictly worse than the attack
+it replaces -- worth encoding, and the reason a model should read
+`last_battle` after every loss.
+
+### Next objective
+Radio Tower / Route 36-37 to Ecruteak (FOG badge) from
+`saves/omplive-plain-badge.state`. Party needs a second real fighter --
+SPROUT L7 and TOGE L5 are dead weight in every gym fight so far.
+
+## session omp-live pt2 - ZEPHYR + HIVE, five bugs found by playing (Aug 28 2026)
+
+Continued the watched run (`saves/omplive.state`, feed `live:omplive`,
+viewer on `0.0.0.0:31337`). **2 badges**, EMBER the QUILAVA L21
+(TACKLE/LEER/QUICK ATTACK/EMBER), TOGEPI EGG, SPROUT the BELLSPROUT L7,
+HM05 FLASH, TM31, TM49, Slowpoke Well cleared. Milestones:
+`omplive-flash`, `omplive-zephyr-badge`, `omplive-egg-bellsprout`,
+`omplive-azalea`, `omplive-well-cleared`, `omplive-hive-badge`.
+Tests: **724 unit passed**, **16 integration passed**.
+
+Every fix below was found by watching a real leg, then reproduced,
+fixed, unit-tested and re-verified live in the same run.
+
+1. **The stall detector called a KO "nothing changed".** `_vitals` was
+   (my species, my hp, my slot, enemy species, enemy hp) -- and Sprout
+   Tower's sages field THREE identical BELLSPROUT, so KO-ing one and
+   seeing the next sent out is a byte-identical fingerprint. It
+   substituted SMOKESCREEN for the move that was winning. The
+   fingerprint now includes the enemy party's TOTAL remaining HP
+   (`Battle._enemy_party_hp`, `wOTPartyMon*HP`), which only ever drops.
+2. **`take_warp` slid across the door's own PAIRED tile.** Its "aligned
+   within 3 cells" fast path pressed L from (11,15) toward Sprout
+   Tower's exit (9,15) -- the slide stopped dead on (10,15), the other
+   half of the same door, fired nothing (south-wall doors answer to DOWN,
+   gotcha 15), and `travel` retried the identical slide four times before
+   calling an open door impassable. An aligned entry now requires the
+   in-between cells to be warp-free (`_slide_is_clear`), and a failed
+   entry walks onto the tile and hands off to `_reenter_warp`, which is
+   the code that knows a door answers to one axis.
+3. **`talk_to` walked AROUND an NPC it was already facing.**
+   `_approach_cell` scanned sides in fixed U/D/L/R order, so standing
+   face-to-face with Violet Gym's Abe it picked his FAR side -- a route
+   through Abe -- and reported `blocked-by-stationary-npc ... severs the
+   only path` for a trainer one step away. The cell you are ON wins
+   outright now; otherwise the nearest side wins.
+4. **`talk_to` dropped the reward.** It returned the moment the battle
+   ended, leaving the script's tail unread: Sage Li's HM05 and Falkner's
+   ZEPHYR badge only arrived because the session happened to talk a
+   second time. It now flushes the post-battle script (flush_dialog stops
+   on a choice box, so it cannot blind-answer one). Bugsy's HIVE badge +
+   TM49 landed on the FIRST call -- that is the regression check.
+5. **`map_objects()` listed objects that are not there.** The engine
+   masks an object whose event flag is SET (`CheckObjectFlag`,
+   engine/overworld/map_objects_2.asm:31-56), so every row now carries
+   `masked`, and `sprite_cell` skips masked objects. Live proof at
+   Azalea: the four beaten well grunts read `masked=True`, the stolen
+   Slowpokes `True`, Kurt-outside `True` while Kurt-inside was `False`.
+   This is also what explains the Slowpoke Well gate: the guard at
+   (31,9) plugs the only shaft cell until talking to Kurt INSIDE his
+   house sets `EVENT_AZALEA_TOWN_SLOWPOKETAIL_ROCKET` and masks him.
+
+Battle noise from pt1 is gone in practice: a wild fight is ~1.5k frames
+with a one-line feed entry, and the tactics policy (`d.tactics.recommend`
+wired as `default_policy`) narrates every choice into the viewer, e.g.
+`EMBER KOs now (61-72 vs 40 HP, x2, 100% acc)`.
+
+### Frictions observed, deliberately NOT changed
+- Three different party shapes: `observe()['party']` uses `nick`,
+  `game_state()` uses `name`/`nickname`, `battle_frame()['enemy']` uses
+  `species`/`nickname` and has no `name`. Cost one KeyError mid-battle.
+- `battle_frame()['bag']` shows `'# BALL'` -- faithful to the repo's own
+  charmap (`constants/charmap.asm:26`), and `norm_item` accepts it, so it
+  is display-only ugliness.
+- `heal_pokecenter` is a MODULE function, not a Driver method
+  (`trek.heal_pokecenter(d)`); AGENTS.md's capability table reads like a
+  method exists.
+- Azalea Gym: 20-replan storm between two NPC-blocked cells before the
+  documented `replan-storm` bail (~5k frames). Bounded and diagnosable,
+  but wasteful with wandering trainers.
+
+### Next objective
+Ilex Forest (CUT is still missing: `ILEX_FOREST (5,28)`), then Goldenrod.
+Resume from `saves/omplive-hive-badge.state`.
+
+## session bram-fresh - fresh Totodile run
+
+BRAM owns a new timeline using `saves/bram.state` (+ `.meta`), starting
+from power-on. Objective: complete the opening clock/errand sequence, take
+the Totodile lab ball, name it **RIVET**, and save a new
+`bram-totodile` milestone before route planning. Existing saves and
+milestones are read-only history for this session.
+
+### Milestone: `saves/bram-totodile.state`
+
+Opening sequence completed. BRAM is in `ELMS_LAB (5,3)` with **RIVET
+TOTODILE L5**, full HP, SCRATCH/LEER, ¥3,000, and no badges. The milestone
+and working save were written only after the lab scene cleared to an
+interactive overworld. Next objective: leave New Bark, reach Mr. Pokémon's
+house, and return the Mystery Egg to Elm.
+
+### Checkpoint: `saves/bram-pre-rival.state`
+
+Mystery Egg and Pokédex obtained at Mr. Pokémon's house. RIVET reached
+level 7 during the unavoidable return-route wild encounters and arrived
+fully healed at `CHERRYGROVE_POKECENTER_1F`; the encounter policy is now
+`flee` until a deliberate team slot is selected. Pre-rival checkpoint saved
+at full HP before leaving the center. Next: cross Route 29, resolve the
+rival battle, then deliver the egg to Elm.
+
+### Milestone: `saves/bram-egg-delivered.state`
+
+RIVET won the Route 29 rival battle from the pre-risk checkpoint without
+fainting, then the Mystery Egg was delivered to Elm and the Pokédex flag
+remains set. Current state: `ELMS_LAB (5,3)`, RIVET L7 at 24/24 HP with
+SCRATCH/LEER/RAGE, ¥3,300, one POTION, no badges. The scene is cleared and
+the milestone plus working save are clean overworld checkpoints. Next:
+leave the lab, receive the aide's Poké Balls, then reach Violet via Route 30
+and Route 31 while fleeing unplanned wild encounters.
+
+### Violet-route plan
+
+Pokécenter reached at `VIOLET_POKECENTER_1F`; RIVET is healed to 29/29.
+BRAM's first planned capture is an aerial **PIDGEY**, nickname **KITE**,
+from accessible early-route grass. Other wild species remain flee targets
+until a deliberate slot is declared. The five-member cap remains active.
+
+### Milestone: `saves/bram-violet-kite.state`
+
+The aide's gift supplied 5 Poké Balls. BRAM deliberately caught a Route 31
+**PIDGEY**, named **KITE**, after fleeing the first unplanned CATERPIE.
+KITE is L4 at 18/18 HP; RIVET is L9 at 29/29 HP. Both are in the party at
+`VIOLET_POKECENTER_1F`; the working save and milestone are clean and healed.
+Two Poké Balls remain. Next objective: prepare for Falkner while preserving
+the second planned slot for a water-route capture.
+
+### Checkpoint: `saves/bram-pre-falkner.state`
+
+KITE was rotation-trained on Route 31 to L7, the persona's Falkner
+preparation floor (Falkner's ace is L9); RIVET reached L11. Both were
+healed at `VIOLET_POKECENTER_1F` and the named pre-gym checkpoint is saved.
+Current party: RIVET TOTODILE L11 and KITE PIDGEY L7, both full HP. Two
+Poké Balls remain; no water-route slot has been filled.
+
+### Milestone: `saves/bram-zephyr-badge.state`
+
+Falkner and both Violet Gym trainers were cleared from the named checkpoint.
+RIVET defeated PIDGEY and PIDGEOTTO, reached L13, and learned WATER GUN;
+KITE remains L7. The party was healed afterward at
+`VIOLET_POKECENTER_1F`. BRAM now has the **ZEPHYR BADGE**, TM31, ¥3,476,
+one POTION, and two Poké Balls. Next objective: Route 32 and Union Cave,
+then declare and catch the planned water-route team member.
+
+### Milestone: `saves/bram-togepi-egg.state`
+
+The Route 32 gate revealed the required prerequisite: Elm's aide in the
+Violet Pokécenter. BRAM returned and accepted the **TOGEPI egg**, currently
+party slot 3 as `EGG` (egg, L5, 0 HP by representation); no nickname prompt
+has occurred yet. RIVET and KITE are healed. The gate is now cleared for
+Route 32. Next: obtain the Old Rod at the Route 32 Pokécenter and catch the
+declared water-route **MAGIKARP** slot, using the persona's uppercase
+fallback nickname.
+
+### Milestone: `saves/bram-water-slot.state`
+
+BRAM obtained the OLD ROD from the Route 32 Pokécenter Fishing Guru and
+used it at the documented shore cell `(11,60)`, facing water. The deliberate
+water-route slot is **MAGIKARP**, named **MAGIKARP** by the persona's
+uppercase fallback. The party is now RIVET TOTODILE L14, KITE PIDGEY L7,
+EGG TOGEPI L5, and MAGIKARP L10; the party was healed at
+`ROUTE_32_POKECENTER_1F`. One Poké Ball remains. Next objective: Union Cave
+and Azalea, while keeping the active party cap at five.
+
+### Checkpoint: `saves/bram-pre-bugsy.state`
+
+RIVET carried the Union Cave/Route 33 trainers to L16; KITE was trained as
+the active lead to L14, two below Bugsy's L16 ace. KITE's GUST PP was
+spent during training and restored at the Azalea Pokécenter. The Togepi egg
+and MAGIKARP remain noncombat slots at L5 and L10. All party members are
+healed at `AZALEA_POKECENTER_1F`; this named checkpoint is the Bugsy retry
+point. Next: clear Slowpoke Well's Rocket scenes if required, then fight
+Bugsy.
+
+### Checkpoint: `saves/bram-pre-bugsy-well.state`
+
+The Slowpoke Well gate was cleared: all four Rocket grunts were beaten,
+Kurt's inside-well scene completed, and
+`EVENT_CLEARED_SLOWPOKE_WELL` reads true. RIVET is L17 and KITE L15 after
+the well fights; both are healed at `AZALEA_POKECENTER_1F`. The Togepi egg
+and MAGIKARP remain slots 3 and 4. Bugsy is now the next risk from this
+fresh named checkpoint.
+
+### Milestone: `saves/bram-hive-badge.state`
+
+The Azalea Gym route was completed after the Slowpoke Well event. RIVET
+evolved into CROCONAW L18 and KITE reached L17 during the gym approach and
+Bugsy fight; KITE finished the leader battle after RIVET fainted, so the
+named pre-risk checkpoint remains the safe retry option if needed. The
+party was healed at `AZALEA_POKECENTER_1F`. BRAM now has the **HIVE BADGE**,
+one Poké Ball, OLD ROD, TM31, and ¥8,438; current next route is Ilex Forest.
+
+### Milestones: `saves/bram-ilex-cut.state`, `saves/bram-goldenrod-arrival.state`
+
+The Farfetch'd chase was solved through the live `wFarfetchdPosition`
+state machine and facing rules. The Charcoal Master awarded HM01 CUT;
+`RIVET` learned it by forgetting LEER, and `use_cut(8,25)` opened the only
+Ilex exit tree. The party then reached and healed at
+`GOLDENROD_POKECENTER_1F`; RIVET is CROCONAW L19 and KITE PIDGEOTTO L18,
+with the Togepi egg and MAGIKARP still active slots. Next objective:
+Goldenrod story preparation and the Plain Badge.
+
+### Checkpoint: `saves/bram-pre-whitney.state`
+
+Goldenrod arrival is clean and healed. RIVET is CROCONAW L19 with CUT,
+RAGE, and WATER GUN; KITE is PIDGEOTTO L18. The Togepi egg remains L5 and
+MAGIKARP L10. The named pre-Whitney checkpoint is saved with the HIVE and
+ZEPHYR badges and no battle consumables spent. Next: clear Goldenrod Gym
+and beat Whitney without expanding BRAM's team beyond five.
+
+### Checkpoint: `saves/bram-pre-whitney-sand2.state`
+
+Whitney attempts from the original checkpoint repeatedly ended in whiteouts,
+including runs with Super Potions and a Sand Attack opening. The Goldenrod
+Gym trainer route was cleared and the working save was restored to this
+healed, trainer-cleared center checkpoint after the last failed attempt.
+Current party: RIVET CROCONAW L20, KITE PIDGEOTTO L18, TOGEPI egg L5,
+MAGIKARP L10; 11 SUPER POTIONS, one Poké Ball, and no Plain Badge. Next:
+rebuild a safer Whitney plan before risking the checkpoint again.
+
+### Checkpoint: `saves/bram-pre-whitney-leveled.state`
+
+The safer plan is now prepared: RIVET was trained to CROCONAW L29 on Route
+34, satisfying the prior successful Whitney floor. During that training the
+Togepi egg hatched; the Name Rater corrected its nickname to **CHARM**.
+RIVET and KITE are healed at `GOLDENROD_POKECENTER_1F`, with 11 SUPER
+POTIONS available. RIVET knows WATER GUN but has 0 PP before the center
+heal; current working state is clean and ready for a direct Whitney attempt.
+
+### Milestone: `saves/bram-plain-badge.state`
+
+The Whitney blocker was procedural, not game-state deadlock: restoring a
+checkpoint through the persistent driver left its private whiteout-pending
+flag set, so later `goto` calls aborted early. After clearing that stale
+driver state, BRAM trained RIVET to L29, corrected the hatched TOGEPI name to
+**CHARM**, approached Whitney directly after clearing the gym trainers, and
+won with WATER GUN. The required crying scene at `(8,5)` and second Whitney
+conversation delivered the **PLAIN BADGE**. The party was healed at
+`GOLDENROD_POKECENTER_1F`; next objective is Goldenrod's remaining story
+route toward the FOG badge.
+
+### Checkpoint: `saves/bram-pre-magikarp-training.state`
+
+BRAM is beginning the requested team training from
+`GOLDENROD_POKECENTER_1F`, fully healed, with three Johto badges. The
+training order is binding: move MAGIKARP to party slot 1, switch to KITE
+against wild Pokémon until MAGIKARP reaches L15 and learns TACKLE, then
+keep MAGIKARP as the sole battler to L20. CHARM will be switch-trained to
+L20 afterward. Existing four-member party cap remains in force.
+
+### Milestone: `saves/bram-gyarados20.state`
+
+MAGIKARP was moved to party slot 1. It was switch-trained against Route 34
+wild Pokémon with KITE taking the battles, reached L15, learned TACKLE, and
+then solo-trained to L20. It evolved into **GYARADOS L20**; the party was
+healed at `GOLDENROD_POKECENTER_1F` before this checkpoint. Current next
+step: switch-train **CHARM TOGEPI** to L20.
+
+### Milestone: `saves/bram-team-trained.state`
+
+CHARM was switch-trained on Route 34 to L20 and evolved into **TOGETIC**.
+The requested training is complete. Current healed party order is CHARM
+TOGETIC L20, KITE PIDGEOTTO L21, GYARADOS L20, and RIVET FERALIGATR L32;
+all four are at full HP. The active team remains below the five-member cap.
+
+## session persona-BRAM - trainer contract established (Aug 28 2026)
+
+Fresh-run persona contract written to `persona_BRAM.md`. Player name:
+**BRAM**. Starter: **TOTODILE**, nicknamed **RIVET**. Policies: active
+team cap 5; catch only planned slots, required HM users, or concrete-goal
+species; level planned battlers to at least two below the next boss ace;
+Pokécenter healing first; named pre-risk checkpoints before gyms, rivals,
+and major caves.
+
+Claimed goals: all eight Johto badges, named FLY/SURF-capable party members,
+one deliberate water-route capture, one deliberate aerial capture, and the
+Elite Four/Hall of Fame. No save has been booted or mutated in this setup
+step. Nickname table and uppercase fallback are binding for starter, gifts,
+and catches.
+
+## session omp-live - watch.py reads the LIVE feed; fresh run to Violet (Aug 28 2026)
+
+Fresh game driven from power-on while a human watched it in a browser.
+Working state `saves/omplive.state`; milestones `omplive-cyndaquil`,
+`omplive-cherrygrove`, `omplive-egg-delivered`, `omplive-violet`,
+`omplive-violet-healed`. Party: **EMBER (CYNDAQUIL) L11**, ¥1,794, egg
+errand done, 0 badges. Tests: **715 unit passed** (709 + 6 new),
+**16 integration passed**.
+
+Viewer: `.venv/bin/python watch.py --host 0.0.0.0 --port 31337`.
+
+### watch.py finally consumes the live feed (the whole point of live.py)
+`crystalagent/live.py` has published `live/<name>.{png,json,jsonl}` from
+the DRIVING emulator since the last session, and nothing read it --
+watch.py was still the re-simulating savestate viewer, so every claim in
+AGENTS.md about watching an intro/keyboard/cutscene was false. It now
+serves two SOURCE kinds behind one `?src=` param:
+
+- `live:<feed>` -- frames/state straight off the feed (no emulator in the
+  viewer at all, ROM not even loaded), narration = the driver's OWN log
+  lines from `<name>.jsonl` (`goto: ...`, `[encounter] wild PIDGEY: KO`)
+  instead of events diffed out of two snapshots.
+- `save:<name>.state` -- the old replay path, unchanged, for a save
+  nobody is driving.
+
+`/sources.json` lists feeds first (grouped in the dropdown), the default
+source is the freshest live feed (else `--state`), frame fetches are
+paced at the feed's own fps, and the page renders boot/intro states that
+have no game yet (`game_state` failure is reported, screen still drawn)
+instead of blanking on `error`.
+
+### three live-verified harness bugs, each found by watching
+1. **A YES/NO box cannot be answered by pressing DOWN.** `resolve_choice`
+   confirmed through `Menus.select_label`, which only presses DOWN, and a
+   Gen-2 choice box does NOT wrap: with the cursor defaulted onto NO
+   (mom's clock chain, Elm's errand, Route 31's money question) YES was
+   unreachable, and `travel` died in PLAYERS_HOUSE_1F on the FIRST leg of
+   a fresh game. `_choice_box` now reports the box geometry and
+   `_point_at_choice` walks the cursor UP or DOWN onto the target.
+   Labels are read from the BOX's own column span, because a box drawn
+   over the overworld shares its rows with map art
+   (`'▃▄◖▛▛◪▃▄▂▂▂▂λλ│ YES│'` used to decode as the option text).
+2. **One-shot scene cells were permanent walls.** `_refresh_nav_blocks`
+   blocked every armed coord_event, including scenes that fire ONCE and
+   advance the scene id. Elm's lab is the proof: the aide's POTION scene
+   (4,8)/(5,8) is the only corridor to the lab door and the officer scene
+   (4,5)/(5,5) is the only corridor back to Elm, so a fresh game could
+   neither leave the lab nor deliver the egg (`no path from (5,3) to
+   (5,10)`). New `trek.script_advances_scene()` reads the script itself,
+   following `scall`/`sjump`/branch targets AND fallthrough into the next
+   label (the lab's `setscene` sits one scall and two fallthroughs away);
+   a cell whose script sets a DIFFERENT scene id is crossable. Route 32's
+   push-back (no setscene at all) and the Indigo Plateau rival (setscene
+   to its OWN id) still block.
+3. **Every battle idled 2000 frames at its end and said so.** The
+   post-turn wait only ticked, but "<mon> fainted!", the EXP bar and the
+   level-up panels each want a BUTTON -- so each battle-ending turn burnt
+   its whole budget (~33 s emulated) and logged `wait_for: predicate
+   never true in 2000 frames` into the feed a human was reading.
+   `Battle._await_turn_end` pages that text (A only while a textbox is up
+   and no cursor sits outside it -- gotcha 13), and `Menus.wait_for` got
+   `quiet=True` for the three probes whose timeout IS the normal path
+   (NO PP/DISABLED, recall-refused, wedge-confirm). A wild battle now
+   runs 1.5k frames / ~7 s wall at speed=4 with a clean one-line feed.
+
+### Next objective
+Sprout Tower, then Falkner (ZEPHYR badge) from
+`saves/omplive-violet-healed.state`. EMBER knows TACKLE/LEER/SMOKESCREEN
+at L11 -- EMBER (the move) comes at L13 and matters for Falkner's
+PIDGEOTTO only as neutral damage; SMOKESCREEN is the accuracy answer.
+
 ## session omp-harness - pt11/pt12 grievances closed (Aug 27 2026)
 
 **Harness session, no gameplay.** Touched no working savestate: every fix

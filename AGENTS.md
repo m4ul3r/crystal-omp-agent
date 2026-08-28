@@ -37,7 +37,7 @@ recipes for catch/train/shop/moves.
 Watching a run happen (dashboard + live frames from the DRIVING emulator):
 
 ```sh
-.venv/bin/python watch.py                            # http://127.0.0.1:8123/
+.venv/bin/python watch.py [--host 0.0.0.0 --port 31337]   # default :8123
 .venv/bin/python -c "import trek; d = trek.Driver('saves/claude.state', \
     live={'fps': 12, 'speed': 2}); d.travel('MAHOGANY_TOWN')"
 ```
@@ -45,7 +45,11 @@ Watching a run happen (dashboard + live frames from the DRIVING emulator):
 The emulator doing the work publishes its own frames/state/log to
 `live/<name>.*` and the viewer only reads them, so the title screen, Oak's
 speech and the naming keyboard are all visible even though none of them is
-ever savestated.
+ever savestated. The dropdown (or `?src=`) picks the source:
+`live:<feed>` is that published stream -- the viewer runs no emulator, and
+the activity panel is the DRIVER's own log lines -- while
+`save:<name>.state` is the old replay of a savestate nobody is driving.
+With no `--src` the freshest live feed wins.
 
 For anything longer than a couple of inputs use the persistent-process
 driver (loads the ROM once, seconds instead of per-call overhead):
@@ -120,8 +124,10 @@ from the leg's own arguments.
 | What have I not collected? | `d.missables()` (key items + HMs, live) / `d.missables('all')` / `crystal missables [--all]` / the `missing:` fragment on `d.status()` — each row cites `maps/Foo.asm:NNN` and carries the giver's coordinates. HM02 FLY sat in Cianwood for a whole playthrough because nothing surfaced this |
 | Can I actually use a field move? | `d.field_moves()` → `{'CUT': 'GATOR', 'FLY': None, ...}` — per HM, which party member knows it. "HM in the bag" is not "I can use it" |
 | Use a WATER HM (waterfall/whirlpool) | `d.waterfall()` / `d.whirlpool()` / `d.use_field_move('WATERFALL', facing='U')` — faces the tile and presses **A** on the overworld, never the party menu (gotcha 18); refuses before pressing with `d.last_field_reason` in `no-knower`/`no-badge`/`wrong-tile`, and proves it worked by the position or the live grid |
+| Cut a tree in the way | `d.cut(x, y)` (or `d.cut()` facing one) — `COLL_CUT_TREE` is a WALL to BFS, so a route needing one is "no path" until you cut it; this routes, faces, presses A and patches nav's grid so the next `goto` plans through the gap. Find them with `d.find_tiles('cut-tree')`; refusals in `d.last_field_reason` (`no-tree`/`wrong-tile`/`no-knower`/`no-badge`) |
 | Deposit / withdraw at a PC | `d.deposit('TOGEPI')`, `d.withdraw('PANIC')`, `d.box_list()` — one mon per call, targeted by WRAM index, verified against `observe()['party']` and the SRAM box; refuses before pressing with `d.last_pc_reason` in `no-such-mon`/`last-mon`/`box-full`/`party-full`/`not-in-box`/`holds-mail`. `find_tiles('pc')` locates the terminal ($93 COLL_PC). Never A-loop these lists (gotcha 18) |
 | Where does this map keep its nurse/clerk? | `d.sprite_cell('SPRITE_NURSE')` / `d.map_objects()` — the map's own `object_event`s, so `heal` works at Indigo Plateau (nurse (3,7)) as well as a Johto town (3,1) |
+| Is that NPC/item actually THERE? | `d.map_objects()[i]['masked']` — the engine hides an object whose event flag is SET (`CheckObjectFlag`, engine/overworld/map_objects_2.asm:31-56); `sprite_cell` skips masked ones. Beaten trainers, taken item balls and story-moved NPCs all read `masked=True`, and the Slowpoke Well guard reads `False` exactly while he plugs the shaft |
 | Which coord_event cells is nav refusing? | `d.blocked_cells()` (all maps) / `d.blocked_cells('INDIGO_PLATEAU_POKECENTER_1F')` — recomputed live; a cell whose script's own `checkevent`/`checkflag` guard chain sends it to a do-nothing label is NOT blocked |
 | Read an engine flag | `d.engine_flag('ENGINE_INDIGO_PLATEAU_RIVAL_FIGHT')` — index from `constants/engine_flags.asm`, address+mask from the ROM's own `EngineFlags` table (`d._event_flag` does the same for `EVENT_*`) |
 | What is at (x,y)? What warps exist? | `d.tile_at(x,y)`, `d.tiles_in(x0,y0,x1,y1)`, `d.find_tiles('warp'\|'water'\|'grass'\|'ledge'\|'blocked'\|'npc')`, `d.exits()` → warps AND edge connections with destinations. **These are the decision interface; `map_view()` is art for humans** (gotcha 11) |
@@ -241,6 +247,78 @@ ROM's `Moves` table via `pokecrystal.sym`. Don't hardcode game data.
     `iftrue/iffalse` chain is now evaluated live (`d.blocked_cells()`
     shows the result), so a spent ambush stops blocking. A guard-less
     scene (Route 32's push-back) still blocks.
+21. **A ONE-SHOT scene is walkable, and nav now knows which is which.**
+    A coord_event whose script advances the map's scene
+    (`setscene <other id>`) fires exactly once, so blocking it forever
+    walls off corridors: Elm's lab keeps the aide's POTION scene on
+    (4,8)/(5,8) — the ONLY way to its door — and the officer scene on
+    (4,5)/(5,5) — the ONLY way back to Elm — so a fresh game could
+    neither leave the lab nor deliver the egg (`no path from (5,3) to
+    (5,10)`). `trek.script_advances_scene()` reads the script itself,
+    following `scall`/`sjump`/branch targets **and fallthrough into the
+    next label** (the lab's `setscene` is one scall and two fallthroughs
+    down), and such cells are crossable: step on, the cutscene plays,
+    `goto` drains and replans. A script that never sets a scene (Route
+    32's push-back) or sets it back to its OWN id (the Indigo rival)
+    still blocks.
+22. **A YES/NO box does not wrap, so DOWN alone can never answer it.**
+    The cursor defaults onto NO in the whole clock chain, Elm's errand
+    and Route 31's money question; `Menus.select_label` only presses
+    DOWN, so `resolve_choice` could not answer YES and `travel` died on
+    the FIRST leg of every fresh game in PLAYERS_HOUSE_1F. Use
+    `d.resolve_choice('YES')` — it reads the box geometry
+    (`_choice_box`) and walks the cursor UP or DOWN. Related: a box drawn
+    over the overworld SHARES its rows with map art
+    (`'▃▄◖▛▛◪▃▄▂▂▂▂λλ│ YES│'`), so options are only meaningful when read
+    from the box's own column span — never from the whole row.
+23. **A trainer can field IDENTICAL mons, and a KO then looks like
+    nothing happened.** Sprout Tower's sages carry three BELLSPROUT of
+    the same level, so (my hp, enemy species, enemy hp) is byte-identical
+    across a KO + send-out and `play()`'s stall detector substituted a
+    different move for the one that was winning. `_vitals` now also reads
+    the enemy party's TOTAL remaining HP (`wOTPartyMon*HP`), which only
+    ever drops.
+24. **`talk_to` after a trainer battle used to leave the reward
+    behind.** The NPC's script CONTINUES past the fight — the badge, the
+    TM, the elder's HM — and nothing pressed through it, so the payoff
+    only arrived if you happened to talk a second time (live: Sage Li's
+    HM05 and Falkner's ZEPHYR badge). `talk_to` now flushes that tail.
+    If a call still comes back empty-handed, look for a choice box:
+    flush_dialog stops on one by design (gotcha 13).
+25. **A declared object_event is not necessarily standing there.** The
+    engine masks any object whose event flag is SET
+    (`CheckObjectFlag`, engine/overworld/map_objects_2.asm:31-56), so
+    `map_objects()` rows carry `masked` and `sprite_cell` skips them.
+    The inverse trips people up too: the Slowpoke Well guard exists
+    while his flag is CLEAR, and talking to Kurt INSIDE his house is
+    what sets it and unplugs the shaft — no amount of pathfinding gets
+    past a body in a 1-wide corridor. `sprites()`/`npc_cells()` only see
+    sprites the game has INSTANTIATED near the camera, so absence there
+    is not evidence of masking.
+26. **A CUT tree is a WALL to the pathfinder until you cut it.**
+    `COLL_CUT_TREE` ($12) decodes as `cut-tree` now, but nav still
+    refuses to route through one: Ilex Forest's north exit answered "no
+    path" with HM01 in the bag, and the savestate search cannot cut
+    either. Use `d.cut(x, y)` (or `d.cut()` facing one) — it routes,
+    faces, presses A and patches nav's grid so the NEXT `goto` plans
+    through the gap. `d.find_tiles('cut-tree')` locates them.
+27. **A whiteout is not instant, and the old log lied about it.** The
+    fade, the warp to the Pokécenter and the heal take thousands of
+    frames; `fight()` used to announce "auto-healed" while the party was
+    still at 0 HP on the battle cell. It now waits and reports what
+    actually happened — but a caller that catches the abort must still
+    re-check `observe()['party']` before planning anything.
+28. **A ramping move must not be interrupted, and `recommend` does not
+    know that.** FURY CUTTER (and the enemy's ROLLOUT) doubles per
+    CONSECUTIVE hit; a potion turn resets the chain. Whitney's MILTANK
+    survived three attempts that healed on schedule (T4 hit for 41, the
+    two item turns dropped T7 to 5) and died on the fourth chained hit of
+    a policy that never broke the chain. Read `d.last_battle.rows()`
+    after a loss — the table shows this instantly.
+29. **Whitney does not hand over the badge while she is crying.** Beating
+    her leaves the gym in a state where talking again just repeats the
+    scene; LEAVE the gym and walk back in, then talk — the PLAIN badge
+    and TM45 arrive on that talk.
 
 ## Session protocol
 
