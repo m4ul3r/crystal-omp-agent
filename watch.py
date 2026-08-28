@@ -1,23 +1,30 @@
 #!/usr/bin/env python3
-"""Live visualizer: watch an agent drive a savestate from a browser.
+"""Live visualizer: watch an agent play, from a browser.
 
-Loads the ROM once, hot-reloads the watched savestate whenever the agent
-rewrites it, and serves a dashboard over plain stdlib HTTP -- no extra
-dependencies, and it never touches the state file itself (read-only), so
-it is safe to run against any session's working save.
+Two kinds of source, chosen in the dropdown (or `--src`):
 
-    .venv/bin/python watch.py --state saves/joey.state [--port 8123]
-Then open http://localhost:8123/ . The page polls ~1/s: pixel screenshot,
-structured state (party/battle/money/badges), decoded text screen, and a
-collision-map view of the current map with the player (@) and NPCs (N)
-marked. The dropdown switches between any save in saves/; recently
-written saves are marked. A live/idle dot shows whether the watched file
-is still being rewritten, and the activity feed diffs consecutive
-snapshots into events (map changes, battles, level-ups, captures, money,
-badges, new checkpoints) so you can follow what the agent is doing
-without staring at the screen. Party and enemy sprites are rendered from
-the disassembly's gfx/pokemon PNGs (shiny palette and Unown letter come
-from the mon's DVs, eggs show the egg pic).
+  live:<name>   the frames the DRIVING emulator is publishing to
+                `live/<name>.{png,json,jsonl}` (see crystalagent.live).
+                Nothing is re-simulated, so the title screen, Oak's speech
+                and the naming keyboard are all visible, the viewer cannot
+                diverge from the agent's timeline, and the activity feed is
+                the driver's OWN log lines ("goto: ...", "auto: attack slot
+                0") instead of a guess diffed out of two snapshots.
+  save:<name>   replay: this process loads `saves/<name>` into its own
+                emulator and ticks it forward at ~240x, hot-reloading
+                whenever the agent rewrites the file (read-only, so it is
+                safe against any session's working save). The only option
+                for a save nobody is driving right now.
+
+    .venv/bin/python watch.py [--host 0.0.0.0] [--port 8123] [--src live:run]
+
+With no --src the freshest live feed wins, falling back to --state. The page
+streams over SSE (polling fallback): frame, structured state (party/battle/
+money/badges), decoded text screen, and the collision map of the current map
+with the player (@) and NPCs (N) marked. A live/idle dot shows whether the
+source is still being written. Party and enemy sprites are rendered from the
+disassembly's gfx/pokemon PNGs (shiny palette and Unown letter come from the
+mon's DVs, eggs show the egg pic).
 """
 import argparse
 import io
@@ -37,6 +44,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from crystalagent import paths
 from crystalagent.charmap import Charmap
 from crystalagent.emu import Crystal
+from crystalagent.live import FeedReader, list_feeds
 from crystalagent.names import Names
 from crystalagent.nav import MapData, WALKABLE, WARPS, HOPS
 from crystalagent.state import game_state, status_line
@@ -182,8 +190,9 @@ PAGE = r"""<!doctype html>
 </style></head><body>
 <header>
  <div class="brand"><span class="gem"></span>Crystal Watch <small>agent viewer</small></div>
- <select id="save" title="switch watched save" onchange="location='/?save='+encodeURIComponent(this.value)"></select>
+ <select id="save" title="switch watched source" onchange="location='/?src='+encodeURIComponent(this.value)"></select>
  <span id="live" class="pill"><span class="dot"></span><span id="livetxt">connecting</span></span>
+ <span id="srcinfo" class="pill"></span>
  <span class="spacer"></span>
  <div class="hmeta"><span>frame <b id="frame">—</b></span><span>play <b id="ptime">—</b></span><span id="file" style="color:var(--dim)"></span></div>
 </header>
@@ -219,7 +228,7 @@ PAGE = r"""<!doctype html>
 </main>
 
 <script>
-const DEFAULT=__DEFAULT_SAVE__;
+const DEFAULT=__DEFAULT_SRC__;
 const $=id=>document.getElementById(id);
 const cv=$('scr').getContext('2d');
 const CELL={'@':'#39e0ff','N':'#ffd84a','.':'#262b36','"':'#2e6b35','W':'#ff8c2b',
@@ -227,13 +236,20 @@ const CELL={'@':'#39e0ff','N':'#ffd84a','.':'#262b36','"':'#2e6b35','W':'#ff8c2b
             '~':'#1a7fd0','#':'#10131a'};
 const LEGEND=[['@','player',1],['N','npc',1],['W','warp'],['^','ledge'],['"','grass'],['~','water'],['.','ground'],['#','wall']];
 $('legend').innerHTML=LEGEND.map(([c,n,r])=>'<span><i class="'+(r?'rd':'')+'" style="background:'+CELL[c]+'"></i>'+n+'</span>').join('');
-let cursor=-1,first=true,lastParty='';
-function cur(){return new URLSearchParams(location.search).get('save')||DEFAULT;}
+let cursor=-1,first=true,lastParty='',shotTimer=null,shotHz=0,shotBusy=false;
+function cur(){const q=new URLSearchParams(location.search);
+ const s=q.get('src');if(s)return s;
+ const v=q.get('save');return v?'save:'+v:DEFAULT;}
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function fmt(n){return Number(n).toLocaleString();}
 function age(ms){const s=Math.round(ms/1000);return s<60?s+'s':s<3600?Math.floor(s/60)+'m':Math.floor(s/3600)+'h';}
-function drawShot(){const im=new Image();im.onload=()=>cv.drawImage(im,0,0);
- im.src='/shot.png?save='+encodeURIComponent(cur())+'&t='+Date.now();}
+function drawShot(){if(shotBusy)return;shotBusy=true;const im=new Image();
+ im.onload=()=>{cv.drawImage(im,0,0);shotBusy=false;};im.onerror=()=>{shotBusy=false;};
+ im.src='/shot.png?src='+encodeURIComponent(cur())+'&t='+Date.now();}
+function setShotHz(hz){hz=Math.max(1,Math.min(20,hz||3));
+ if(hz===shotHz&&shotTimer)return;
+ shotHz=hz;if(shotTimer)clearInterval(shotTimer);
+ shotTimer=setInterval(drawShot,1000/hz);drawShot();}
 function drawMap(rows){const m=$('map'),c=m.getContext('2d'),dpr=window.devicePixelRatio||1;
  if(!rows||!rows.length){m.width=120;m.height=20;m.style.width=m.style.height='';c.fillStyle='#4e5566';
   c.font='11px monospace';c.fillText('no map data',4,14);return;}
@@ -286,34 +302,41 @@ function renderBattle(b){
  el.className='on';
 }
 function renderState(s){
+ if(!s){netErr('empty state');return;}
  const st=$('status');
- if(s.error){st.textContent='error: '+s.error;st.className='err';return;}
- st.textContent=s.status;st.className='';
- $('frame').textContent=fmt(s.frame);$('ptime').textContent=s.play_time;
- $('file').textContent=s.save;
- const live=s.state_age_ms<8000,pill=$('live');
+ st.textContent=s.error?('error: '+s.error):(s.status||'');
+ st.className=s.error?'err':'';
+ $('frame').textContent=s.frame==null?'—':fmt(s.frame);
+ $('ptime').textContent=s.play_time||'—';
+ $('file').textContent=s.save||'';
+ const ageMs=s.state_age_ms==null?1e12:s.state_age_ms;
+ const live=ageMs<8000,pill=$('live');
  pill.className='pill '+(live?'live':'stale');
- $('livetxt').textContent=live?'live':'idle '+age(s.state_age_ms);
- const loc=s.location;
- $('s-map').textContent=loc.map;$('s-map').title=loc.map;
- $('s-pos').textContent='('+loc.x+', '+loc.y+') · group '+loc.map_group+' #'+loc.map_number;
- $('mapname').textContent=loc.map;
- $('s-name').textContent=s.player.name;
- const jb=s.player.johto_badges,JALL=['ZEPHYR','HIVE','PLAIN','FOG','STORM','MINERAL','GLACIER','RISING'];
+ $('livetxt').textContent=live?'live':'idle '+age(ageMs);
+ if(s.live){$('srcinfo').textContent='feed · '+(s.live.fps||'?')+' fps · '+
+   (s.live.speed?s.live.speed+'x':'max');setShotHz(s.live.fps);}
+ else{$('srcinfo').textContent='replay · savestate';setShotHz(4);}
+ const loc=s.location||{};
+ $('s-map').textContent=loc.map||'—';$('s-map').title=loc.map||'';
+ $('s-pos').textContent=loc.map?'('+loc.x+', '+loc.y+') · group '+loc.map_group+' #'+loc.map_number:'';
+ $('mapname').textContent=loc.map||'';
+ const pr=s.player||{},jb=pr.johto_badges||[],kb=pr.kanto_badges||[];
+ $('s-name').textContent=pr.name||'—';
+ $('s-money').textContent=pr.money==null?'':'¥'+fmt(pr.money);
+ const JALL=['ZEPHYR','HIVE','PLAIN','FOG','STORM','MINERAL','GLACIER','RISING'];
  $('s-badges').innerHTML=JALL.map(n=>'<span class="badge'+(jb.includes(n)?' on':'')+'" title="'+n+'"></span>').join('');
  $('s-badgen').textContent=jb.length+'/8';
- const kb=s.player.kanto_badges,KALL=['BOULDER','CASCADE','THUNDER','RAINBOW','SOUL','MARSH','VOLCANO','EARTH'];
+ const KALL=['BOULDER','CASCADE','THUNDER','RAINBOW','SOUL','MARSH','VOLCANO','EARTH'];
  $('s-kbadges').innerHTML=KALL.map(n=>'<span class="badge'+(kb.includes(n)?' on':'')+'" title="'+n+'"></span>').join('');
- $('s-kbadgen').textContent=kb.length+'/8'+(s.player.kanto_badges.length?' · '+s.player.kanto_badges.join(' '):'');
- const lead=s.party[0];
+ $('s-kbadgen').textContent=kb.length+'/8'+(kb.length?' · '+kb.join(' '):'');
+ const party=s.party||[],lead=party[0];
  if(lead){$('s-lead').textContent=lead.name+' Lv '+lead.level;
-  $('s-leadhp').textContent=lead.hp+'/'+lead.max_hp+' HP'+(lead.status.length?' · '+lead.status.join(' '):'');}
+  $('s-leadhp').textContent=lead.hp+'/'+lead.max_hp+' HP'+((lead.status||[]).length?' · '+lead.status.join(' '):'');}
  else{$('s-lead').textContent='—';$('s-leadhp').textContent='';}
  renderBattle(s.battle);
- renderParty(s.party);
- $('txt').textContent=s.screen.join('\n');
+ renderParty(party);
+ $('txt').textContent=(s.screen||[]).join('\n');
  drawMap(s.map);
- drawShot();
 }
 function netErr(e){
  const st=$('status');st.textContent='offline: '+e;st.className='err';
@@ -321,32 +344,35 @@ function netErr(e){
 }
 async function poll(){
  try{
-  const r=await fetch('/state.json?save='+encodeURIComponent(cur()));
+  const r=await fetch('/state.json?src='+encodeURIComponent(cur()));
   renderState(await r.json());
  }catch(e){netErr(e);}
 }
-function kind(m){
- if(/^battle/.test(m))return['⚔','t-battle'];
- if(/grew to/.test(m))return['↑','t-level'];
- if(/^badge/.test(m))return['★','t-badge'];
- if(/^money/.test(m))return['₽','t-money'];
- if(/^checkpoint/.test(m))return['💾','t-save'];
- if(/^entered/.test(m))return['➜','t-map'];
- if(/party/.test(m))return['●','t-party'];
+function kind(e){
+ const m=e.msg||'';
+ if(e.level==='ERROR'||e.level==='CRITICAL')return['✖','t-battle'];
+ if(e.level==='WARNING')return['!','t-money'];
+ if(e.src==='feed')return['◇','t-save'];
+ if(/^battle|attack slot|switch to|threw |fight:/i.test(m))return['⚔','t-battle'];
+ if(/grew to|learned |level ?up/i.test(m))return['↑','t-level'];
+ if(/^badge/i.test(m))return['★','t-badge'];
+ if(/^money|¥/i.test(m))return['₽','t-money'];
+ if(/^checkpoint|saved /i.test(m))return['💾','t-save'];
+ if(/^entered|^goto|^travel|^walk|warp|step/i.test(m))return['➜','t-map'];
+ if(/party|caught|joined/i.test(m))return['●','t-party'];
  return['·',''];
 }
 function addEvent(e){
- const[ic,cls]=kind(e.msg);
+ const[ic,cls]=kind(e);
  const div=document.createElement('div');
  div.className='ev'+(first?'':' new');
- div.innerHTML='<span class="fr">'+fmt(e.frame)+'</span><span class="ic '+cls+'">'+ic+'</span>'+
-  '<span class="'+cls+'">'+esc(e.msg)+'</span><span class="ts">'+e.t+'</span>';
+ div.innerHTML='<span class="fr">'+fmt(e.frame||0)+'</span><span class="ic '+cls+'">'+ic+'</span>'+
+  '<span class="'+cls+'">'+esc(e.msg)+'</span><span class="ts">'+esc(e.t||'')+'</span>';
  $('log').prepend(div);
 }
 function eventsDone(){
  const log=$('log');
  while(log.children.length>200)log.lastChild.remove();
- if(cursor>=0){}
  $('lcnt').textContent=log.children.length?log.children.length+' events':'';
  if(!log.children.length)log.innerHTML='<div class="empty">waiting for events…</div>';
  else{const em=log.querySelector('.empty');if(em)em.remove();}
@@ -354,7 +380,7 @@ function eventsDone(){
 }
 async function pollEvents(){
  try{
-  const r=await fetch('/events.json?save='+encodeURIComponent(cur())+'&since='+cursor);
+  const r=await fetch('/events.json?src='+encodeURIComponent(cur())+'&since='+cursor);
   const d=await r.json();
   if(d.error)return;
   for(const e of d.events)addEvent(e);
@@ -362,18 +388,26 @@ async function pollEvents(){
   eventsDone();
  }catch(e){}
 }
-async function refreshSaves(){
+async function refreshSources(){
  try{
-  const r=await fetch('/saves.json');const list=await r.json();
+  const r=await fetch('/sources.json');const list=await r.json();
   const sel=$('save');const c=cur();sel.textContent='';
-  for(const o of list){const op=document.createElement('option');
-   op.value=o.name;
-   op.textContent=(o.age_s<120?'● ':'   ')+o.name+(o.age_s<120?'  ('+o.age_s+'s)':'');
-   if(o.name===c)op.selected=true;sel.append(op);}
+  let grp=null;
+  for(const o of list){
+   if(o.kind!==grp){grp=o.kind;
+    const g=document.createElement('optgroup');
+    g.label=o.kind==='live'?'live feeds (real emulator)':'savestates (replay)';
+    sel.append(g);}
+   const op=document.createElement('option');
+   op.value=o.key;
+   const hot=o.age_s<10;
+   op.textContent=(hot?'● ':'   ')+o.label+(o.age_s<86400?'  ('+age(o.age_s*1000)+')':'');
+   if(o.key===c)op.selected=true;
+   sel.lastElementChild.tagName==='OPTGROUP'?sel.lastElementChild.append(op):sel.append(op);}
  }catch(e){}
 }
 function startStream(){
- const es=new EventSource('/stream?save='+encodeURIComponent(cur()));
+ const es=new EventSource('/stream?src='+encodeURIComponent(cur()));
  es.onmessage=(ev)=>{
   let m;try{m=JSON.parse(ev.data);}catch(e){return;}
   if(m.type==='state')renderState(m.s);
@@ -384,12 +418,12 @@ function startStream(){
  };
  es.onerror=()=>{           // SSE unavailable: fall back to polling
   es.close();
-  refreshSaves();setInterval(refreshSaves,5000);
   pollEvents();setInterval(pollEvents,1500);
   poll();setInterval(poll,1000);
  };
 }
-refreshSaves();pollEvents();poll();startStream();
+refreshSources();setInterval(refreshSources,5000);
+pollEvents();poll();setShotHz(6);startStream();
 </script></body></html>"""
 
 
@@ -709,17 +743,143 @@ def _safe_save(name):
     return p
 
 
-def make_handler(viewer):
+class LiveSource:
+    """The real thing: a read-only view of `live/<name>.*`, published by the
+    emulator the agent is actually driving. No emulation here -- frames come
+    off disk, so intro/keyboard/cutscene frames that are never savestated are
+    visible, and the viewer can never diverge from the agent's timeline."""
+
+    kind = "live"
+
+    def __init__(self, name):
+        self.name = name
+        self.key = f"live:{name}"
+        self.reader = FeedReader(name)
+        self.lock = threading.RLock()
+        self.events = []
+
+    def snapshot(self):
+        s = self.reader.state()
+        if s is None:
+            return {"save": self.key, "state_age_ms": None,
+                    "error": f"no live feed '{self.name}' yet"}
+        out = dict(s)
+        out["save"] = self.key
+        out["file"] = str(self.reader.json_path)
+        out["live"] = {"fps": s.get("fps"), "speed": s.get("speed")}
+        out["state_age_ms"] = self.reader.age * 1000.0
+        for p in out.get("party") or []:
+            p["sprite"] = _sprite_url("egg" if p["egg"] else p["species"],
+                                      p["shiny"], p["form"])
+        b = out.get("battle")
+        if b:
+            e = b["enemy"]
+            e["sprite"] = _sprite_url(e["species"], e["shiny"], e["form"])
+        return out
+
+    def png(self):
+        body = self.reader.png()
+        if body is None:
+            raise ValueError(f"no frame for live feed '{self.name}'")
+        return body
+
+    def pump(self):
+        """Narration the DRIVER logged (goto/battle/decision lines), not a
+        diff of two snapshots. `backfill` only bites on the first read."""
+        with self.lock:
+            fresh = self.reader.notes(backfill=200)
+            if fresh:
+                self.events.extend(fresh)
+                del self.events[:-400]
+            return list(self.events)
+
+
+class SaveSource:
+    """Replay of a savestate through this process's own emulator: the only
+    option for a save nobody is currently driving."""
+
+    kind = "save"
+
+    def __init__(self, viewer, name):
+        self.viewer = viewer
+        self.name = name
+        self.key = f"save:{name}"
+
+    def _select(self):
+        self.viewer.select(_safe_save(self.name))
+
+    def snapshot(self):
+        self._select()
+        return self.viewer.snapshot(self.name)
+
+    def png(self):
+        self._select()
+        return self.viewer.png()
+
+    def pump(self):
+        with self.viewer.lock:
+            return list(self.viewer.events.get(self.name, []))
+
+
+class Sources:
+    """Source registry. The savestate emulator (and its ROM load) is built
+    lazily, so watching a live feed needs neither."""
+
+    def __init__(self, default_key):
+        self.default_key = default_key
+        self._lock = threading.RLock()
+        self._cache = {}
+        self._viewer = None
+
+    @property
+    def viewer(self):
+        with self._lock:
+            if self._viewer is None:
+                self._viewer = Viewer()
+            return self._viewer
+
+    def default(self):
+        """Freshest live feed wins: a running agent is what you came to see."""
+        feeds = list_feeds()
+        if feeds and feeds[0]["age_s"] < 10:
+            return f"live:{feeds[0]['name']}"
+        return self.default_key
+
+    def get(self, raw):
+        raw = raw or self.default()
+        kind, _, name = raw.partition(":")
+        if kind not in ("live", "save") or not name:
+            kind, name = "save", raw          # bare name = savestate
+        key = f"{kind}:{name}"
+        with self._lock:
+            src = self._cache.get(key)
+            if src is None:
+                src = LiveSource(name) if kind == "live" \
+                    else SaveSource(self.viewer, name)
+                self._cache[key] = src
+            return src
+
+    def listing(self):
+        now = time.time()
+        out = [{"key": f"live:{f['name']}", "label": f["name"],
+                "kind": "live", "age_s": int(f["age_s"])}
+               for f in list_feeds()]
+        out += [{"key": f"save:{f.name}", "label": f.name, "kind": "save",
+                 "age_s": int(now - f.stat().st_mtime)}
+                for f in sorted(paths.SAVES_DIR.glob("*.state"))]
+        return out
+
+
+def make_handler(sources):
     class H(BaseHTTPRequestHandler):
         streams = 0                # concurrent /stream clients (capped)
 
         def log_message(self, *a):
             pass
 
-        def _stream(self, name):
+        def _stream(self, raw):
             """SSE: push full state snapshots + incremental events; the
             page falls back to polling if this endpoint never connects."""
-            sname = name or paths.DEFAULT_STATE.name
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
@@ -729,22 +889,22 @@ def make_handler(viewer):
             try:
                 while True:
                     try:
-                        if name:
-                            viewer.select(_safe_save(name))
-                        snap = viewer.snapshot(sname)
+                        src = sources.get(raw)
+                        snap = src.snapshot()
+                        lst = src.pump()
                     except Exception as e:
-                        snap = {"error": str(e)}
+                        snap, lst = {"error": str(e)}, []
                     self.wfile.write(b"data: " + json.dumps(
                         {"type": "state", "s": snap},
                         ensure_ascii=False).encode() + b"\n\n")
-                    with viewer.lock:
-                        lst = viewer.events.get(sname, [])
-                        out = [e for e in lst if e["i"] > ev_cursor]
-                        ev_cursor = lst[-1]["i"] if lst else -1
+                    out = [e for e in lst if e["i"] > ev_cursor]
+                    if lst:
+                        ev_cursor = lst[-1]["i"]
                     if out:
                         self.wfile.write(b"data: " + json.dumps(
                             {"type": "events", "cursor": ev_cursor,
-                             "events": out}).encode() + b"\n\n")
+                             "events": out},
+                            ensure_ascii=False).encode() + b"\n\n")
                     now = time.time()
                     if now - last_beat > 15:
                         self.wfile.write(b": ping\n\n")
@@ -765,25 +925,23 @@ def make_handler(viewer):
         def do_GET(self):
             u = urlparse(self.path)
             q = parse_qs(u.query)
-            name = (q.get("save") or [None])[0]
+            raw = (q.get("src") or [None])[0]
+            if raw is None:
+                save = (q.get("save") or [None])[0]
+                raw = f"save:{save}" if save else None
             if u.path == "/":
                 self._send(200, "text/html; charset=utf-8",
-                           PAGE.replace("__DEFAULT_SAVE__",
-                                        json.dumps(name or paths.DEFAULT_STATE.name)) \
+                           PAGE.replace("__DEFAULT_SRC__",
+                                        json.dumps(raw or sources.default())) \
                                .encode())
             elif u.path == "/shot.png":
                 try:
-                    if name:
-                        viewer.select(_safe_save(name))
-                    self._send(200, "image/png", viewer.png())
+                    self._send(200, "image/png", sources.get(raw).png())
                 except Exception as e:
                     self._send(500, "text/plain", str(e).encode())
             elif u.path == "/state.json":
                 try:
-                    if name:
-                        viewer.select(_safe_save(name))
-                    body = json.dumps(viewer.snapshot(name or
-                                      paths.DEFAULT_STATE.name),
+                    body = json.dumps(sources.get(raw).snapshot(),
                                       ensure_ascii=False).encode()
                     self._send(200, "application/json", body)
                 except Exception as e:
@@ -795,23 +953,20 @@ def make_handler(viewer):
                     if H.streams > 4:
                         self._send(503, "text/plain", b"too many streams")
                         return
-                    self._stream(name)
+                    self._stream(raw)
                 finally:
                     H.streams -= 1
             elif u.path == "/events.json":
-                sname = name or paths.DEFAULT_STATE.name
                 try:
-                    _safe_save(sname)
                     since = int((q.get("since") or ["-1"])[0])
+                    lst = sources.get(raw).pump()
                 except Exception as e:
                     self._send(200, "application/json",
                                json.dumps({"error": str(e),
                                            "events": [], "cursor": -1}).encode())
                     return
-                with viewer.lock:
-                    lst = viewer.events.get(sname, [])
-                    out = [e for e in lst if e["i"] > since]
-                    cursor = lst[-1]["i"] if lst else -1
+                out = [e for e in lst if e["i"] > since]
+                cursor = lst[-1]["i"] if lst else -1
                 self._send(200, "application/json",
                            json.dumps({"cursor": cursor, "events": out},
                                       ensure_ascii=False).encode())
@@ -820,7 +975,7 @@ def make_handler(viewer):
                 body = None
                 if m:
                     sp = m.group(1)
-                    body = viewer.sprites.png(
+                    body = sources.viewer.sprites.png(
                         sp if sp == "egg" else int(sp),
                         shiny=(q.get("shiny") or ["0"])[0] == "1",
                         form=(q.get("form") or [None])[0])
@@ -833,11 +988,9 @@ def make_handler(viewer):
                     self.send_header("Cache-Control", "public, max-age=86400")
                     self.end_headers()
                     self.wfile.write(body)
-            elif u.path == "/saves.json":
-                now = time.time()
-                lst = [{"name": f.name, "age_s": int(now - f.stat().st_mtime)}
-                       for f in sorted(paths.SAVES_DIR.glob("*.state"))]
-                self._send(200, "application/json", json.dumps(lst).encode())
+            elif u.path == "/sources.json":
+                self._send(200, "application/json",
+                           json.dumps(sources.listing()).encode())
             else:
                 self._send(404, "text/plain", b"nope")
 
@@ -847,22 +1000,24 @@ def make_handler(viewer):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--state", default=str(paths.DEFAULT_STATE),
-                    help="savestate file to watch (default: %(default)s)")
+    ap.add_argument("--src", help="source to open: 'live:<feed>' (a running "
+                    "agent's own emulator) or 'save:<name>.state' (replay). "
+                    "Default: freshest live feed, else --state")
+    ap.add_argument("--state", default=paths.DEFAULT_STATE.name,
+                    help="savestate in saves/ used when no feed is live "
+                         "(default: %(default)s)")
     ap.add_argument("--port", type=int, default=8123)
     ap.add_argument("--host", default="127.0.0.1")
     args = ap.parse_args()
 
     if not paths.ROM.exists():
-        sys.exit(f"ROM not found at {paths.ROM}")
-    state = Path(args.state)
-    if not state.is_absolute():
-        state = Path.cwd() / state
-    viewer = Viewer()
-    viewer.select(state)
+        print(f"note: no ROM at {paths.ROM} -- savestate replay disabled, "
+              f"live feeds still work")
+    sources = Sources(args.src or f"save:{Path(args.state).name}")
 
-    srv = ThreadingHTTPServer((args.host, args.port), make_handler(viewer))
-    print(f"watching {state}")
+    srv = ThreadingHTTPServer((args.host, args.port), make_handler(sources))
+    print(f"live feeds: {paths.LIVE_DIR}    savestates: {paths.SAVES_DIR}")
+    print(f"default source: {sources.default()}")
     print(f"http://{args.host}:{args.port}/  (Ctrl-C to stop)")
     try:
         srv.serve_forever()
