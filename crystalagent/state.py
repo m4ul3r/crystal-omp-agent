@@ -3,6 +3,8 @@
 Party/enemy struct offsets are derived from the labels the disassembly
 gives every field (wPartyMon1HP - wPartyMon1, etc.) -- no magic numbers.
 """
+import functools
+
 from . import paths
 from .asmconst import parse_const_defs, parse_defs
 from .schemas import validate_game_state
@@ -20,9 +22,36 @@ KANTO_BADGES = ["BOULDER", "CASCADE", "THUNDER", "RAINBOW", "SOUL", "MARSH", "VO
 # reasons about status -- game_state, battle_frame, the mid-battle cure
 # in tactics.recommend -- reads the same numbers as the engine.
 _BATTLE_CONSTANTS = paths.REPO_ROOT / "constants" / "battle_constants.asm"
-_STATUS_BITS = [(1 << parse_const_defs(_BATTLE_CONSTANTS)[n], n)
-                for n in ("PSN", "BRN", "FRZ", "PAR")]
-SLP_MASK = parse_defs(_BATTLE_CONSTANTS)["SLP_MASK"]
+
+
+@functools.lru_cache(maxsize=1)
+def _status_tables():
+    """``(status_bits, slp_mask)``, parsed at FIRST USE rather than at import.
+
+    These were module-scope, which made ``import crystalagent.state`` read the
+    decompilation -- so the package could not be imported, and its tests could
+    not even be COLLECTED, unless the tool happened to sit inside a
+    pokecrystal checkout. Same numbers, same source; only the timing changes.
+    """
+    bits = [(1 << parse_const_defs(_BATTLE_CONSTANTS)[n], n)
+            for n in ("PSN", "BRN", "FRZ", "PAR")]
+    return bits, parse_defs(_BATTLE_CONSTANTS)["SLP_MASK"]
+
+
+def __getattr__(name):
+    """Keep ``_STATUS_BITS`` and ``SLP_MASK`` as module attributes.
+
+    They were module-scope constants and something depends on them being
+    readable that way -- `tests/unit/test_parser_values.py` asserts the decoded
+    bits against the disassembly. PEP 562 lets them stay part of the module's
+    surface while the PARSE still happens at first use, so nothing that read
+    them before has to change and importing the package still touches no files.
+    """
+    if name == "_STATUS_BITS":
+        return _status_tables()[0]
+    if name == "SLP_MASK":
+        return _status_tables()[1]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 EGG = 0xFD  # wPartySpecies entry for an egg (the mon struct holds the real species)
 
 
@@ -45,9 +74,10 @@ def _unown_letter(b):
 
 
 def _status(byte):
-    out = [name for bit, name in _STATUS_BITS if byte & bit]
-    if byte & SLP_MASK:
-        out.append(f"SLP:{byte & SLP_MASK}")
+    status_bits, slp_mask = _status_tables()
+    out = [name for bit, name in status_bits if byte & bit]
+    if byte & slp_mask:
+        out.append(f"SLP:{byte & slp_mask}")
     return out
 
 

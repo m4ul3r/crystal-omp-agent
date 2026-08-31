@@ -4,7 +4,12 @@ import os
 from pathlib import Path
 
 TOOL_DIR = Path(__file__).resolve().parents[1]   # crystal-agent/
-REPO_ROOT = TOOL_DIR.parent                      # pokecrystal/
+
+#: The pokecrystal checkout. Defaults to the parent directory, which is where
+#: the tool is designed to live, but it is now OVERRIDABLE -- the decompilation
+#: is a runtime dependency (charmap, map layouts and constants are parsed on
+#: demand), so a checkout anywhere else could not import the package at all.
+REPO_ROOT = Path(os.environ.get("CRYSTAL_REPO", TOOL_DIR.parent))
 
 ROM = Path(os.environ.get("CRYSTAL_ROM", REPO_ROOT / "pokecrystal.gbc"))
 SYM = Path(os.environ.get("CRYSTAL_SYM", REPO_ROOT / "pokecrystal.sym"))
