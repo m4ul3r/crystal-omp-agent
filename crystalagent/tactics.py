@@ -847,8 +847,20 @@ class Tactics:
         # the bag. Healing while two of their best hits still fit in my
         # HP bar wins that fight -- and `lethal` keeps a doomed turn from
         # being wasted on a potion.
-        threatened = bool(their and their["max"]
-                          and me["hp"] <= 2 * their["max"])
+        # ...unless the window can never be escaped: when a full bar minus
+        # one hit is STILL inside two hits (max_hp <= 3 x their max), the
+        # rule heals, eats a hit, heals again until the bag is empty and
+        # never attacks (live: SIX Hyper Potions into Bruno's Machamp, all
+        # at 105+/170 HP, zero attacks). Against such a hitter a potion is
+        # only worth the turn when the NEXT hit can kill (their max roll
+        # reaches me); otherwise attack and take the hit.
+        if their and their["max"]:
+            escapable = me["max_hp"] > 3 * their["max"]
+            threatened = (me["hp"] < me["max_hp"] and
+                          me["hp"] <= 2 * their["max"] and
+                          (escapable or me["hp"] <= their["max"]))
+        else:
+            threatened = False
         hurt = me["hp"] <= heal_at * me["max_hp"] or threatened
         # The frame's bag is keyed by normalised names ('FULLRESTORE'), so
         # match through norm_item rather than hoping about spacing.

@@ -301,3 +301,60 @@ def test_pc_index_is_cursor_plus_scroll():
 
 def test_pc_tile_kind_names_the_terminal():
     assert trek._tile_kind(0x93) == "pc"   # COLL_PC, journal #45
+
+
+# -- box roster + CHANGE BOX (full-box throws bounce; journal, TALLY run) ----
+
+def boxes_driver(cur=1, counts=(20, 3, 0xFF) + (0,) * 11, live=20):
+    """A Driver over a FakeEmu with all 14 stored box counts mapped to
+    unique flat addresses (real SRAM banks collide in a flat array)."""
+    d = pc_driver([mon("PANIC"), mon("BUBBLES")], box_count=live)
+    d.emu.u8["wCurBox"] = (cur - 1) & 0x0F
+    for i, k in enumerate(counts, start=1):
+        addr = 0x9000 + i
+        d.emu.sym[f"sBox{i}Count"] = (2, addr)
+        d.emu.mem[addr] = k
+    return d
+
+
+def test_boxes_reads_live_count_for_current_and_stored_for_the_rest():
+    d = boxes_driver(cur=1, live=20)
+    st = d.boxes()
+    assert st["current"] == 1
+    assert st["boxes"][0] == {"box": 1, "count": 20, "capacity": 20,
+                              "full": True}       # live sBoxCount, not copy
+    assert st["boxes"][1]["count"] == 3 and not st["boxes"][1]["full"]
+    assert st["boxes"][2]["count"] == 0           # $ff = never initialized
+
+
+def test_change_box_already_current_is_a_no_press_success():
+    d = boxes_driver(cur=2, live=3)
+    assert d.change_box(2) is True
+    assert d.last_pc_reason == "already-current"
+    assert d.pressed == []
+
+def test_change_box_honors_a_full_target_but_refuses_a_bad_index():
+    d = boxes_driver(cur=2, live=3)
+    d._pc_closed = lambda: True
+    d.find_tiles = lambda kind: []             # no PC: fails PAST the maths
+    assert d.change_box(1) is False            # stored 20/20 -- still tried
+    assert d.last_pc_reason.startswith("no-pc")
+    assert d.change_box(15) is False
+    assert d.last_pc_reason.startswith("bad-box")
+
+
+def test_change_box_default_picks_the_first_box_with_space():
+    """cur=1 is FULL (live), so the bare call must aim at box 2 -- proven
+    by the refusal shape: it gets as far as needing a real screen."""
+    d = boxes_driver(cur=1, live=20)
+    d._pc_closed = lambda: True
+    d.find_tiles = lambda kind: []                # no PC on this fake map
+    assert d.change_box() is False
+    assert d.last_pc_reason.startswith("no-pc")   # past the box maths
+
+
+def test_change_box_all_full_refuses_before_touching_the_screen():
+    d = boxes_driver(cur=1, counts=(20,) * 14, live=20)
+    assert d.change_box() is False
+    assert d.last_pc_reason.startswith("no-space")
+    assert d.pressed == []

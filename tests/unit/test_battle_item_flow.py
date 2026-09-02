@@ -67,6 +67,8 @@ class PackEmu:
         if name == "wJumptableIndex":
             in_pack = self.state in ("pocket",) + tuple(self.pages)
             return 2 if in_pack else 0xFF
+        if name == "wCurBattleMon":
+            return 0                  # the lead is the active mon here
         raise KeyError(name)
 
     def read(self, loc, n):

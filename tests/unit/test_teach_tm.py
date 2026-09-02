@@ -168,7 +168,7 @@ def test_a_compatible_mon_is_taught_and_verified(patched):
     d._tmhm_use = lambda: steps.append("use") or True
     d._party_cursor_to = lambda row: steps.append(("row", row)) or True
     d._able_under_cursor = lambda: True
-    d._walk_forget_menu = lambda move, forget=None: \
+    d._walk_forget_menu = lambda move, forget=None, slot=None: \
         steps.append(("learn", move, forget)) or True
     assert run(d, "IRON TAIL", "GATOR", forget="BITE") is True
     assert d.last_tm_reason == "learned"
@@ -184,7 +184,7 @@ def test_the_species_name_also_names_the_mon(patched):
     rows = []
     d._party_cursor_to = lambda row: rows.append(row) or True
     d._able_under_cursor = lambda: True
-    d._walk_forget_menu = lambda move, forget=None: True
+    d._walk_forget_menu = lambda move, forget=None, slot=None: True
     assert run(d, IRON_TAIL_TAG, "feraligatr") is True
     assert rows == [1]
 
@@ -198,7 +198,7 @@ def test_a_flow_that_does_not_leave_the_move_behind_is_a_failure(patched):
     d._tmhm_use = lambda: True
     d._party_cursor_to = lambda row: True
     d._able_under_cursor = lambda: True
-    d._walk_forget_menu = lambda move, forget=None: False
+    d._walk_forget_menu = lambda move, forget=None, slot=None: False
     assert run(d, IRON_TAIL_TAG, "GATOR") is False
     assert d.last_tm_reason.startswith("not-learned")
 
@@ -227,24 +227,26 @@ def test_the_forget_walk_targets_the_named_move():
     became SCARY FACE."""
     d = Driver.__new__(Driver)
     d.emu = FakeEmu()
-    state = {"cursor": 0, "learned": False}
     order = ["SURF", "BITE", "SCARY FACE", "DRAGONBREATH"]
+    state = {"cursor": 0, "learned": False, "picked": None}
     d.textbox = lambda: False
     d.cursor_rows = lambda: [f"▶{order[state['cursor']]}"]
-    d._party_knows = lambda move: (state["learned"], 0)
+    d.observe = lambda: {"party": [{
+        "nickname": "GATOR",
+        "moves": [{"name": n} for n in order]}]}
 
     def press(seq):
         d.emu.pressed.append(seq)
         if seq.startswith("D"):
             state["cursor"] = (state["cursor"] + 1) % len(order)
-        elif seq.startswith("A") and state["asked"]:
-            # the second A of the flow confirms the highlighted move
+        elif seq.startswith("A"):
+            # A on the move list confirms the highlighted row
             state["picked"] = order[state["cursor"]]
+            order[state["cursor"]] = "IRON TAIL"
             state["learned"] = True
 
-    state["asked"] = True
-    state["picked"] = None
     d.press = press
-    d.emu.rows = [" YES", " NO"] + [" " * 20 for _ in range(16)]
-    assert d._walk_forget_menu("IRON TAIL", "SCARY FACE") is True
+    d.emu.rows = [" Which move should", " be forgotten?"] + \
+        [" " * 20 for _ in range(16)]
+    assert d._walk_forget_menu("IRON TAIL", "SCARY FACE", slot=0) is True
     assert state["picked"] == "SCARY FACE"

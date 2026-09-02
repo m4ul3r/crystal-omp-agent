@@ -734,6 +734,27 @@ def test_a_doomed_turn_still_refuses_the_potion():
     assert action[0] == "attack" and "doomed" in why
 
 
+def test_an_unescapable_two_hit_window_attacks_until_one_hit_reaches_me():
+    """Bruno's MACHAMP (ROCK SLIDE 56-66 into a 170 HP TYPHLOSION): a full
+    bar minus one hit is still inside two hits, so the two-hit trigger
+    healed, ate a hit, healed... six Hyper Potions and zero attacks. When
+    max_hp <= 3 x their max the potion only buys the turn once their max
+    roll reaches me."""
+    t = _tactics(heal_table=HEAL_TABLE)
+    foe = _mon(types=("NORMAL", "NORMAL"), hp=300, defense=200, spdef=200,
+               moves=(10,))
+    probe = t_analysis(t, _mon(hp=100, max_hp=100, moves=(2,)), foe)
+    their = probe["their_best"]
+    max_hp = 3 * their["max"] - 1                  # window never escapes
+    hp = 2 * their["max"] - 1                      # inside two hits...
+    assert hp > their["max"]                       # ...but one hit survives
+    me = _mon(hp=hp, max_hp=max_hp, moves=(2,))
+    action, why = t.recommend(t_analysis(t, me, foe), {"bag": {"POTION": 5}})
+    assert action[0] == "attack", why
+    me = _mon(hp=their["max"], max_hp=max_hp, moves=(2,))
+    action, why = t.recommend(t_analysis(t, me, foe), {"bag": {"POTION": 5}})
+    assert action == ("item", "POTION"), why
+
 # -- ramping moves: the ROM doubles them, so the model must too ----------
 
 FURY = {11: ("EFFECT_FURY_CUTTER", 10, "BUG", 95)}

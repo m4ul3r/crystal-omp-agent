@@ -815,12 +815,22 @@ class Battle:
         """Put the BattleMonMenu cursor on `label` and press A. Steering
         is WRAM (wMenuCursorY, the value the engine itself branches on);
         the A press only fires once the glyph is verifiably painted in the
-        submenu's own column, so a lagging tilemap can't confirm STATS."""
+        submenu's own column, so a lagging tilemap can't confirm STATS.
+        The confirm is a confirm-until-closed loop (gotcha 5): the box's
+        first frames swallow the press, and a swallowed SWITCH used to be
+        reported as an accepted switch -- the party list stayed open under
+        the next turn's blind text presses."""
         want = self.SUBMENU_ROWS[label]
         for _ in range(max_steps):
             if self._submenu_choice(self.menu.screen()) == label:
-                self.menu.press("A:6 .:18")
-                return True
+                self.menu.press(".:12")
+                for _attempt in range(3):
+                    self.menu.press("A:6 .:18")
+                    if self.menu.wait_for(
+                            lambda r: not self._submenu_up(r),
+                            timeout_frames=60, quiet=True):
+                        return True
+                return False
             try:
                 cur = self.emu.read_u8("wMenuCursorY")
             except Exception:
@@ -854,18 +864,27 @@ class Battle:
             self.menu.press("B:6 .:16")
         return False
 
+    def _party_row(self):
+        """Absolute 0-based row of the battle party list. It is a 2D menu
+        (PartyMenu2DMenuData, wrap up/down) with NO scroll position, so
+        the row is wMenuCursorY-1 alone. Menus.scroll_abs adds
+        wMenuScrollPosition, which the PACK leaves behind at whatever
+        pocket row it last showed -- after a SUPER POTION the list read as
+        index 4..8 on a four-mon party and every select spun to its cap
+        (Route 40, 90k-frame budgets)."""
+        return self.emu.read_u8("wMenuCursorY") - 1
+
     def _party_row_select(self, index, max_steps=20):
         """Steer the battle party list to absolute row `index`, then A.
 
         BIDIRECTIONAL on purpose: the list REMEMBERS its cursor between
         opens (the live wedge screen had it parked on row 5), so
         Menus.select_abs's DOWN-only walk can never climb back up to an
-        earlier slot. Position comes from the engine's own
-        wMenuScrollPosition + wMenuCursorY, and a cursor that stops moving
-        means the wrong menu is up."""
+        earlier slot. Position comes from the engine's own wMenuCursorY,
+        and a cursor that stops moving means the wrong menu is up."""
         last, stuck = None, 0
         for _ in range(max_steps):
-            cur = self.menu.scroll_abs()
+            cur = self._party_row()
             if cur == index:
                 self.menu.press("A:6 .:18")
                 return True
@@ -890,6 +909,14 @@ class Battle:
         and reported as a misfire so play() re-decides."""
         if not self._battle_option(2):
             return False
+        # The list REMEMBERS its row: when it reopens already on the
+        # target, _party_row_select presses A on its first pass -- the
+        # frame the list is drawn, before its input loop runs (gotcha 2).
+        # That swallowed A is why every second switch "never opened" the
+        # SWITCH/STATS/CANCEL box (Morty: 7 free hits on the same request).
+        self.menu.wait_for(lambda r: any("CANCEL" in s for s in r),
+                           timeout_frames=300, quiet=True)
+        self.menu.press(".:20")
         if not self._party_row_select(party_index):
             return self._exit_party_menu()
         if not self.menu.wait_for(self._submenu_up, timeout_frames=300):
@@ -935,12 +962,32 @@ class Battle:
             return False
         return self.me()["hp"] <= 0
 
+    def _party_list_up(self, rows):
+        """A battle party list (CANCEL + 'HP / max' rows) while the active
+        mon is still standing. `_forced_switch_up` is the fainted case;
+        this is the voluntary one -- and the loop only reaches here when
+        it did NOT open it (switch_to drives its own list to completion)."""
+        if not any("CANCEL" in r for r in rows):
+            return False
+        if not any(re.search(r"\d\s*/\s*\d+", r) for r in rows):
+            return False
+        joined = "".join(rows).upper()
+        if "USE ON WHICH" in joined:      # an item's target list: not ours
+            return False
+        return self.me()["hp"] > 0
+
     def _drive_forced_switch(self):
-        """Send out the first alive mon: select its slot, then keep
+        """Send out the first alive NON-EGG mon: select its slot, then keep
         confirming until the list closes (the first A lands during menu
-        setup)."""
+        setup). An egg's struct carries the hatched species' HP, so
+        _alive_slots lists it and the engine answers "An EGG can't
+        battle!" -- forever, if it is picked."""
+        eggs = self._egg_slots()
+        self.menu.press(".:16")           # list just drawn: let it arm
         for idx in self._alive_slots():
-            if self.menu.select_abs(idx):
+            if idx in eggs:
+                continue
+            if self._party_row_select(idx):
                 break
         else:
             self.menu.press("B:4 .:12")
@@ -1211,6 +1258,7 @@ class Battle:
         lock_logged = None       # forced-turn state already announced
         stalls = 0               # consecutive turns that changed nothing
         stall_act = None         # the action those turns kept re-sending
+        forced_tries = 0         # consecutive forced-switch drives
         while self.active():
             if self.emu.frame - f0 > max_frames:
                 return "timeout"
@@ -1286,14 +1334,33 @@ class Battle:
                     # modal flow (level-up move learning) handled by caller
                     continue
                 if self._forced_switch_up(rows):
+                    forced_tries += 1
+                    if forced_tries > 6:
+                        # the list is up, the driver keeps failing to pick
+                        # a row: something else owns the menu. Stop
+                        # burning the frame budget on it (Route 40: 3x90k).
+                        log.warning("[battle] forced switch not taken "
+                                    "after %d drives: bailing", forced_tries)
+                        return "wedged"
                     self._drive_forced_switch()
                     continue
+                forced_tries = 0
                 joined = "".join(rows).upper()
                 if self._my_move_list_up(rows):
                     # the move list is open outside attack() (e.g. cursor
                     # parked on a DISABLED move): A would re-pick it and
                     # loop forever -- back out to the main menu
                     self.menu.press("B:6 .:12")
+                    continue
+                if self._party_list_up(rows):
+                    # a party list with the active mon ALIVE is one the
+                    # loop never asked for (the SHIFT-style "change
+                    # POKeMON?" prompt answered by a stray A, or a
+                    # half-driven switch): every A here picks a row,
+                    # SWITCH, and "already out" / "EGG can't battle" --
+                    # the choice loop that ate whole frame budgets. B out.
+                    self._exit_party_menu()
+                    was_menu = False
                     continue
                 if not want_nickname and (
                         "GIVE A NICKNAME" in joined
@@ -1387,7 +1454,15 @@ class Battle:
             elif kind == "ball":
                 ok = self.throw_ball(arg or "POKE BALL")
             elif kind == "item":
-                ok = self.use_battle_item(arg or "POTION")
+                # ('item', NAME[, party_slot]). The party menu behind
+                # "Use on which PM?" is in PARTY order, not battle order:
+                # a Hyper Potion meant for the mon standing in the fight
+                # used to land on slot 0 (the lead, sitting in the back
+                # at full HP) while the active mon fainted -- Clair, twice.
+                # Default the target to wCurBattleMon.
+                slot = act[2] if isinstance(act, tuple) and len(act) > 2 \
+                    else self.emu.read_u8("wCurBattleMon")
+                ok = self.use_battle_item(arg or "POTION", slot)
             elif kind == "switch":
                 ok = self.switch_to(arg if arg is not None else 1)
             else:

@@ -126,6 +126,7 @@ from the leg's own arguments.
 | Use a WATER HM (waterfall/whirlpool) | `d.waterfall()` / `d.whirlpool()` / `d.use_field_move('WATERFALL', facing='U')` — faces the tile and presses **A** on the overworld, never the party menu (gotcha 18); refuses before pressing with `d.last_field_reason` in `no-knower`/`no-badge`/`wrong-tile`, and proves it worked by the position or the live grid |
 | Cut a tree in the way | `d.cut(x, y)` (or `d.cut()` facing one) — `COLL_CUT_TREE` is a WALL to BFS, so a route needing one is "no path" until you cut it; this routes, faces, presses A and patches nav's grid so the next `goto` plans through the gap. Find them with `d.find_tiles('cut-tree')`; refusals in `d.last_field_reason` (`no-tree`/`wrong-tile`/`no-knower`/`no-badge`) |
 | Deposit / withdraw at a PC | `d.deposit('TOGEPI')`, `d.withdraw('PANIC')`, `d.box_list()` — one mon per call, targeted by WRAM index, verified against `observe()['party']` and the SRAM box; refuses before pressing with `d.last_pc_reason` in `no-such-mon`/`last-mon`/`box-full`/`party-full`/`not-in-box`/`holds-mail`. `find_tiles('pc')` locates the terminal ($93 COLL_PC). Never A-loop these lists (gotcha 18) |
+| Which box am I filling? Switch it | `d.boxes()` → `{'current': n, 'boxes': [{'box','count','capacity','full'}, ...]}` (pure SRAM, safe anywhere); `d.change_box(n)` / `d.change_box()` (first box with space) drives Bill's PC CHANGE BOX and SAVES THE GAME — needs a PC on the map; refusals in `d.last_pc_reason` (`bad-box`/`no-space`/`no-pc`/`switch-miss`). An EXPLICIT full box is honored (that's how you withdraw from it); only the bare auto-pick avoids full boxes. A FULL active box silently bounces every ball throw ("The POKéMON BOX is full." inside the ball pocket), so check BEFORE a catching session |
 | Where does this map keep its nurse/clerk? | `d.sprite_cell('SPRITE_NURSE')` / `d.map_objects()` — the map's own `object_event`s, so `heal` works at Indigo Plateau (nurse (3,7)) as well as a Johto town (3,1) |
 | Is that NPC/item actually THERE? | `d.map_objects()[i]['masked']` — the engine hides an object whose event flag is SET (`CheckObjectFlag`, engine/overworld/map_objects_2.asm:31-56); `sprite_cell` skips masked ones. Beaten trainers, taken item balls and story-moved NPCs all read `masked=True`, and the Slowpoke Well guard reads `False` exactly while he plugs the shaft |
 | Which coord_event cells is nav refusing? | `d.blocked_cells()` (all maps) / `d.blocked_cells('INDIGO_PLATEAU_POKECENTER_1F')` — recomputed live; a cell whose script's own `checkevent`/`checkflag` guard chain sends it to a do-nothing label is NOT blocked |
@@ -319,6 +320,23 @@ ROM's `Moves` table via `pokecrystal.sym`. Don't hardcode game data.
     her leaves the gym in a state where talking again just repeats the
     scene; LEAVE the gym and walk back in, then talk — the PLAIN badge
     and TM45 arrive on that talk.
+30. **A full ACTIVE box bounces every ball throw**, silently: the throw
+    opens the ball pocket, prints "The POKéMON BOX is full." and returns
+    to the menu, which a driving loop reads as a wedge. `d.boxes()`
+    knows before it happens; `d.change_box()` fixes it (two YES prompts
+    — "data will be saved. OK?" AND "already a saved file… overwrite?" —
+    the switch only lands after the second). talk_to on a PC terminal
+    can mis-approach and flush the whole session on some layouts
+    (Olivine): change_box walks under the terminal and drives it by
+    screen state instead.
+31. **Time of day never changes on its own under pyboy here** — the RTC
+    advances with neither frames (1.6M ticked, hour unchanged) nor host
+    time. The game clock is `hHours = hRTCHours + wStartHour`
+    (home/time.asm FixTime), so the ONE working lever is writing
+    `wStartHour` (01:d4b7): `mem[1,0xd4b7] = (old + delta) % 24`, tick
+    ~1200 frames, and `wTimeOfDay` recomputes (1=day, 2=nite). Same
+    mechanism as the official clock-reset password and it persists in
+    the save. Morning/night-only species are unreachable without it.
 
 ## Session protocol
 

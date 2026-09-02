@@ -32,7 +32,7 @@ from crystalagent.nav import WATER as _NAV_WATER
 from crystalagent.nav import ICE as _NAV_ICE
 from crystalagent.schemas import validate_observe, validate_route
 from crystalagent.state import (game_state, status_line, live_sprites,
-                                box_state, SPRITE_WANDERERS)
+                                box_state, MONS_PER_BOX, SPRITE_WANDERERS)
 from crystalagent.symfile import Symbols
 
 # -- model-facing decision vocabulary (wren pt6) ---------------------------
@@ -1756,6 +1756,32 @@ class Driver:
         except Exception:
             return set()
 
+    # SPRITEMOVEDATA_STRENGTH_BOULDER (constants/map_object_constants.asm:146)
+    BOULDER_MOVEMENT = 0x19
+
+    def boulder_cells(self):
+        """Cells holding a STRENGTH boulder right now.
+
+        A boulder is an object_event like any other, so `npc_cells` counts
+        it and nav calls it a stationary blocker -- which made Cianwood
+        Gym's three-boulder puzzle read as "severs the only path" and even
+        the savestate search refused to look (it will not search around an
+        NPC). They are PUSHABLE: with STRENGTH in the party, a blocked
+        step into one is a shove, not a wall."""
+        try:
+            return {(s["map_x"], s["map_y"]) for s in self.sprites()
+                    if s["slot"] and s.get("movement") == self.BOULDER_MOVEMENT}
+        except Exception:
+            return set()
+
+    def can_push(self):
+        """True when a party member knows STRENGTH (the field move that
+        makes a boulder cell walk-throughable, one shove at a time)."""
+        try:
+            return bool(self.field_moves().get("STRENGTH"))
+        except Exception:
+            return False
+
     def _blocker_kind(self, cell):
         """'wanderer' | 'stationary' | None for the sprite standing on
         `cell`. None means "cannot tell" (unreadable table, or nothing
@@ -2941,12 +2967,20 @@ class Driver:
                 return True
         return False
 
+    BATTLE_SHIFT_BIT = 6   # constants/ram_constants.asm: set = "SET" style
+
     @staticmethod
     def _text_speed_byte(opts, mode):
         """wOptions low TEXT_DELAY_MASK bits select render delay
-        (FAST=%001, MED=%011, SLOW=%101); upper option bits survive."""
+        (FAST=%001, MED=%011, SLOW=%101); upper option bits survive --
+        except BATTLE_SHIFT, which is forced to SET: the SHIFT-style
+        "<trainer> is about to use X. Will you change POKeMON?" YES/NO
+        lands between two blind text presses, the A that pages the KO
+        text answers YES, and the "Which PKMN?" list that follows loops
+        SWITCH -> "already out" (or "An EGG can't battle!") until the
+        frame cap. No caller ever wanted that prompt."""
         delays = {"FAST": 0b001, "MED": 0b011, "SLOW": 0b101}
-        return (opts & ~0b111) | delays[mode]
+        return (opts & ~0b111) | delays[mode] | (1 << Driver.BATTLE_SHIFT_BIT)
 
     def set_text_speed(self, mode="FAST"):
         """Force fast text rendering: pages complete in fewer frames so
@@ -3950,6 +3984,22 @@ class Driver:
                 # <MOVE>?", which the YES/NO branch below confirms.
                 self.press("B:6 .:20")
                 return True
+            # A mon whose four moves are ALL HMs (CHAIN: WATERFALL /
+            # WHIRLPOOL / STRENGTH / SURF) can never make room: the cursor
+            # walk below presses D forever (Victory Road grind, HYDRO PUMP
+            # at L40, five 90k-frame budgets). Decline the learn instead.
+            table = getattr(getattr(self, "names", None), "moves", None)
+            listed = [r.strip().upper().lstrip("▶▷ ") for r in rows
+                      if r.strip() and "FORGOTTEN" not in r.upper()]
+            named = [r for r in listed
+                     if any(mv in r for mv in (table or {}).values())]
+            if table and named and all(any(hm in r for hm in self.HM_MOVES)
+                                       for r in named):
+                log.warning("learn flow: every move on the forget menu is an "
+                            "HM -- declining the learn")
+                st["decision"] = "DECLINE"
+                self.press("B:6 .:20")
+                return True
             cur = [r.strip().upper() for r in rows if "▶" in r or "▷" in r]
             on_hm = any(hm in r for r in cur for hm in self.HM_MOVES)
             if forget is not None:
@@ -4604,9 +4654,22 @@ class Driver:
                 return True, idx
         return False, None
 
-    def _party_knows(self, move_name):
-        """(knows, party_index): does any party member know `move_name`?"""
-        for idx, mon in enumerate(self.observe()["party"]):
+    def _party_knows(self, move_name, slot=None):
+        """(knows, party_index): does any party member know `move_name`?
+
+        With `slot`, the question narrows to THAT party row. teach_tm
+        names a mon, so a party-wide answer was a false success: with
+        STRENGTH already on DUCK, teaching it to EMBER "succeeded"
+        without pressing a single button."""
+        party = self.observe()["party"]
+        if slot is not None:
+            if slot >= len(party):
+                return False, None
+            mon = party[slot]
+            hit = any(m.get("name") == move_name
+                      for m in mon.get("moves", []))
+            return hit, (slot if hit else None)
+        for idx, mon in enumerate(party):
             if any(m.get("name") == move_name for m in mon.get("moves", [])):
                 return True, idx
         return False, None
@@ -4748,35 +4811,65 @@ class Driver:
                 return bool(tag)
         return False
 
-    def _walk_forget_menu(self, move_name, forget=None):
+    def _forget_row(self, forget, slot):
+        """0-based row of the move to delete in the forget list.
+
+        The list mirrors the learner's four move slots, so the row is an
+        INDEX, not a text search: `cursor_rows()` also carries the party
+        list drawn underneath, and matching text there walked the wrong
+        menu. Without a named `forget` the first non-HM move goes -- the
+        list opens on slot 1, and slot 1 is very often CUT, which the
+        game refuses ("HM moves can't be forgotten now") forever.
+        """
+        party = self.observe()["party"]
+        idx = 0 if slot is None else slot
+        moves = [m.get("name") for m in party[idx].get("moves", [])] \
+            if idx < len(party) else []
+        if forget:
+            want = forget.strip().upper()
+            for i, name in enumerate(moves):
+                if name and name.upper() == want:
+                    return i
+        for i, name in enumerate(moves):
+            if name and name.upper() not in self.HM_MOVES:
+                return i
+        return 0
+
+    def _walk_forget_menu(self, move_name, forget=None, slot=None):
         """Drive whatever follows the party pick: an outright learn, or
-        the "delete a move?" YES plus the move list. `forget` names the
-        move to delete; without it the move already under the cursor goes
-        (the list opens on SLOT 1, so that is the mon's OLDEST move).
+        the "delete a move?" YES plus the move list.
 
         Shared by teach_hm and teach_tm: one implementation of the walk
-        that decides which move disappears."""
-        for _ in range(20):
-            if self._party_knows(move_name)[0]:
+        that decides which move disappears. `slot` scopes the "did it
+        land?" question to one party row -- teach_tm names a mon, and a
+        party-wide check called it done before pressing anything."""
+        target = None
+        for _ in range(24):
+            if self._party_knows(move_name, slot)[0]:
                 break
-            s = "".join(self.emu.screen_text()).upper()
-            if "YES" in s and "NO" in s:
-                self.press("A:5 .:70")                # YES: delete one
-                if forget:                            # move list is up
-                    want = forget.upper()
-                    self.press(".:30")
-                    for _ in range(6):
-                        if any(want in r for r in self.cursor_rows()):
-                            break
-                        self.press("D:4 .:16")
-                self.press("A:5 .:90")                # forget cursor move
+            rows = self.emu.screen_text()
+            s = "".join(rows).upper()
+            if "FORGOTTEN?" in s.replace(" ", ""):
+                # the move list is up: walk DOWN by index from slot 1
+                if target is None:
+                    target = self._forget_row(forget, slot)
+                for _ in range(target):
+                    self.press("D:2 .:18")
+                self.press("A:3 .:80")
+                target = 0        # a re-ask reopens on the same row
+            elif "YES" in s and "NO" in s:
+                # "Delete an older move?" -> YES;
+                # "Stop learning <MOVE>?"  -> NO (cursor starts on YES)
+                if "STOPLEARNING" in s.replace(" ", ""):
+                    self.press("D:2 .:20")
+                self.press("A:3 .:70")
             else:
                 self.press("A:4 .:45")
         for _ in range(14):                           # drain learn texts
             if not self.textbox():
                 break
             self.press("A:4 .:50")
-        return self._party_knows(move_name)[0]
+        return self._party_knows(move_name, slot)[0]
 
     def teach_hm(self, hm_tag, move_name, forget_move=None):
         """Teach the HM whose pocket row reads '<hm_tag> <move_name>'
@@ -4966,7 +5059,7 @@ class Driver:
                 f"not-able: the game reports {label} NOT ABLE to learn "
                 f"{move_name}")
         self.press("A:5 .:80")                        # choose the mon
-        learned = self._walk_forget_menu(move_name, forget)
+        learned = self._walk_forget_menu(move_name, forget, slot=slot)
         self.close_menus()
         if not learned:
             return self._tm_fail(f"not-learned: {label} does not know "
@@ -5128,6 +5221,101 @@ class Driver:
         same order."""
         return box_state(self.emu, self.names)
 
+    BOX_COUNT = 14
+
+    def boxes(self):
+        """Fill state of every PC box plus which one is ACTIVE --
+        ``{'current': n, 'boxes': [{'box': i, 'count': k,
+        'capacity': 20, 'full': bool}, ...]}``.
+
+        Pure SRAM reads (no screen, no menus): the stored boxes live at
+        ``sBox1Count``-``sBox14Count`` in SRAM banks 2-3, but the ACTIVE
+        box's stored copy is stale until CHANGE BOX writes it back
+        (engine/pokemon/bills_pc.asm GetBoxPointer), so its count comes
+        from the live ``sBoxCount`` in bank 1 instead. A full active box
+        silently bounces every ball throw ("The POKéMON BOX is full."),
+        so a catching session should check this BEFORE hunting."""
+        cur = (self.emu.read_u8("wCurBox") & 0x0F) + 1
+        live = self.box_list()["count"]
+        rows = []
+        for i in range(1, self.BOX_COUNT + 1):
+            if i == cur:
+                k = live
+            else:
+                k = self.emu.read(self.emu.sym[f"sBox{i}Count"])
+                if isinstance(k, (bytes, bytearray)):
+                    k = k[0]
+                if k == 0xFF:                      # never-initialized box
+                    k = 0
+            rows.append({"box": i, "count": k, "capacity": MONS_PER_BOX,
+                         "full": k >= MONS_PER_BOX})
+        return {"current": cur, "boxes": rows}
+
+    def change_box(self, n=None):
+        """Make box `n` (1-14) the ACTIVE box via Bill's PC CHANGE BOX;
+        with `n` omitted, the first non-full box. True only when wCurBox
+        really changed (or already matched). Needs a PC on this map.
+
+        The flow saves the game (the engine's own "data will be saved"
+        prompt is answered YES); refusals land in last_pc_reason:
+        'bad-box' (out of range), 'no-space' (auto-pick with every box
+        full), plus _pc_boot's reasons. An EXPLICIT full box is honored
+        -- switching to one is how a boxed mon gets withdrawn; only the
+        auto-pick avoids full boxes (they bounce catches, gotcha 30)."""
+        st = self.boxes()
+        if n is None:
+            free = [b["box"] for b in st["boxes"] if not b["full"]]
+            if not free:
+                return self._pc_fail("no-space: all 14 boxes are full",
+                                     exit_ui=False)
+            n = st["current"] if st["current"] in free else free[0]
+        if not 1 <= n <= self.BOX_COUNT:
+            return self._pc_fail(f"bad-box: {n} is not 1-{self.BOX_COUNT}",
+                                 exit_ui=False)
+        if n == st["current"]:
+            self.last_pc_reason = "already-current"
+            return True
+        # Open Bill's PC to its WITHDRAW/DEPOSIT/CHANGE BOX menu
+        # (_pc_boot: walk under the terminal, screen-state driven --
+        # gotcha 30).
+        def box_menu(rows):
+            return any("CHANGE BOX" in r for r in rows)
+        if not self._pc_boot(box_menu):
+            return False
+        if not self.select_menu_row("CHANGE BOX", max_presses=8):
+            return self._pc_fail("no-list: the CHANGE BOX row would not "
+                                 "confirm")
+        self.press(".:40")
+        # Box chooser ("Choose a BOX."): glyph-cursor list of BOX1-BOX14.
+        if not self.select_menu_row(f"BOX{n}",
+                                    max_presses=self.BOX_COUNT + 4):
+            return self._pc_fail(f"target-miss: BOX{n} never came under "
+                                 f"the chooser cursor")
+        self.press(".:30")
+        # SWITCH / NAME / PRINT / QUIT submenu.
+        if not self.select_menu_row("SWITCH", max_presses=6):
+            return self._pc_fail("no-list: no SWITCH row after choosing "
+                                 "the box")
+        # Two save prompts follow, each behind its own text page ("data
+        # will be saved. OK?", then "already a saved file… overwrite?")
+        # and BOTH default their cursor to YES. The YES/NO boxes draw
+        # OVER the chooser and share rows with it, which breaks
+        # resolve_choice's geometry scrape (live: options came back as
+        # ['BOX1','BOX2'] forever) -- so this is one place a paced A
+        # loop is correct: every page advances on A, every default is
+        # YES, and wCurBox flipping is the exit condition.
+        f0 = self.emu.frame
+        while self.emu.frame - f0 < 6000 and \
+                (self.emu.read_u8("wCurBox") & 0x0F) + 1 != n:
+            self.press("A:4 .:50")
+        self._pc_exit()
+        got = (self.emu.read_u8("wCurBox") & 0x0F) + 1
+        if got != n:
+            return self._pc_fail(f"switch-miss: current box is {got}, "
+                                 f"wanted {n}", exit_ui=False)
+        self.last_pc_reason = "switched"
+        return True
+
     # observe()['party'] calls them 'nick'/'species'-as-a-name while
     # game_state()/box_list() call them 'nickname'/'name'; a lookup that
     # only knew one shape silently found nothing.
@@ -5166,6 +5354,51 @@ class Driver:
             self.press("A:4 .:40")
         return pred(self.emu.screen_text())
 
+    def _pc_boot(self, pred, presses=14):
+        """Walk under the nearest PC terminal, face it, and drive it by
+        SCREEN STATE until `pred(rows)` holds (the caller's target menu).
+        Handles the "turned on the PC" page and the terminal's
+        BILL/<PLAYER>/OAK chooser, whose follow-up "What?" menu draws by
+        ITSELF -- a blind A there lands on its default WITHDRAW row.
+
+        talk_to is deliberately not used: on some Pokécenter layouts
+        (live: Olivine) its approach pick lands a cell away and its
+        dialog flush eats the whole terminal session (gotcha 30)."""
+        if not self._pc_closed() and not self._pc_exit():
+            return self._pc_fail("busy: a menu owns the screen and B "
+                                 "would not clear it", exit_ui=False)
+        cell = self._pc_tile()
+        if cell is None:
+            return self._pc_fail(
+                f"no-pc: no COLL_PC ($93) tile on {self.map_name()} -- "
+                f"stand in a Pokécenter or Bill's house "
+                f"(find_tiles('pc'))", exit_ui=False)
+        px, py = cell
+        if self.pos()[2:] != (px, py + 1):
+            if not self.goto(px, py + 1):
+                return self._pc_fail(f"no-pc: could not stand under the "
+                                     f"PC at {cell}", exit_ui=False)
+        self.press("UP:2 .:10")
+        for _ in range(presses):
+            rows = self.emu.screen_text()
+            if pred(rows):
+                return True
+            if any("BILL" in r and "PC" in r for r in rows):
+                if not self.select_menu_row("BILL", max_presses=6):
+                    return self._pc_fail("no-list: the BILL's PC row "
+                                         "would not confirm")
+                f0 = self.emu.frame
+                while self.emu.frame - f0 < 600 and \
+                        not pred(self.emu.screen_text()):
+                    self.press(".:15")
+                continue
+            self.press("A:5 .:40")
+        if pred(self.emu.screen_text()):
+            return True
+        return self._pc_fail(
+            f"no-list: BILL's PC never drew the target menu "
+            f"(row 14: {self.emu.screen_text()[14].strip()!r})")
+
     def _pc_open(self, action):
         """Open BILL's PC and take `action` ('DEPOSIT' or 'WITHDRAW'),
         leaving its mon list up. Reuses a list that is already up (the
@@ -5173,34 +5406,14 @@ class Driver:
         deposit is a second target on the SAME list)."""
         if self._pc_list_up():
             return True
-        if not self._pc_closed() and not self._pc_exit():
-            return self._pc_fail("busy: a menu owns the screen and B would "
-                                 "not clear it", exit_ui=False)
-        cell = self._pc_tile()
-        if cell is None:
-            return self._pc_fail(
-                f"no-pc: no COLL_PC ($93) tile on {self.map_name()} -- "
-                f"stand in a Pokécenter or Bill's house "
-                f"(find_tiles('pc'))", exit_ui=False)
-        if self.talk_to(*cell, label="PC") != "talked":
-            return self._pc_fail(f"no-pc: could not reach/use the PC at "
-                                 f"{cell}", exit_ui=False)
 
         def box_menu(rows):
             return any("WITHDRAW" in r for r in rows)
-        # terminal menu: "BILL's PC / <PLAYER>'s PC / PROF.OAK's PC /
-        # TURN OFF" (engine/events/pokecenter_pc.asm:59-68), reached
-        # after the "turned on the PC" page. Bill's own house PC skips
-        # it, so it is optional -- the box menu's rows are the real gate.
-        if not box_menu(self.emu.screen_text()) and \
-                any("BILL" in r for r in self.emu.screen_text()):
-            if not self.select_menu_row("BILL", max_presses=6):
-                return self._pc_fail("no-list: the BILL's PC row would not "
-                                     "confirm")
-        if not self._pc_page(box_menu):
-            return self._pc_fail(
-                f"no-list: BILL's PC never drew its WITHDRAW/DEPOSIT menu "
-                f"(row 14: {self.emu.screen_text()[14].strip()!r})")
+        # _pc_boot walks under the terminal and drives the "turned on"
+        # page + BILL chooser by screen state (talk_to mis-approaches on
+        # some layouts -- gotcha 30); box_menu's rows are the real gate.
+        if not self._pc_boot(box_menu):
+            return False
         if not self.select_menu_row(action, max_presses=8):
             return self._pc_fail(f"no-list: the {action} row would not "
                                  f"confirm")
@@ -6340,8 +6553,13 @@ class Driver:
                 log.info(f"  -> arrived through warp {goal}")
                 return True
             # NPCs scope to the replan's start map inside _bfs, so always
-            # thread around them -- cross-map legs hit NPCs just the same
+            # thread around them -- cross-map legs hit NPCs just the same.
+            # STRENGTH boulders are the exception: they are pushable, so
+            # with a knower in the party they are planned THROUGH and the
+            # blocked-step handler below shoves them (Cianwood Gym).
             avoid = self.npc_cells()
+            if self.can_push():
+                avoid = avoid - self.boulder_cells()
             if goal_map == cur_map:
                 # Same-map goal: stay on this map. Routing through warps
                 # here just bounce-exits (e.g. standing north of Union
@@ -6366,6 +6584,8 @@ class Driver:
                             squatted.append((cx, cy))
                     waited_out = False
                     for cell in squatted:
+                        if cell in self.boulder_cells() and self.can_push():
+                            continue      # pushable: the walk shoves it
                         kind = self._blocker_kind(cell)
                         if kind == "stationary":
                             return self._goto_fail(
@@ -6462,6 +6682,16 @@ class Driver:
                             "naming-keyboard: an egg hatched (or a catch "
                             "is naming) -- answer it with "
                             "dismiss_keyboard(name) and relaunch", strict)
+                    if (bx + dx, by + dy) in self.boulder_cells() \
+                            and self.can_push():
+                        # A STRENGTH boulder is a shove, not a wall
+                        # (Cianwood Gym's puzzle). clear_obstacle answers
+                        # the "use STRENGTH?" prompt and takes the step.
+                        r2 = self.clear_obstacle(mv)
+                        log.info(f"  boulder at {(bx + dx, by + dy)}: "
+                                 f"{r2}")
+                        if r2 in ("moved", "cleared-not-moved"):
+                            break          # replan from the new geometry
                     if self.textbox():
                         cause = " [textbox]"
                     elif self.menu_open():
@@ -6779,9 +7009,16 @@ class Driver:
             return None
         hgt, wid = len(grid), len(grid[0])
 
+        surf = bool(getattr(self.nav, "surf", False))
+
         def standable(x, y):
+            # WATER counts once Driver.enable_surf() flipped nav.surf:
+            # Route 40 -> 41 is crossed on a Surf mount and its whole
+            # border band is sea, so a land-only band made the planner
+            # answer "no routable mapgraph path" with SURF in the party
             return (0 <= x < wid and 0 <= y < hgt
-                    and (grid[y][x] in WALKABLE or grid[y][x] in HOPS)
+                    and (grid[y][x] in WALKABLE or grid[y][x] in HOPS
+                         or (surf and grid[y][x] in _NAV_WATER))
                     and grid[y][x] not in WARPS)
 
         if e["kind"] == "warp":
@@ -7014,6 +7251,31 @@ class Driver:
 
         return False
 
+    def step_off_warp(self):
+        """If we are standing ON a live warp, take one step off it.
+
+        Every door arrival lands on one (gotcha 15), and a caller's next
+        step can re-enter it -- Ecruteak's gym door bounced city<->gym
+        three times before the ping-pong guard bailed the leg. Returns the
+        direction stepped, or None when there was nothing to do (not on a
+        warp, or no walkable non-warp neighbour)."""
+        try:
+            x, y = self.pos()[2:]
+            if self.tile_at(x, y) != "warp":
+                return None
+        except Exception:
+            return None
+        here_map = self.map_name()
+        for mv, (dx, dy) in STEP.items():
+            if self.tile_at(x + dx, y + dy) in ("blocked", "off-map", "warp"):
+                continue
+            if (x + dx, y + dy) in self.npc_cells():
+                continue
+            if self._step(mv) == "moved" and self.map_name() == here_map:
+                log.info(f"  stepped {mv} off the arrival warp {(x, y)}")
+                return mv
+        return None
+
     def travel(self, dest_map, label=""):
         """Execute route(<dest_map>) leg by leg with the existing walk/
         _step/settle mechanics: goto each approach cell, hold through warps
@@ -7153,6 +7415,12 @@ class Driver:
             drift = abs(mx - expected[0]) + abs(my - expected[1])
             log.info(f"  -> {here} {(mx, my)} (drift {drift})")
             if here == dest:
+                # Landed. Every door arrival leaves the avatar standing ON
+                # a live warp (gotcha 15), and the NEXT goto's first step
+                # can re-enter it: Ecruteak's gym door ping-ponged
+                # city<->gym three times and bailed. Step off before
+                # handing control back.
+                self.step_off_warp()
                 return steps      # landed on the destination: done
             # The map CHANGED to the expected one, so the crossing fired;
             # where it put us is arrival drift (gotcha 14), not a failure.
@@ -7374,6 +7642,29 @@ class Driver:
         cells = self._approach_cells(x, y)
         return cells[0] if cells else None
 
+    def _live_target(self, x, y, radius=2):
+        """Where the NPC listed at (x,y) is standing RIGHT NOW.
+
+        `maps/*.asm` gives an object_event's SPAWN cell, but a
+        SPRITEMOVEDATA_WALK_* / WANDER object drifts from it. Approaching
+        the spawn cell then talks to empty ground. When the spawn cell
+        holds no live sprite and exactly one sits within `radius`, that
+        one is the target; ambiguity (two candidates) keeps the caller's
+        coordinates, which is the conservative answer."""
+        try:
+            live = self.npc_cells()
+        except Exception:
+            return x, y
+        if (x, y) in live or not live:
+            return x, y
+        near = [c for c in live
+                if abs(c[0] - x) + abs(c[1] - y) <= radius]
+        if len(near) != 1:
+            return x, y
+        cell = near[0]
+        log.info(f"  target moved: ({x},{y}) -> {cell}")
+        return cell
+
     def talk_to(self, x, y, label="", facing=None):
         """Walk next to the NPC at (x,y) (or across a counter from them),
         face them, and talk. Fights any trainer battle that triggers
@@ -7387,6 +7678,7 @@ class Driver:
             if self._whiteout_stop(f"talk_to ({x},{y})"):
                 return False
         self.settle()
+        x, y = self._live_target(x, y)
         if facing:
             fdx, fdy = STEP[facing]
             spot = (x - fdx, y - fdy)     # stand opposite the facing dir
@@ -7425,6 +7717,19 @@ class Driver:
             (fdx, fdy)]
         self.step_dir(facing)          # blocked step = turn toward the NPC
         self.press("A:2 .:20")
+        # Did the A press actually open anything? A wanderer that stepped
+        # away leaves an empty cell, and pressing A at grass answered
+        # 'talked' with no dialog at all -- Chuck's wife held HM02 FLY
+        # through three such "successes" (journal #93).
+        # (guarded: reduced/duck-typed drivers model neither menus nor
+        # wScriptMode -- an unreadable probe must never invent silence)
+        def _probe(fn, *a):
+            try:
+                return bool(fn(*a))
+            except Exception:
+                return True
+        spoke = _probe(self.textbox) or _probe(self.menu_open) or \
+            _probe(lambda: self.emu.read_u8("wScriptMode") != 0)
         outcome = self.flush_dialog(30000)
         # trainer triggers land slowly; poll before declaring it plain talk
         f0 = self.emu.frame
@@ -7444,6 +7749,9 @@ class Driver:
             self.settle()
             self.flush_dialog(8000)
             return "battle"
+        if not spoke and not self.textbox():
+            log.info(f"  nothing answered at ({x},{y}) -- no dialog opened")
+            return False
         return "talked"
 
     @staticmethod
@@ -7657,7 +7965,11 @@ class Driver:
             target = next((i for i, r in enumerate(window)
                            if want in _norm_item(r)), None)
             if cur >= 0 and target is not None and target == cur:
-                self.press("A:4 .:40")           # open quantity picker
+                # the list's first row is already under the cursor the
+                # frame it opens, and an A that early is swallowed (gotcha
+                # 2): GREAT BALL at Olivine "had no quantity picker" 3x
+                self.press(".:16")
+                self.press("A:6 .:40")           # open quantity picker
                 if not self.menu.wait_for(
                         lambda r: any("How many?" in s for s in r),
                         timeout_frames=400):

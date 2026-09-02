@@ -24,6 +24,10 @@ class FakeEmu:
     def screen_text(self):
         return list(self.rows)
 
+    def read_u8(self, name):
+        assert name == "wCurBattleMon", name
+        return 0
+
 
 class FakeMenu:
     """Same shape as Menus.wait_for: tick fake frames until pred/timeout."""
