@@ -1,6 +1,235 @@
-# PROGRESS — run RUSTY
+# PROGRESS — run TALLOW
 
-Newest section first. Persona contract: `persona_RUSTY.md` (binding).
+Newest section first. Persona contract: `persona_TALLOW.md` (binding).
+Previous run (RUSTY, Champion) is archived below the TALLOW sections.
+
+## 2026-09-03 - session tallow-1: RISING badge (8/8) -- all Johto badges
+
+**Position:** DRAGONS_DEN_B1F (19,30), just outside the shrine. Party: EMBER Typhlosion L48, CRUST Graveler L47,
+CRUMB Raticate L39, SUGAR Togetic L38, FLOUR Pidgeot L40, BRINE Poliwhirl L39 (SURF/WHIRLPOOL). Badges 8/8.
+Bag adds CLEAR BELL. Money ~¥100k.
+Checkpoints: `tallow-pre-clair.state` (Blackthorn PC, gym trainers + bridges done), `tallow-pre-den.state`,
+`tallow-shrine.state` (forced save, quiz open), `tallow-rising.state` (milestone).
+- Route 45/46 is downhill-only: from west Johto, Blackthorn is reached ONLY via Mahogany + Ice Path
+  (`scripts/tallow_to_blackthorn.py`; boulders/pits persist, so the second crossing is slide -> stairs ->
+  fall into (11,2) or (5,12) -> slide to the (9,11) ladder). Keep `nav.surf` on except for Route 32 (its river
+  makes goto pop a SURF prompt it cannot answer).
+- Blackthorn Gym: only two bridges are needed -- 2F (8,2)->(8,3) [after pushing the (6,1) decoy east to (9,1)]
+  and (6,16)->(8,7) [after pushing the (8,14) decoy south to (8,17)]; the NW quadrant ((2,3)->(2,5)) sits behind
+  the cooltrainer at (4,1) and was never entered. `tallow_boulders.py` takes an assignment JSON with arbitrary
+  goal cells plus an ignore list; it now treats stairs, NPCs and learned-blocked cells as walls, advances
+  trainer text before waiting for the battle, and settles after fights. Clair's region: 2F (7,9) stairs down,
+  `sync_grid()`, goto (5,4); `nav.clear_overrides` before `travel` out.
+- Clair: EMBER Flame Wheel on the Dragonairs, CRUMB Hyper Fang on Kingdra (matchup_policy), 13 turns, EMBER
+  finished at 2 HP, CRUMB fainted. No whiteout, first try.
+- Dragon's Den: B1F NPC at (20,5) blocks the landing -- route around it; whirlpool at (10,20) from (10,19)
+  facing D (`use_field_move`), then live-grid walk to (19,30), U into the shrine. The elder's quiz starts on
+  entry: answers option 1,1,2,1,2 (Q3 "Tough person", Q5 "Both"); badge on leaving the shrine.
+- Persona ledger: goal 5 met (eight badges, every leader from a `tallow-pre-*` fork, whiteouts only on forks);
+  ceilings broken along the way (EMBER +5, CRUMB earlier); no items bought beyond balls/repels; no sales.
+
+Next: Elm's Master Ball call, Route 27/26 -> Victory Road -> Indigo Plateau (goal 6: Elite Four with the
+original six; TM/HM moves via TM23 IRON TAIL / TM16 already held). Kanto is out of scope for the persona.
+
+## 2026-09-03 - session tallow-1: Radio Tower cleared (EVENT_CLEARED_RADIO_TOWER)
+
+**Position:** RADIO_TOWER_5F (16,5). Party: CRUST Graveler L45 (EARTHQUAKE), EMBER Typhlosion L47, CRUMB L39,
+SUGAR L38, FLOUR L40, BRINE L39. Bag adds BASEMENT KEY, CARD KEY, TM16.
+Checkpoints: `tallow-goldenrod2.state`, `tallow-radio-5f.state`, `tallow-radio-key.state`,
+`tallow-underground.state`, `tallow-warehouse.state`, `tallow-cardkey.state`, `tallow-radio-4f.state`,
+`tallow-pre-archer.state`, `tallow-radio-cleared.state`.
+- `scripts/tallow_radio.py` stages 0-2. 5F fake director: the coord cell (0,3) fired only when stepped on with
+  `step_dir` (goto arrived without triggering). The Goldenrod (11,29) underground stairs are sealed by the
+  takeover grunt at (16,23) ((16,22) is a wall): use the north stairs (9,5) -> switch room (20,27) -> (21,25)
+  -> tunnel (2,2) -> basement door bg_event (18,6) from (18,7) (needs BASEMENT KEY) -> step U warps to (21,31)
+  -> (22,27) -> switch corridor. Switches: pos = s1*1 + s2*2 + s3*3; each position only sets the doors it
+  names, so order matters: all three on (pos 6) then switch 1 off/on (pos 5 -> 6) leaves 3,5,6,8,9,11 open
+  = corridor to the warehouse door (22,10) via (22,11). Director resets everything to 0 on the way back:
+  the emergency switch (20,11) (face U from (20,12)) reopens the way out. 3F card key slot: face U from (14,3).
+  4F (12,0) stairs to 5F took three held entries. Archer: coord (16,5) from (16,6).
+
+Next: walk back to Blackthorn (Route 34 -> Ilex -> ... -> Route 45), Clair.
+
+## 2026-09-03 - session tallow-1: Ice Path crossed; Blackthorn Gym locked behind the Radio Tower
+
+**Position:** BLACKTHORN_CITY (18,13). Party: CRUST Graveler L39, EMBER Typhlosion L44, CRUMB Raticate L39,
+SUGAR Togetic L38 (SHADOW BALL via TM30), FLOUR Pidgeot L40, BRINE Poliwhirl L39. Money ¥62526. Repels spent.
+Checkpoints: `tallow-pre-icepath.state`, `tallow-icepath-b1f.state`, `tallow-icepath-pits.state`,
+`tallow-icepath-b2f.state`, `tallow-blackthorn.state`, `tallow-pre-clair.state` (Blackthorn PC).
+- Route 44 grind to the Clair floor (38): `tallow_grind.py`, 268 + 37 battles; EMBER 44 (ceiling 43, +1).
+- Ice Path: 1F rink `slide_to(d, (16,8))` from (15,2) (`tallow_lib.slide_to`, live grid + NPC/boulder walls);
+  B1F boulders: `scripts/tallow_boulders.py` (per-boulder push BFS, feasible order, single-tile pushes = 28-44
+  frame holds; boulder positions from `d.sprites()` movement 25 -- `map_objects` keeps dropped ones); pits at
+  (4,7)(5,12)(11,2)(12,13). B2F Mahogany side: the four dropped boulders are `map_objects` (not sprites) --
+  pass them as `avoid`; slide to (8,8)->(7,8)->... the (9,11) ladder; B3F travel() works; B2F Blackthorn side
+  slide (3,10)->(3,14) drops you straight down the (3,15) ladder to B1F (11,27); then travel to Blackthorn.
+- `d.goto` PUSHES boulders it walks into (it moved (11,7) to (11,8)); walk boulder floors with the script's own BFS.
+- Blackthorn Gym door is blocked by the super nerd (18,12) until EVENT_CLEARED_RADIO_TOWER: Goldenrod Radio
+  Tower + Underground first (walk: Route 45/46/29/.../34 -- no fly helper).
+
+Next: Goldenrod Radio Tower (Rockets), Underground (Basement Key -> Card Key), Archer -> back to Blackthorn,
+2F boulders (RUSTY: (8,2)->(8,3), (2,3)->(2,5), (6,16)->(8,7); decoys first), Clair (fork `tallow-pre-clair`).
+
+## 2026-09-03 - session tallow-1: GLACIER badge (7/8), hideout cleared
+
+**Position:** MAHOGANY_GYM (5,4). Party: SUGAR Togetic L29, CRUMB Raticate L38, EMBER Typhlosion L37, BRINE Poliwag
+L30, CRUST Graveler L37, FLOUR Pidgeotto L34. Money ~¥50k. Badges 7/8. Bag adds HM06, RED SCALE.
+Checkpoints: `tallow-mahogany.state`, `tallow-lake.state`, `tallow-lance.state`, `tallow-hideout-{b1f,b2f,b3f,
+petrel,ariana,done,out}.state`, `tallow-pre-pryce.state`, `tallow-glacier.state` (milestone).
+- Lake of Rage: red Gyarados KO'd (not in the plan), Lance at (21,28). No Route 43 toll paid (travel took the
+  grass side).
+- Hideout (`scripts/tallow_hideout.py`, staged): `d.trip_scenes = True` walks the camera ambushes; B1F stairs
+  (3,14); B2F south region only reaches B3F via (27,14); passwords need a SECOND talk to the two grunts
+  (`endifjustbattled`); B3F boss door (10,9) is a bg_event -- face U from (10,10), press A, then `sync_grid()`;
+  reaching it = B3F (27,2) -> B2F north -> B2F (3,2) -> B3F west. Ariana's door (14,12) likewise from B2F
+  south (14,13). After any reload inside the base call `sync_grid()` (map callbacks reopen doors nav thinks are
+  walls); `route()` out of B2F fails -- walk (3,14) -> B1F (27,2) -> mart by hand.
+- Pryce: Mahogany Gym is an ice rink; `scripts/tallow_ice.py` BFS-es over slides (0x23 ice, 0x07 rock, NPCs)
+  -- from the entrance side: UURDDLUR reaches (5,4). matchup SEEL->CRUMB, DEWGONG->CRUST, PILOSWINE->EMBER; 11 turns.
+- `d.party_swap` intermittently fails ("SWITCH entry not found") right after a heal -- `set_lead` returns False;
+  callers retry.
+
+Next: Route 44 -> Ice Path (3 REPEL rule: have 2 -- buy 1 at Mahogany) -> Blackthorn -> Clair (fork
+`tallow-pre-clair`; Kingdra L40 -> floor 38, ceiling 43). HM07 WATERFALL at ICE_PATH_1F (31,7) on the way.
+
+## 2026-09-03 - session tallow-1: MINERAL badge (6/8)
+
+**Position:** OLIVINE_GYM (5,4). Party: CRUST Graveler L32, BRINE Poliwag L28, FLOUR Pidgeotto L34 (WING ATTACK),
+SUGAR Togetic L28, EMBER Quilava L35, CRUMB Raticate L36. Badges 6/8. Bag adds TM01, TM23.
+Checkpoints: `tallow-amphy.state` (6F, Jasmine explained), `tallow-potion.state`, `tallow-pre-jasmine.state`,
+`tallow-mineral.state` (milestone).
+- Lighthouse: `travel` picks the one-way (16,13)/(17,13) landings on 1F and loops. Up = 1F(3,11) 2F(5,3) 3F(13,3)
+  4F goto (9,2) + step D into the (9,3) hole -> 3F centre -> (9,5) -> 4F (9,7) -> 5F (9,15) -> 6F. Down = the
+  east column 6F(16,5) 5F(16,7) 4F(16,9) 3F(16,11) 2F(16,13) 1F (`scripts/tallow_jasmine.py`).
+- Jasmine: CRUST Magnitude on the Magnemites, BRINE Surf on Steelix (matchup_policy), 18 turns, CRUST fainted
+  at the end, no whiteout.
+
+Next: Route 42 -> Mahogany -> Route 43 -> Lake of Rage (red Gyarados = wild, KO it; Lance) -> Rocket hideout
+(Lance + rival? no: Lance) -> Pryce (fork `tallow-pre-pryce`; Piloswine L31 -> floor 29). LADLE still boxed.
+
+## 2026-09-03 - session tallow-1: STORM badge (5/8), HM02/03/04 in hand
+
+**Position:** CIANWOOD_POKECENTER_1F. Party: FLOUR Pidgeotto L31 (FLY), EMBER Quilava L35 (CUT), CRUST Graveler
+L30 (STRENGTH), SUGAR Togetic L28, BRINE Poliwag L28 (SURF), CRUMB Raticate L36. LADLE Magnemite L21 boxed at
+Ecruteak. Money ¥30468. Badges 5/8. Bag: 2 REPEL, 2 POKé BALL, LURE BALL, SQUIRTBOTTLE, GOOD ROD, TM30/31/45/49,
+HM01-04.
+Checkpoints: `tallow-hm03.state`, `tallow-olivine.state`, `tallow-brine.state`, `tallow-cianwood.state`,
+`tallow-pre-chuck.state`, `tallow-storm.state` (milestone).
+- Kimono girls: EMBER lead + CRUMB anchor, one heal trip. HM03 from the gentleman (7,10).
+- BRINE: GOOD ROD (Olivine house (13,15), guru (2,3)) at the Ecruteak pond: Poliwag 55% on the good rod
+  (`data/wild/fish.asm` Pond_Good); `scripts/tallow_fish.py` casts with `use_item("GOOD ROD")` facing water.
+  LADLE boxed to make room (persona: water slot beats a second electric/ground).
+- `tactics_policy` now strikes SELFDESTRUCT/EXPLOSION: CRUST self-destructed 240 wild battles in a row (0 exp,
+  anchor EMBER 28 -> 40) before I noticed; rolled back to `tallow-brine`.
+- `boot()` calls `enable_surf()`; without it `route()` has no Route 40 -> 41 edge.
+- Cianwood Gym: goto's boulder shoving pushed the middle boulder north into (4,4) -- (4,3) is a WALL, so the gym
+  soft-locks (RUSTY's warning). Re-entering resets the boulders; `scripts/tallow_chuck.py` drives the recipe by
+  hand (push (5,7) U, (3,7) U, (4,7) R from (3,7), column 4 up, then (3,4)->(3,2)->(4,2)). FLOUR (FLY) beat Chuck.
+- Chuck's wife hands HM02 only after the STORM badge. Pharmacy sells until Jasmine has explained Amphy's illness.
+- Persona ledger: EMBER 35 / CRUMB 36 vs Chuck ceiling 33; goal 4 (FLY before leaving Cianwood) met.
+
+Next: Olivine lighthouse -> Jasmine (Amphy) -> Cianwood pharmacy SECRETPOTION -> lighthouse -> Olivine Gym
+(Jasmine: Magnemite 30/30, Steelix 35; fork `tallow-pre-jasmine`; CRUST Magnitude / EMBER fire).
+
+## 2026-09-03 - session tallow-1: FOG badge (4/8), six-slot core complete
+
+**Position:** ECRUTEAK_GYM (5,2). Party: CRUMB Raticate L35, SUGAR Togepi L21, FLOUR Pidgeotto L31, CRUST Geodude
+L21, EMBER Quilava L25, LADLE Magnemite L21 (THUNDER WAVE over TACKLE). Money ~¥17k. Badges 4/8. Bag: 2 REPEL,
+4 POKé BALL, LURE BALL, SQUIRTBOTTLE, TM30/31/45/49, HM01.
+Checkpoints: `tallow-r36.state`, `tallow-ecruteak.state`, `tallow-pre-rival3.state`, `tallow-burned.state`,
+`tallow-pre-morty.state`, `tallow-fog.state` (milestone).
+- Squirtbottle chain: meet Floria on Route 36 (33,12) FIRST, then Floria in the shop (wanders: `sprite_cell`),
+  then the teacher (2,4). Route 35's CUT tree (17,6) regrows on every map load -> `tallow_lib.travel` now cuts
+  the nearest tree when a leg reports "no path" and CUT is known.
+- Sudowoodo: talk_to(35,9) -> YES -> the wild battle starts a few frames AFTER talk_to returns; poll `d.battle()`.
+- Ecruteak PC: Bill's scene on first entry; drain before `heal()`. Burned Tower exit is the LADDER at B1F (7,15)
+  (the (10,8)/(10,9) warps are one-way holes; travel picks them and loops); Eusine at (10,12) blocks the corridor
+  until talked to. Rival 3 won with `matchup_policy` (HAUNTER->EMBER, CROCONAW->CRUMB, MAGNEMITE->CRUST).
+- Route 38 grind (Tauros/Miltank base exp): `tallow_grind.py` now keeps the anchor in slot 2 (`set_lead(nick,
+  second)`) and trains owned mons while the hook hunts; the earlier version let the anchor lead for 200 battles
+  (CRUMB 21->37) and had to be rolled back to `tallow-burned`. Only 2 POKé BALLs were in the bag, so the hook's
+  first Magnemite burned both -- restocked 5 at Ecruteak.
+- Morty attempt 1 (CRUST lead, Magnitude) WHITED OUT at T34 -- reloaded `tallow-pre-morty`. Attempt 2: CRUMB lead,
+  PURSUIT (dark) vs ghosts, immune to Shadow Ball/Night Shade: 7 turns, no faint.
+- Persona ledger: goal 3 met (six slots by Ecruteak, nothing below 21 at Fog) but the water slot is LADLE
+  (electric) -- BRINE (Poliwag) still needed for SURF; CRUMB 35 / FLOUR 31 vs ceiling 28 (grind anchor overshoot);
+  one whiteout on a fork (undone).
+
+Next: Kimono girls (HM03 SURF), Route 38/39 -> Olivine (Jasmine needs the lighthouse Secret Potion from Cianwood),
+HM02 FLY from Chuck's wife in Cianwood (goal 4), Chuck (fork `tallow-pre-chuck`). BRINE: Poliwag on Route 30/31/44.
+
+## 2026-09-03 - session tallow-1: PLAIN badge (3/8)
+
+**Position:** GOLDENROD_POKECENTER_1F. Party: CRUST Geodude L21, FLOUR Pidgeotto L23, EMBER Quilava L23 (CUT over
+LEER), CRUMB Rattata L18, SUGAR Togepi L5. Money ¥12145. Badges ZEPHYR HIVE PLAIN. Bag: 2 REPEL, 2 POKé BALL,
+LURE BALL, TM31/45/49, HM01.
+Checkpoints: `tallow-pre-rival2.state`, `tallow-ilex.state`, `tallow-hm01.state`, `tallow-r34.state`,
+`tallow-pre-whitney.state`, `tallow-plain.state` (milestone).
+- Rival 2 (Ilex gate): EMBER lead, won at 6/65 (harness auto-policy; a trainee policy got CRUST+FLOUR KO'd on the
+  first try -- rolled back to the fork).
+- Farfetch'd: `scripts/tallow_ilex.py` `BIRD` table = position -> (cell, player facings that ADVANCE it), read off
+  `maps/IlexForest.asm` (`ifequal <facing>` branches are the BACKWARD ones). `wFarfetchdPosition` reads 0 before the
+  first talk (treat as 1). `talk_to(cell, facing=f)` reports a non-standable spot for some facings; try the next.
+  PIDGEY cannot learn CUT (learnset) -> EMBER carries it (forgot LEER).
+- SENTRET is not on Route 34 (only 29/43); normal slot = CRUMB (Rattata, persona table). WANT now also MAGNEMITE
+  (Routes 38/39) -> LADLE and POLIWAG -> BRINE.
+- Whitney: CRUST lead, Miltank down in 7 turns but CRUST and FLOUR fainted; badge on the second talk after leaving
+  the gym (gotcha 29). A Lass's Jigglypuff DISABLE wedged a fight ("The move is" text) for one 90k budget.
+- Persona ledger: FLOUR/EMBER 23 = Whitney ceiling exactly; CRUST fainted repeatedly as the grind anchor on Route
+  34 (Drowzee/Abra), no whiteout. SUGAR (no damaging move) exempted from the level floor: boxed for gyms.
+
+Next: SQUIRTBOTTLE (Goldenrod flower shop), Route 35/36 (Sudowoodo), Route 37, Ecruteak: Morty (fork
+`tallow-pre-morty`; floor = 25-2 = 23 for Gengar L25). Catch GASTLY? not in plan (SMOKE listed but six slots full).
+
+## 2026-09-03 - session tallow-1: HIVE badge (2/8)
+
+**Position:** AZALEA_GYM (4,7). Party: CRUST Geodude L18, FLOUR Pidgey L14, EMBER Quilava L21; SUGAR Togepi L5 in
+box 1 (Azalea PC). Money ~¥5.5k. Bag: 3 REPEL, 4 POKé BALL, LURE BALL, TM31, TM49.
+Checkpoints: `tallow-r32.state`, `tallow-cave.state`, `tallow-azalea.state`, `tallow-well.state`,
+`tallow-well-done.state`, `tallow-pre-bugsy.state`, `tallow-hive.state` (milestone).
+- MAREEP does not exist in Crystal's wild tables (`data/wild/*` has no MAREEP): ground slot is CRUST (Geodude,
+  Union Cave 1F); electric later = MAGNEMITE (Routes 38/39). REPEL is not sold before Azalea.
+- `tallow_lib.boot` now: persona `WANT` species -> nickname encounter hook (2 balls max then flee, via a wrapped
+  `_ball_policy`), hatch naming through a wrapped `_take_pending_nickname` (SUGAR hatched named correctly on the
+  redo; the first grind pass hatched an unnamed TOGEPI because fight() disarms `_pending_nickname` every battle),
+  `trainee_policy(trainee, anchor)` (trainee leads, anchor switches in when outleveled/low) + `set_lead` via
+  `d.party_swap`. `tallow_grind.py` = persona leveling loop (lowest-gap mon leads, heal rail, catches on the way).
+- Slowpoke Well: the west wing is reached along row 6 ((11,6) -> (6,6)); the grunt at (5,2) is the one whose
+  script sets EVENT_CLEARED_SLOWPOKE_WELL. `talk_to` on the rocket girl's corridor (row 4) is severed by her.
+- Bugsy: CRUST L16 solo (ROCK THROW), 5 turns. Gym trainers ambush during approach.
+- Persona ledger: EMBER L21 vs ceiling 19 (split exp before trainee_policy existed; anchor switch-ins add more).
+  SUGAR boxed for the gym instead of being trained to the L14 floor (no damaging move until Metronome L7).
+
+Next: withdraw SUGAR; rival ambush leaving Azalea west; Ilex Forest (Farfetch'd -> HM01 CUT, use 1 REPEL);
+Route 34 (train SUGAR by switch-in, catch CRUMB=Sentret); Goldenrod: Whitney (fork `tallow-pre-whitney`).
+
+## 2026-09-03 - session tallow-1: ZEPHYR badge (1/8)
+
+**Position:** VIOLET_GYM (5,2). Party: EMBER Quilava L15, FLOUR Pidgey L9. Money ¥2476. Bag: 8 POKé BALL, TM31.
+Checkpoints: `saves/tallow-bedroom.state`, `tallow-starter.state`, `tallow-egg.state`, `tallow-elm-egg.state`,
+`tallow-violet.state`, `tallow-pre-falkner.state`, `tallow-zephyr.state` (milestone). Working state `saves/tallow.state`.
+- Scripts (all take the state as argv[1]): `scripts/tallow_lib.py` (boot = tactics policy + KO wilds, settle_dialog,
+  travel-with-retry, save_clean, heal_at), `tallow_starter.py`, `tallow_egg.py`, `tallow_violet.py`, `tallow_train.py`
+  (`d.train` + heal rail), `tallow_gym.py` (heal, fork `tallow-pre-<tag>`, trainers, leader).
+- Rival named SILVER (the officer's keyboard was confirmed with the default; the persona names no rival).
+- Whiteouts on FORKS only, both undone by reloading: Route 30 (EMBER L6 15/21 pushed on without healing) and
+  Route 31 (crossed at 7/34). Rule now in the scripts: heal at the town center before every route leg.
+- Persona ledger: bullet 2 ceiling (ace+3 = 12) broken -- `d.train` rotation gives the lead split exp, EMBER went
+  10 -> 13 while FLOUR trained. Next time put the trainee in slot 1 (`d.party_swap`) so it fights solo.
+- Sprout Tower (HM05 FLASH) skipped for now to hold the level ceiling; still on `missables`.
+- Falkner: EMBER solo, 5 turns, TM31 received. Gym trainers ambush on approach (talk_to reports "nothing answered"
+  because goto already fought them).
+
+Next: Route 32 (catch MAREEP -> WHISK), 3 REPEL before Union Cave, Azalea / Slowpoke Well / Bugsy (fork `tallow-pre-bugsy`).
+
+## 2026-09-03 - session tallow-1: fresh game claimed
+
+Session tallow-1 owns the whole run; working state `saves/tallow.state`.
+`saves/` was empty at start (RUSTY states gone) -> power-on new game as TALLOW.
+
+# (archive) PROGRESS — run RUSTY
+
+Persona contract: `persona_RUSTY.md`.
 ## 2026-09-01 - session rusty-1 (cont.): CHAMPION
 
 **Position:** NEW_BARK_TOWN (13, 6), frame 18890005. Party: [('TORCH', 60, 202, 202), ('SPROCKET', 47, 127, 127), ('CHAIN', 48, 160, 160), ('SPARK', 48, 130, 130)]. EVENT_BEAT_ELITE_FOUR set; Hall of Fame + credits done,
