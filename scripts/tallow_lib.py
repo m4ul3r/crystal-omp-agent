@@ -53,6 +53,12 @@ def encounter_policy(d):
 def boot(state):
     d = trek.Driver(state)
     d.encounter_policy = encounter_policy(d)
+    def _learn(mon, new_move, current, _d=d):
+        # never learn a self-KO move (EXPLOSION replaced CRUST's EARTHQUAKE once)
+        if str(new_move).upper() in SUICIDE:
+            return "DECLINE"
+        return _d.default_learn_policy(mon, new_move, current)
+    d.learn_policy = _learn
     d.default_policy = tactics_policy(d)
     orig = d._ball_policy
     d._ball_policy = lambda ball="POKE BALL", max_balls=MAX_BALLS: orig(ball, min(max_balls, MAX_BALLS))
@@ -312,10 +318,14 @@ from collections import deque
 LEARNED_WALLS = {}
 
 
-def live_walk(d, goal, passable=None):
-    """BFS on the LIVE block map (the static Den grid is wrong -- RUSTY), one step_dir per cell,
-    mounting SURF on the land->water edge."""
-    passable = passable or (lambda c: c in (0x00, 0x01, 0x24, 0x71) or 0x29 <= c <= 0x2C)
+def live_walk(d, goal, passable=None, hops=True):
+    """BFS on the LIVE block map (static grids lie on Dragon's Den, Ice Path,
+    Victory Road, Route 27): floor/grass/ice/water/warp cells, one-way ledge
+    hops (entering a ledge cell in ITS direction lands two cells on), NPC cells
+    and previously-blocked cells as walls. One step_dir per cell; battles fought."""
+    from crystalagent.nav import WALKABLE, WATER, WARPS, HOPS, ICE
+    ok = WALKABLE | WATER | ICE | {0x01, 0x24}   # warps are NOT passable (stepping on one fires it)
+    passable = passable or (lambda c: c in ok)
     g = d.live_grid(); H, W = len(g), len(g[0])
     walls = set(d.npc_cells()) | LEARNED_WALLS.setdefault(d.map_name(), set())
     start = d.pos()[2:]
@@ -324,7 +334,18 @@ def live_walk(d, goal, passable=None):
         x, y = q.popleft()
         for mv, (dx, dy) in STEP_OF.items():
             n = (x + dx, y + dy)
-            if 0 <= n[0] < W and 0 <= n[1] < H and n not in prev and n not in walls and passable(g[n[1]][n[0]]):
+            if not (0 <= n[0] < W and 0 <= n[1] < H) or n in walls:
+                continue
+            c = g[n[1]][n[0]]
+            if hops and c in HOPS:
+                if HOPS[c] != mv:
+                    continue
+                n = (n[0] + dx, n[1] + dy)  # landing is NOT collision-checked by the engine
+                if not (0 <= n[0] < W and 0 <= n[1] < H) or n in walls:
+                    continue
+            elif not passable(c) and not (n == goal and c in WARPS):
+                continue
+            if n not in prev:
                 prev[n] = ((x, y), mv); q.append(n)
     assert goal in prev, f"live_walk: {start} -> {goal} unreachable"
     path, c = [], goal
@@ -336,7 +357,9 @@ def live_walk(d, goal, passable=None):
         d.settle(); settle_dialog(d)
         if d.battle():
             d.fight()
-        if d.pos()[2:] == before and r not in ("moved", "warp"):
+        tries = 0
+        while d.pos()[2:] == before and r not in ("moved", "warp") and tries < 3:
+            tries += 1
             d.settle(); settle_dialog(d); d.close_menus(); d.emu.tick(30)
             r = d._step(mv); d.settle()
             if d.battle():
@@ -349,3 +372,46 @@ def live_walk(d, goal, passable=None):
     return d.pos()[2:] == goal
 
 
+
+
+LANDMARK = {"NEW_BARK_TOWN": 0x01, "CHERRYGROVE_CITY": 0x03, "VIOLET_CITY": 0x06, "AZALEA_TOWN": 0x0c,
+            "GOLDENROD_CITY": 0x10, "ECRUTEAK_CITY": 0x16, "OLIVINE_CITY": 0x1b, "CIANWOOD_CITY": 0x21,
+            "MAHOGANY_TOWN": 0x24, "LAKE_OF_RAGE": 0x26, "BLACKTHORN_CITY": 0x29}
+
+
+def fly(d, town, knower="FLOUR"):
+    """START -> POKeMON -> <knower> -> FLY -> cycle the fly map until
+    wTownMapCursorLandmark is the town's landmark -> A. True when the map changed to `town`."""
+    target = LANDMARK[town]
+    idx = [m["nick"] for m in d.observe()["party"]].index(knower) + 1
+    for _ in range(3):
+        d.press("START:4 .:45")
+        if d.menu_open():
+            break
+    for _ in range(10):
+        row = d.menu.cursor_row()
+        if row and "MON" in row[1].upper() and "DEX" not in row[1].upper():
+            d.press("A:4 .:25"); break
+        d.press("D:6 .:12")
+    d.press(".:25")
+    if not d._party_cursor_to(idx):
+        d.close_menus(); log.info("fly: no party row %s", idx); return False
+    d.press("A:4 .:25")
+    if not d.select_menu_row("FLY", max_presses=8):
+        d.close_menus(); log.info("fly: FLY entry not found"); return False
+    d.press(".:60")
+    want = town.replace("_", " ")
+    for _ in range(24):
+        if want in d.emu.screen_text()[1].upper():
+            break
+        d.press("D:6 .:20")
+    else:
+        d.close_menus(); log.info("fly: %s never selected", want); return False
+    d.press("A:4 .:40")
+    for _ in range(60):
+        d.emu.tick(30)
+        if d.map_name() == town and d.emu.read_u8("wScriptMode") == 0:
+            break
+    d.settle(); settle_dialog(d)
+    log.info("fly -> %s: %s %s", town, d.map_name(), d.pos()[2:])
+    return d.map_name() == town

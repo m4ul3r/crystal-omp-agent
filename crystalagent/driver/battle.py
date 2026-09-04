@@ -818,11 +818,14 @@ class BattleMixin:
         policy = getattr(self, "learn_policy", None) \
             or self.default_learn_policy
         text = re.sub(r"\s+", " ", " ".join(rows)).upper()
-        m = re.search(r"(\S+) (?:IS TRYING|WANTS) TO LEARN", text)
+        # mid-battle 2-line box: "<MON> is trying to" and "learn <MOVE>!"
+        # are on screen on DIFFERENT frames, so neither fragment may
+        # require the other (CRUST lost EARTHQUAKE to EXPLOSION when the
+        # mon regex insisted on "TO LEARN" following the name).
+        m = re.search(r"(\S+) (?:IS TRYING|WANTS) TO", text)
         if m:
             st["mon"] = m.group(1)
-        m = re.search(r"(?:TRYING|WANTS) TO LEARN "
-                      r"([A-Z0-9♂♀'.\- ]+?)[!?.]", text)
+        m = re.search(r"\bLEARN ([A-Z0-9♂♀'.\- ]+?)[!?.]", text)
         if m:
             st["move"] = m.group(1).strip()
         mon, new_move = st.get("mon"), st.get("move")

@@ -3,6 +3,38 @@
 Newest section first. Persona contract: `persona_TALLOW.md` (binding).
 Previous run (RUSTY, Champion) is archived below the TALLOW sections.
 
+## 2026-09-04 - session tallow-1: CHAMPION -- Hall of Fame at 46:49:07
+
+**Final in-game time: 46:49:07** (`wGameTimeHours`, frozen at the Hall of Fame save; frame 12,331,780).
+**Position:** NEW_BARK_TOWN (13,6) after the credits, `saves/tallow-champion.state`. EVENT_BEAT_ELITE_FOUR set.
+Party: EMBER Typhlosion L64, CRUST Graveler L48, CRUMB Raticate L47, FLOUR Pidgeot L48, SUGAR Togetic L47,
+BRINE Poliwhirl L46. Money ¥34,864.
+- HM07 WATERFALL: Ice Path 1F rink, stand (30,7) facing R (slide sequence from (21,9): R,U,R,L,D,R). The HM region
+  is one-way (flows down to Blackthorn); leave via the west ice to Route 44. Blackthorn's Route 44 edge is NOT
+  reachable from town for `goto` (UP_WALL row 28 / ledge geometry) -- `fly()` in tallow_lib (party menu FLY +
+  fly-map name matching) is the way out of Blackthorn.
+- Dragon's Den whirlpool regenerates on every map reload (no event flag): re-WHIRLPOOL from (10,21) facing U on
+  the way back. Den B1F landing has an NPC at (20,5); `live_walk` (tallow_lib) routes on the live block map with
+  NPC cells, learned walls, one-way hop ledges and warps-as-walls (a warp on the path fired the ladder mid-walk).
+- Tohjo Falls: (9,12) face U WATERFALL -> (9,7); east pool (20,5) step D rides down; exit (25,15) -> Route 27 (36,6).
+  Victory Road: ladders (1,49)->(1,35) pocket -> (13,31)->(13,17) -> (13,5); `live_walk` with hop landings
+  un-collision-checked (RUSTY's note) finds it. A stray background run burned 1.35M frames on Route 27 (a wedged
+  trainer intro) -- replayed from `tallow-tohjo.state` to keep the clock honest (saved ~6 game hours).
+- Harness fix: `_consult_learn_policy` mon/move regexes no longer require "<MON> ... TO LEARN" on one frame
+  (mid-battle 2-line box) -- CRUST had silently traded EARTHQUAKE for EXPLOSION under auto. `tallow_lib.boot`
+  also installs a learn policy that DECLINES SELFDESTRUCT/EXPLOSION.
+- Training: 400 wild battles at Victory Road top floor (box around (13,7), heal at Indigo PC) took the four
+  L38-40 mons to 46-48 (`tallow_grind.py`); EMBER as anchor went 52 -> 60 (ceiling broken, see ledger).
+- E4 (`scripts/tallow_e4.py`, matchup tables per member, revive+heal_party between rooms): Will/Koga/Bruno/Karen
+  are EMBER Flamethrower with CRUST for Muk, BRINE for Onix/Houndoom, CRUMB Super Fang for Umbreon. Lance wiped
+  three forks (tactics policy healed too late; CRUST self-destructed; L47 fodder vs Hyper Beam). Won with
+  `lance_policy`: EMBER solo, HYPER POTION under 115 HP, FULL RESTORE on status, everyone else only ever a
+  REVIVE-turn shield. 19 turns, 8 Hyper Potions + 2 Full Restores, no faints.
+- Persona ledger (honest): goal 6 met. Deviations: EMBER over the ace+3 ceiling (64 vs 53) from anchoring the
+  grind; bought 22 Hyper Potions / 3 Full Restores / 6 Revives at Indigo (the "no potions where there is a
+  Pokécenter" rule read as a town rule, not a gauntlet rule); two whiteouts on the WORKING state at Lance
+  (money ¥124k -> ¥31k) before the fork discipline was re-applied.
+
 ## 2026-09-03 - session tallow-1: RISING badge (8/8) -- all Johto badges
 
 **Position:** DRAGONS_DEN_B1F (19,30), just outside the shrine. Party: EMBER Typhlosion L48, CRUST Graveler L47,
