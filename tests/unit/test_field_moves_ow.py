@@ -15,8 +15,8 @@ Live-verified for WHIRLPOOL at DRAGONS_DEN_B1F (10,20) -- the same tile
 """
 import pytest
 
-import trek
-from trek import Driver
+import crystalagent.driver.inventory as inventory_driver
+from crystalagent.driver import Driver
 
 pytestmark = pytest.mark.unit
 
@@ -64,7 +64,7 @@ def field_driver(monkeypatch, tiles, knowers=None, badges=("RISING",),
     d.pos = lambda: (0, 0) + tuple(d._pos)
     d._pos = list(pos)
     d.textbox = lambda: any("Do you want" in r for r in d.emu.screen_text())
-    monkeypatch.setattr(trek, "game_state", lambda emu, names: {
+    monkeypatch.setattr(inventory_driver, "game_state", lambda emu, names: {
         "player": {"johto_badges": list(badges)}})
 
     def press(seq):

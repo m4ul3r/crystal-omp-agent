@@ -18,8 +18,9 @@ Fakes only -- no emulator boots.
 """
 import pytest
 
-import trek
-from trek import Driver
+from crystalagent import paths
+from crystalagent.nav import TrekNav
+from crystalagent.driver import Driver
 
 pytestmark = pytest.mark.unit
 
@@ -442,7 +443,7 @@ def test_goto_stops_when_a_naming_keyboard_eats_the_steps():
     seven minutes storming 'unexplained blocked step' replans."""
     d = pace_driver(walls=(5, 5, 5, 5))
     d.keyboard_open = lambda: True
-    d.nav = trek.TrekNav(trek.paths.REPO_ROOT)
+    d.nav = TrekNav(paths.REPO_ROOT)
     d.nav.blocked = {}
     d._refresh_nav_blocks = lambda: None
     d.map_name = lambda: "ROUTE_34"

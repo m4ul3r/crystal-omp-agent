@@ -5,8 +5,10 @@ import logging
 
 import pytest
 
-import trek
-from trek import Driver, _item_row_matches, _norm_item
+import crystalagent.driver.inventory as inventory_driver
+from crystalagent.battle import norm_item
+from crystalagent.driver import Driver
+from crystalagent.driver.inventory import _item_row_matches
 
 pytestmark = pytest.mark.unit
 
@@ -38,25 +40,25 @@ def bare_driver():
 
 def test_row_match_two_word_row_vs_bag_key():
     """Screen shows 'SUPER POTION' (space); the bag key is 'SUPERPOTION'."""
-    assert _item_row_matches("SUPER POTION", _norm_item("SUPERPOTION"))
-    assert _item_row_matches("SUPER POTION", _norm_item("SUPER POTION"))
-    assert _item_row_matches("PARLYZ HEAL", _norm_item("PARLYZHEAL"))
+    assert _item_row_matches("SUPER POTION", norm_item("SUPERPOTION"))
+    assert _item_row_matches("SUPER POTION", norm_item("SUPER POTION"))
+    assert _item_row_matches("PARLYZ HEAL", norm_item("PARLYZHEAL"))
 
 
 def test_row_match_tolerates_quantity_and_clipping():
     # quantity digits bleeding onto the scrape
-    assert _item_row_matches("SUPER POTION   ×  2", _norm_item("SUPERPOTION"))
+    assert _item_row_matches("SUPER POTION   ×  2", norm_item("SUPERPOTION"))
     # right-edge tile loss (name clipped by up to 2 chars)
-    assert _item_row_matches("SUPER POTIO", _norm_item("SUPER POTION"))
+    assert _item_row_matches("SUPER POTIO", norm_item("SUPER POTION"))
 
 
 def test_row_match_never_crosses_items():
     # 'POTION' can never confirm a SUPER/HYPER/MAX POTION row or vice versa
-    assert not _item_row_matches("SUPER POTION", _norm_item("POTION"))
-    assert not _item_row_matches("POTION", _norm_item("SUPER POTION"))
-    assert not _item_row_matches("HYPER", _norm_item("HYPER POTION"))
-    assert not _item_row_matches("ANTIDOTE  ×  1", _norm_item("POTION"))
-    assert not _item_row_matches("", _norm_item("POTION"))
+    assert not _item_row_matches("SUPER POTION", norm_item("POTION"))
+    assert not _item_row_matches("POTION", norm_item("SUPER POTION"))
+    assert not _item_row_matches("HYPER", norm_item("HYPER POTION"))
+    assert not _item_row_matches("ANTIDOTE  ×  1", norm_item("POTION"))
+    assert not _item_row_matches("", norm_item("POTION"))
 
 
 # -- _pocket_select: two-word rows ------------------------------------------
@@ -129,26 +131,26 @@ def use_item_world(d, monkeypatch, consumed):
     names ('SUPERPOTION'), exactly like Driver._bag(); lookups normalize
     the caller's argument the way the real bag_item_index does. Screen
     rows show the SPACED names the pack really draws."""
-    order = [_norm_item(n) for n in POCKET]
+    order = [norm_item(n) for n in POCKET]
     world = {"cur": 2, "ups": 0,
              "bag": {"SUPERPOTION": 2, "POTION": 3, "ANTIDOTE": 1}}
     d.emu.u8["wMenuCursorY"] = 1          # party-menu cursor on row 0
 
     def fake_index(emu, names, item_name, pocket="items"):
-        key = _norm_item(item_name)
+        key = norm_item(item_name)
         return order.index(key) if key in world["bag"] else None
 
     def fake_qty(emu, names, item_name, pocket="items"):
-        return world["bag"].get(_norm_item(item_name))
+        return world["bag"].get(norm_item(item_name))
 
-    monkeypatch.setattr(trek, "bag_item_index", fake_index)
-    monkeypatch.setattr(trek, "bag_quantity", fake_qty)
-    monkeypatch.setattr(trek, "goto_pocket", lambda menu, pocket: True)
+    monkeypatch.setattr(inventory_driver, "bag_item_index", fake_index)
+    monkeypatch.setattr(inventory_driver, "bag_quantity", fake_qty)
+    monkeypatch.setattr(inventory_driver, "goto_pocket", lambda menu, pocket: True)
 
     class M:
         def select_label(self, label, max_presses=14):
             if label == "USE":
-                world["bag"][_norm_item(consumed)] -= 1   # engine consumes
+                world["bag"][norm_item(consumed)] -= 1   # engine consumes
             return True
 
         def wait_for_label(self, label, timeout_frames=300):

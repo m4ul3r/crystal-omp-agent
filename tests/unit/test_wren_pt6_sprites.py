@@ -10,8 +10,8 @@ re-checking the LIVE position) before giving up -- distinguishing
 'blocked-by-stationary-npc' from 'waited-for-wanderer: still blocked'."""
 import pytest
 
-import trek
-from trek import Driver
+from crystalagent.nav import STEP
+from crystalagent.driver import Driver
 from crystalagent.schemas import validate_observe
 from crystalagent.state import (NUM_OBJECT_STRUCTS, OBJECT_LENGTH,
                                 SPRITE_WANDERERS, decode_object_structs,
@@ -176,7 +176,7 @@ def wait_driver(npcs):
 
     def _step(mv):
         x, y = world["cell"]
-        dx, dy = trek.STEP[mv]
+        dx, dy = STEP[mv]
         tgt = (x + dx, y + dy)
         if tgt in {(s["map_x"], s["map_y"])
                    for s in world["sprites"] if s["slot"]}:

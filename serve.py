@@ -7,15 +7,12 @@ Protocol (stdin/stdout, one JSON object per line):
           | {"id": N, "ok": false, "error": "..."}
 
 Commands:
-  observe {}                       -> full observation (falls back to
-                                      status text until trek.Driver gains
-                                      an observe() method)
+  observe {}                       -> full structured observation
   status {}                        -> human-readable status line (str)
   save {"path": P | "name": N}?   -> savestate (+ .meta); no args = save
                                       over the working state file
   load {"path": P}                 -> load savestate in-place (no reload)
-  run {"name": ..., "kwargs": {}}  -> whitelisted Driver primitives:
-      goto walk fight catch heal talk_to mart_buy use_item settle
+  run {"name": ..., "kwargs": {}}  -> action from crystalagent.registry
   quit {}
 
 Anything else replies ok:false and keeps serving. Exceptions reply
@@ -30,33 +27,19 @@ import json
 import os
 import logging
 import sys
+from crystalagent.driver import Driver
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
-from trek import Driver
 from crystalagent.registry import resolve
-from crystalagent.schemas import ServeRequest
+from crystalagent.schemas import NDJSONRequest
 from pydantic import ValidationError
-
-# primitives runnable via the `run` command live in the shared registry:
 # crystalagent/registry.py (same surface autopilot decisions validate against)
 
 
-def _release_all(d):
-    """Force-release every button + tick: savestates carry phantom keys
-    (same treatment Driver.__init__ gives a fresh load)."""
-    for b in ("up", "down", "left", "right", "a", "b", "start", "select"):
-        d.emu.py.button_release(b)
-    d.emu.tick(10)
 
 
 def cmd_observe(d):
-    # Full observation once ObserveImpl lands Driver.observe(); until then
-    # fall back to the basic status line instead of failing.
-    fn = getattr(d, "observe", None)
-    if callable(fn):
-        return fn()
-    return {"status": d.status(), "frame": d.emu.frame}
+    return d.observe()
 
 
 def cmd_save(d, args):
@@ -75,20 +58,8 @@ def cmd_load(d, args):
     path = args.get("path") or args.get("state")
     if not path:
         raise ValueError("load needs {'path': <savestate file>}")
-    p = Path(path)
-    if not p.exists():
-        raise FileNotFoundError(f"no such state file: {p}")
-    with open(p, "rb") as f:
-        d.emu.py.load_state(f)
-    # mirror Crystal.__init__: rebase the cumulative frame counter off the
-    # sidecar, then re-arm the phantom-key release
-    meta = Path(f"{p}.meta")
-    d.emu._base_frames = json.loads(meta.read_text()).get("frames", 0) \
-        if meta.exists() else 0
-    d.emu._start_count = d.emu.py.frame_count
-    d.state_path = p
-    _release_all(d)
-    return {"loaded": str(p), "frame": d.emu.frame}
+    loaded = d._load_state(path)
+    return {"loaded": str(loaded), "frame": d.emu.frame}
 
 
 def cmd_run(d, args):
@@ -153,9 +124,10 @@ def main():
         line = line.strip()
         if not line:
             continue
+        quit_now = False
         try:
-            req = json.loads(line)
-            ServeRequest.model_validate(req)
+            raw = json.loads(line)
+            req = NDJSONRequest.model_validate(raw).model_dump()
         except json.JSONDecodeError as e:
             resp = {"id": None, "ok": False,
                     "error": f"bad JSON: {e}"}
@@ -166,12 +138,12 @@ def main():
                              f"{list(first['loc'])}"}
         else:
             resp, quit_now = handle(d, req)
-            json.dump(resp, sys.stdout)
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-            if quit_now:
-                print("[serve] quit", file=sys.stderr, flush=True)
-                break
+        json.dump(resp, sys.stdout)
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        if quit_now:
+            print("[serve] quit", file=sys.stderr, flush=True)
+            break
     print("[serve] done", file=sys.stderr, flush=True)
     d.emu.stop()
     return 0

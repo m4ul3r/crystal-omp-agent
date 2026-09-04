@@ -173,8 +173,8 @@ def cmd_missables(args):
     from . import missables
     emu, names, _ = _open(args)
     try:
-        import trek                       # Driver owns the live evaluation
-        d = trek.Driver.__new__(trek.Driver)
+        from .driver import Driver
+        d = Driver.__new__(Driver)
         d.emu, d.names = emu, names
         rows = d.missables(kind="all" if args.all else "key")
         moves = d.field_moves()

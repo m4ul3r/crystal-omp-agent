@@ -6,8 +6,12 @@ from pathlib import Path
 
 import pytest
 
-import trek
-from trek import Driver
+import crystalagent.driver.battle as battle_driver
+import crystalagent.driver.inventory as inventory_driver
+import crystalagent.driver.ui as ui_driver
+import crystalagent.driver.world as world_driver
+from crystalagent.nav import STEP
+from crystalagent.driver import Driver
 
 pytestmark = pytest.mark.unit
 
@@ -58,7 +62,7 @@ def test_drain_scene_pages_until_script_clears(monkeypatch):
             state["movement"] -= 1          # scene finishes its walk
 
     d.press = press
-    monkeypatch.setattr(trek, "dialog_press_safe", lambda rows: True)
+    monkeypatch.setattr(ui_driver, "dialog_press_safe", lambda rows: True)
     assert d._drain_scene() == "done"
     assert sum(1 for p in presses if p.startswith("A")) == 2
     assert any(not p.startswith("A") for p in presses)  # waited, no mash
@@ -151,7 +155,7 @@ def test_drain_scene_reports_battle(monkeypatch):
     d.battle = lambda: battles.popleft() if battles else 1
     d.textbox = lambda: True
     d.press = lambda seq: d.emu.tick(10)
-    monkeypatch.setattr(trek, "dialog_press_safe", lambda rows: True)
+    monkeypatch.setattr(ui_driver, "dialog_press_safe", lambda rows: True)
     assert d._drain_scene() == "battle"
 
 
@@ -167,7 +171,7 @@ def test_drain_scene_page_cap(monkeypatch):
         d.emu.tick(10)
 
     d.press = press
-    monkeypatch.setattr(trek, "dialog_press_safe", lambda rows: True)
+    monkeypatch.setattr(ui_driver, "dialog_press_safe", lambda rows: True)
     assert d._drain_scene(max_pages=5) == "timeout"
     assert len(presses) == 5
 
@@ -212,7 +216,7 @@ def goto_driver(step_results):
         r = script.popleft() if script else "moved"
         if r == "moved":
             x, y = world["cell"]
-            dx, dy = trek.STEP[mv]
+            dx, dy = STEP[mv]
             world["cell"] = (x + dx, y + dy)
         return r
 
@@ -272,7 +276,7 @@ def test_use_item_retries_start_menu_once_then_fails(monkeypatch):
     d.names = None
     d.textbox = lambda: False
     d.flush_dialog = lambda *a, **k: "done"
-    monkeypatch.setattr(trek, "bag_item_index", lambda *a, **k: 0)
+    monkeypatch.setattr(inventory_driver, "bag_item_index", lambda *a, **k: 0)
     presses = []
     d.press = lambda seq: presses.append(seq) or d.emu.tick(5)
     assert d.use_item("POTION") is False  # menu never opens
@@ -284,7 +288,7 @@ def test_use_item_start_gate_passes_on_retry(monkeypatch):
     d.names = None
     d.textbox = lambda: False
     d.flush_dialog = lambda *a, **k: "done"
-    monkeypatch.setattr(trek, "bag_item_index", lambda *a, **k: 0)
+    monkeypatch.setattr(inventory_driver, "bag_item_index", lambda *a, **k: 0)
     presses = []
 
     def press(seq):
@@ -376,9 +380,9 @@ def use_item_world(d, monkeypatch, start_cursor=3, consume_on_use=True):
     items = POCKET
     world = {"cur": start_cursor, "qty": 2, "ups": 0}
     d.emu.u8["wMenuCursorY"] = 1      # party-menu cursor on row 0
-    monkeypatch.setattr(trek, "bag_item_index", lambda *a, **k: 0)
-    monkeypatch.setattr(trek, "bag_quantity", lambda *a, **k: world["qty"])
-    monkeypatch.setattr(trek, "goto_pocket", lambda menu, pocket: True)
+    monkeypatch.setattr(inventory_driver, "bag_item_index", lambda *a, **k: 0)
+    monkeypatch.setattr(inventory_driver, "bag_quantity", lambda *a, **k: world["qty"])
+    monkeypatch.setattr(inventory_driver, "goto_pocket", lambda menu, pocket: True)
 
     class M:
         def select_label(self, label, max_presses=14):
@@ -501,18 +505,18 @@ class FakeHealDriver:
 
 def test_heal_pokecenter_retries_once_then_succeeds(monkeypatch):
     d = FakeHealDriver(heal_on_visit=2)
-    monkeypatch.setattr(trek, "game_state",
+    monkeypatch.setattr(inventory_driver, "game_state",
                         lambda emu, names: {"party": d.party()})
-    trek.heal_pokecenter(d)               # must not raise
+    inventory_driver.heal_pokecenter(d)               # must not raise
     assert d.gotos == 2                   # exactly one retry
 
 
 def test_heal_pokecenter_raises_after_single_retry(monkeypatch):
     d = FakeHealDriver(heal_on_visit=99)  # never heals
-    monkeypatch.setattr(trek, "game_state",
+    monkeypatch.setattr(inventory_driver, "game_state",
                         lambda emu, names: {"party": d.party()})
     with pytest.raises(RuntimeError, match="not fully healed"):
-        trek.heal_pokecenter(d)
+        inventory_driver.heal_pokecenter(d)
     assert d.gotos == 2                   # retried once, not forever
 
 
@@ -520,9 +524,9 @@ def test_heal_pokecenter_success_steps_off_counter(monkeypatch):
     """After a confirmed heal the player steps south off the counter tile
     so no residual nurse prompt is armed (two leg-2 wedges)."""
     d = FakeHealDriver(heal_on_visit=1)
-    monkeypatch.setattr(trek, "game_state",
+    monkeypatch.setattr(inventory_driver, "game_state",
                         lambda emu, names: {"party": d.party()})
-    trek.heal_pokecenter(d)
+    inventory_driver.heal_pokecenter(d)
     assert d.steps and d.steps[-1] == "D"
     assert d.steps.count("D") == 1        # one step away, not a walk
     assert d.on_counter is False          # prompt can't re-arm
@@ -531,10 +535,10 @@ def test_heal_pokecenter_success_steps_off_counter(monkeypatch):
 def test_heal_pokecenter_failure_never_steps_away(monkeypatch):
     """Failure paths unchanged: no step-away when the heal didn't land."""
     d = FakeHealDriver(heal_on_visit=99)
-    monkeypatch.setattr(trek, "game_state",
+    monkeypatch.setattr(inventory_driver, "game_state",
                         lambda emu, names: {"party": d.party()})
     with pytest.raises(RuntimeError, match="not fully healed"):
-        trek.heal_pokecenter(d)
+        inventory_driver.heal_pokecenter(d)
     assert "D" not in d.steps
 
 
@@ -724,8 +728,10 @@ def fight_world(d, monkeypatch):
 
     mon = {"name": "GATOR", "level": 29, "hp": 20, "max_hp": 40,
            "egg": False}
-    monkeypatch.setattr(trek, "Battle", FakeBattle)
-    monkeypatch.setattr(trek, "game_state", lambda *a, **k: {
+    monkeypatch.setattr(battle_driver, "Battle", FakeBattle)
+    monkeypatch.setattr(battle_driver, "game_state", lambda *a, **k: {
+        "player": {"money": 100}, "party": [mon]})
+    monkeypatch.setattr(world_driver, "game_state", lambda *a, **k: {
         "player": {"money": 100}, "party": [mon]})
     d.names = None
     d.bdata = None
@@ -798,9 +804,9 @@ def revive_world(d, monkeypatch, start_row=3):
     fainted. Only an A on the fainted row consumes the item."""
     world = {"qty": 1, "hp": [24, 0, 30], "cur": 0, "party_open": False,
              "wrong": []}
-    monkeypatch.setattr(trek, "bag_item_index", lambda *a, **k: 0)
-    monkeypatch.setattr(trek, "bag_quantity", lambda *a, **k: world["qty"])
-    monkeypatch.setattr(trek, "goto_pocket", lambda menu, pocket: True)
+    monkeypatch.setattr(inventory_driver, "bag_item_index", lambda *a, **k: 0)
+    monkeypatch.setattr(inventory_driver, "bag_quantity", lambda *a, **k: world["qty"])
+    monkeypatch.setattr(inventory_driver, "goto_pocket", lambda menu, pocket: True)
     d.emu.u8["wMenuCursorY"] = start_row + 1   # persisted, NOT row 0
 
     class M:

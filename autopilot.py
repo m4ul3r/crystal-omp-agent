@@ -23,13 +23,12 @@ per line, replies on stdout, serve.py-style):
             {"id": N, "cmd": "screen"}           # decoded screen text + UI
             {"id": N, "cmd": "memory",           # rolling-memory view
                  "args": {"tail"?: N}}           #   (frontier + raw tail)
-            {"id": N, "cmd": "quit"}
 
 Rails run in deterministic code and NEVER trust the decider:
-- Stuck detector: if a non-idle action leaves the observe digest unchanged
-  (map/x/y/battle/textbox/flags/party HP) for --stuck-limit consecutive
-  cycles, the action failed: reply {"ok": false, "error": "stuck"} and
-  await a fresh decision.
+- Stuck detector: if an action marked `expect_change` leaves the expanded
+  world/battle/party/screen digest unchanged for --stuck-limit consecutive
+  cycles, the action fails with `{"ok": false, "error": "stuck"}` and a
+  fresh decision is required.
 - Fork-before-risky: a risky decision first copies the working state
   (+ .meta sidecar) to saves/<session>-pre-<n>.state -- savestate
   determinism makes retries free.
@@ -42,8 +41,9 @@ Rails run in deterministic code and NEVER trust the decider:
   visible in the next observe(); the deciding loop owns the fix.
 
 Journal: append-only journal/<session>.jsonl, one line per cycle
-{"frame", "obs_digest", "action", "ok", ...}; event lines carry
-"event": "checkpoint" | "whiteout".
+{"frame", "obs_digest", "action", "ok", ...}; lifecycle/error records carry
+an `"event"` key such as `"fork"`, `"checkpoint"`, `"whiteout"`, or
+`"journal-error"`.
 
 Helpers (digest, stuck check, milestone classify) are plain importable
 functions:
@@ -52,46 +52,94 @@ functions:
 """
 
 import argparse
+from collections.abc import Mapping
+import hashlib
 import json
+import logging
 import os
 import shutil
 import sys
-from pathlib import Path
 from datetime import datetime, timezone
-from crystalagent import registry
-from crystalagent.rolling import RollingMemory
-from crystalagent.schemas import validate_cycle_record, validate_decision
-sys.path.insert(0, str(Path(__file__).parent))
-from trek import Driver
-from crystalagent import registry
+from pathlib import Path
 
+from pydantic import ValidationError
+
+from crystalagent import paths, registry
+from crystalagent.driver import Driver
+from crystalagent.rolling import RollingMemory
+from crystalagent.schemas import (
+    NDJSONRequest,
+    validate_cycle_record,
+    validate_decision,
+)
 # Primitives a decision may invoke: the shared registry in
 # crystalagent/registry.py (same surface serve.py's `run` validates against).
-# Intentionally world-neutral actions the stuck detector must ignore.
-IDLE_ACTIONS = {"settle"}
-
-SAVES_DIR = Path("saves")
-
 
 # --- plain helpers -------------------------------------------------------
 
-def digest(obs):
-    """Compact cross-cycle comparable view of one observation."""
-    return {
+def digest(obs, tilemap=None):
+    """Stable world/UI state used by the progress rail."""
+    enemy = obs.get("enemy")
+    result = {
         "map": obs.get("map"),
         "x": obs.get("x"),
         "y": obs.get("y"),
         "battle": bool(obs.get("ui", {}).get("battle")),
         "textbox": bool(obs.get("ui", {}).get("textbox")),
         "flags": sorted(k for k, v in obs.get("flags", {}).items() if v),
-        "party_hp": [[m["hp"], m["max_hp"]] for m in obs.get("party", [])],
+        "bag": sorted(obs.get("bag", {}).items()),
+        "money": obs.get("money"),
+        "badges": list(obs.get("badges", [])),
+        "enemy": None if enemy is None else {
+            key: enemy.get(key) for key in (
+                "species", "name", "level", "hp", "max_hp", "types"
+            )
+        },
+        "party": [
+            {
+                key: mon.get(key) for key in (
+                    "species", "nick", "egg", "level", "hp", "max_hp",
+                    "status"
+                )
+            } | {
+                "moves": [
+                    {key: move.get(key) for key in ("name", "pp", "max_pp")}
+                    for move in mon.get("moves", [])
+                ]
+            }
+            for mon in obs.get("party", [])
+        ],
     }
+    if tilemap is not None:
+        result["screen"] = hashlib.blake2s(
+            bytes(tilemap), digest_size=8
+        ).hexdigest()
+    return result
 
 
 def stuck(prev_digest, new_digest):
     """True when a non-idle action produced zero observable delta."""
     return prev_digest == new_digest
 
+
+def result_failure(action, result):
+    """Return a failure sentence for explicit action-result markers."""
+    if result is False:
+        return f"{action} returned False"
+    if result == "timeout":
+        return f"{action} returned 'timeout'"
+    if isinstance(result, Mapping):
+        for marker in ("ok", "answered", "caught"):
+            if result.get(marker) is False:
+                detail = next(
+                    (result.get(key) for key in ("reason", "error", "note")
+                     if result.get(key)),
+                    None,
+                )
+                return str(detail) if detail else (
+                    f"{action} returned {marker}=False"
+                )
+    return None
 
 def classify_milestones(before, after):
     """Milestone kinds between two full observations."""
@@ -172,8 +220,7 @@ class Autopilot:
         self.stuck_run = 0
         self._last_sig = None          # (name, kwargs, goal) of last cycle
         self.mem = RollingMemory(Path(journal_dir) / f"{session}.memory.db")
-        self.stuck_run = 0
-        self.cycles = self._count_forks()
+        self._fork_index, self._cycle_index = self._scan_indices()
 
     # -- bookkeeping ------------------------------------------------------
 
@@ -183,30 +230,38 @@ class Autopilot:
         with open(self.journal, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, separators=(",", ":")) + "\n")
 
-    def _count_forks(self):
-        n = 0
-        for p in SAVES_DIR.glob(f"{self.session}-pre-*.state"):
+    def _scan_indices(self):
+        fork_index = 0
+        for state in paths.SAVES_DIR.glob(f"{self.session}-pre-*.state"):
             try:
-                n = max(n, int(p.stem.rsplit("-", 1)[1]))
+                fork_index = max(
+                    fork_index, int(state.stem.rsplit("-", 1)[1])
+                )
             except ValueError:
                 pass
-        return n
+        cycle_index = sum(
+            1 for entry in iter_journal(self.journal)
+            if not entry.get("event")
+        )
+        return fork_index, cycle_index
 
     def fork(self, tag):
         """Fork-before-risky: copy working state + .meta sidecar."""
-        n = self._count_forks() + 1
-        target = SAVES_DIR / f"{self.session}-pre-{n}.state"
+        self._fork_index += 1
+        target = paths.SAVES_DIR / (
+            f"{self.session}-pre-{self._fork_index}.state"
+        )
         shutil.copy2(self.d.state_path, target)
         meta = Path(f"{self.d.state_path}.meta")
         if meta.exists():
             shutil.copy2(meta, f"{target}.meta")
-        self._note({"event": "fork", "file": target.name,
+        self._note({"event": "fork", "file": target.name, "tag": tag,
                     "frame": self.d.emu.frame})
         return target
 
     def _next_checkpoint_name(self, kind):
         n = 0
-        for p in SAVES_DIR.glob(f"{self.session}-{kind}-*.state"):
+        for p in paths.SAVES_DIR.glob(f"{self.session}-{kind}-*.state"):
             try:
                 n = max(n, int(p.stem.rsplit("-", 1)[1]))
             except ValueError:
@@ -222,45 +277,34 @@ class Autopilot:
 
     # -- rails -------------------------------------------------------------
 
-    def _load_state(self, path):
-        p = Path(path)
-        if not p.exists():
-            raise FileNotFoundError(f"no such state file: {p}")
-        with open(p, "rb") as f:
-            self.d.emu.py.load_state(f)
-        meta = Path(f"{p}.meta")
-        self.d.emu._base_frames = json.loads(
-            meta.read_text()).get("frames", 0) if meta.exists() else 0
-        self.d.emu._start_count = self.d.emu.py.frame_count
-        self.d.state_path = p
-        for b in ("up", "down", "left", "right", "a", "b", "start", "select"):
-            self.d.emu.py.button_release(b)
-        self.d.emu.tick(10)
 
     def whiteout_recovery(self):
         ckpt = latest_checkpoint(self.journal)
         if not ckpt:
             self._note({"event": "whiteout", "error": "no checkpoint known"})
             raise RuntimeError("whiteout but no journaled checkpoint")
-        self._load_state(SAVES_DIR / ckpt)
+        self.d._load_state(paths.SAVES_DIR / ckpt)
+        map_name = self.d.map_name()
+        if "POKECENTER" in map_name.upper():
+            registry.resolve(self.d, "heal", {})
+        else:
+            bag = self.d.bag()
+            potion = next(
+                (name for name, qty in bag.items()
+                 if qty > 0 and "POTION" in name.upper()),
+                None,
+            )
+            if potion is not None:
+                self.d.use_item(potion)
         obs = self.d.observe()
         self._note({"event": "whiteout", "loaded": ckpt,
                     "frame": obs["frame"]})
-        if "POKECENTER" in obs["map"].upper():
-            registry.resolve(self.d, "heal", {})
-        elif any(v > 0 for k, v in obs["bag"].items()
-                 if "POTION" in k.upper()):
-            self.d.use_item(next(k for k, v in obs["bag"].items()
-                                 if "POTION" in k.upper()))
-        # retraining after a whiteout is a STRATEGY decision (where to
-        # pace, what to fight, when to stop): the deciding loop owns it
-        # via observe() + step_dir/fight -- no bundled stop-condition leg
+        return obs
 
     # -- one decision cycle --------------------------------------------------
 
     def _resolve_action(self, name, kwargs):
-        """Validate against the shared registry, then return the bound
-        callable ('heal' maps to trek.heal_pokecenter)."""
+        """Validate against the shared registry and return its callable."""
         registry.check(self.d, name, kwargs)
         return registry.callable_for(self.d, name)
 
@@ -292,120 +336,141 @@ class Autopilot:
                         "action": (args.get("action") or {}),
                         "ok": False, "error": err})
             return {"id": rid, "ok": False, "error": err}
+
+        self._cycle_index += 1
         action = args.get("action") or {}
         name = action.get("name")
         kwargs = dict(action.get("kwargs") or {})
         goal = args.get("goal")
         success = args.get("success") or {}
 
-        # A fresh decision deserves a fresh stuck budget: only the SAME
-        # decision (name + kwargs + goal) repeating with no world delta
-        # accumulates toward the limit.
+        # Validate name, kwargs, and battle state before any risky fork.
+        fn = self._resolve_action(name, kwargs)
+        spec = registry.ACTIONS[name]
+
         sig = (name, json.dumps(kwargs, sort_keys=True), goal)
         if sig != self._last_sig:
             self.stuck_run = 0
         self._last_sig = sig
 
-        if name not in registry.ACTIONS:
-            reply = {"id": rid, "ok": False,
-                     "error": f"unknown action {name!r}; allowed: "
-                              f"{', '.join(sorted(registry.ACTIONS))}"}
-            self._note({"frame": None, "action": {"name": name},
-                        "ok": False, "error": reply["error"]})
-            return reply
-
         before = self.d.observe()
-        dig_before = digest(before)
+        dig_before = digest(before, self.d.emu.tilemap())
         f0 = self.d.emu.frame
 
         if args.get("risky"):
-            self.fork(f"cycle{len(list(iter_journal(self.journal))) + 1}")
+            self.fork(f"cycle{self._cycle_index}")
 
-        fn = self._resolve_action(name, kwargs)
         code = getattr(fn, "__code__", None)
         if code is not None and \
                 "max_frames" in code.co_varnames[:code.co_argcount]:
             kwargs.setdefault("max_frames", self.budget)
 
+        result = None
         error = None
         try:
-            fn(**kwargs)
+            result = fn(**kwargs)
             if name != "settle":
                 self.d.settle(max_frames=600)
-        except Exception as e:
+        except (Exception, SystemExit) as e:
             error = f"{type(e).__name__}: {e}"
 
         after = self.d.observe()
-        dig_after = digest(after)
+        dig_after = digest(after, self.d.emu.tilemap())
         used = self.d.emu.frame - f0
+        why = []
+        fired_stuck = False
+        wiped = bool(after["party"]) and all(
+            mon["hp"] == 0 for mon in after["party"]
+        )
 
-        ok, why = False, []
-        if not error:
-            ok = True
-            if "map" in success and \
+        if wiped:
+            try:
+                after = self.whiteout_recovery()
+                dig_after = digest(after, self.d.emu.tilemap())
+                why.append("whiteout: recovered from checkpoint")
+            except Exception as e:
+                error = f"whiteout recovery failed: {type(e).__name__}: {e}"
+                why.append("whiteout: recovery failed")
+            ok = False
+            self.stuck_run = 0
+        else:
+            explicit_failure = result_failure(name, result) if not error else None
+            if explicit_failure:
+                error = explicit_failure
+            ok = error is None
+            if ok and "map" in success and \
                     after["map"].upper() != str(success["map"]).upper():
                 ok = False
                 why.append(f"map {after['map']} != {success['map']}")
-            if "min_badges" in success and \
+            if ok and "min_badges" in success and \
                     len(after["badges"]) < success["min_badges"]:
                 ok = False
                 why.append(f"badges {len(after['badges'])} "
                            f"< {success['min_badges']}")
-            if "flag" in success and not after["flags"].get(success["flag"]):
+            if ok and "flag" in success and \
+                    not after["flags"].get(success["flag"]):
                 ok = False
                 why.append(f"flag unset: {success['flag']}")
-            if used > self.budget * 3 // 2:
+            if ok and used > self.budget * 3 // 2:
                 ok = False
                 why.append(f"over budget ({used} > {self.budget})")
 
-        fired_stuck = False
-        if not error and name not in IDLE_ACTIONS \
-                and stuck(dig_before, dig_after):
-            self.stuck_run += 1
-            if self.stuck_run >= self.stuck_limit:
-                ok, fired_stuck = False, True
-                why.append(f"no digest delta for {self.stuck_run} cycles")
-        else:
-            self.stuck_run = 0
+            if ok and spec.expect_change and stuck(dig_before, dig_after):
+                self.stuck_run += 1
+                if self.stuck_run >= self.stuck_limit:
+                    ok, fired_stuck = False, True
+                    why.append(
+                        f"no digest delta for {self.stuck_run} cycles"
+                    )
+            else:
+                self.stuck_run = 0
 
         lead = after["party"][0] if after["party"] else {}
-        record = {"frame": after["frame"], "lead_lv": lead.get("level"),
-                  "obs_digest": dig_after,
-                  "action": {"name": name, "kwargs": kwargs},
-                  "goal": goal, "ok": ok, "used": used}
+        record = {
+            "frame": after["frame"],
+            "lead_lv": lead.get("level"),
+            "obs_digest": dig_after,
+            "action": {"name": name, "kwargs": kwargs},
+            "goal": goal,
+            "ok": ok,
+            "used": used,
+        }
         if error:
             record["error"] = error
         if why:
             record["why"] = why
-        self._note(validate_cycle_record(record))
+        try:
+            self._note(validate_cycle_record(record))
+        except Exception as e:
+            log = logging.getLogger("autopilot")
+            log.exception("cycle journal write failed")
+            try:
+                self._note({
+                    "event": "journal-error",
+                    "frame": after.get("frame"),
+                    "error": f"{type(e).__name__}: {e}",
+                })
+            except Exception:
+                log.exception("journal-error event write failed")
 
-        for kind in classify_milestones(before, after):
-            self._checkpoint(kind, after["frame"])
+        if not wiped:
+            for kind in classify_milestones(before, after):
+                self._checkpoint(kind, after["frame"])
 
-        wiped = bool(after["party"]) and \
-            all(m["hp"] == 0 for m in after["party"])
-        if wiped:
-            self.whiteout_recovery()
-            after = self.d.observe()
-            ok = False
-            why.append("whiteout: recovered from checkpoint")
-
-        # Persist progress after a good cycle: a crash must lose at most
-        # one decision. Best-effort -- never fail the cycle over it.
         if ok:
             try:
                 self.d.emu.save(self.d.state_path)
-            except Exception as e:
-                why.append(f"state save failed: {type(e).__name__}: {e}")
+            except Exception:
+                logging.getLogger("autopilot").exception(
+                    "working state save failed"
+                )
 
-        # Rolling memory: one compact line per decision, so a future
-        # decider re-injection reads history without the whole journal.
         try:
             outcome = "ok" if ok else (error or "; ".join(why) or "failed")
             self.mem.add(f"[{name}]{f' {goal}' if goal else ''} -> {outcome}")
             self.mem.finalize_iteration()
         except Exception:
-            pass                       # memory must never break play
+            pass
 
         reply = {"id": rid, "ok": ok, "obs": compact_obs(after)}
         if fired_stuck:
@@ -415,16 +480,80 @@ class Autopilot:
             reply["error"] = error
         elif why:
             reply["error"] = "; ".join(why)
-        try:                           # short-horizon continuity for deciders
-            reply["mem_tail"] = [c for _, c in self.mem.tail(3)]
+        try:
+            reply["mem_tail"] = [content for _, content in self.mem.tail(3)]
         except Exception:
             pass
         return reply
 
     # --- stdin loop ---------------------------------------------------------
 
+
+def handle_request(ap, d, req):
+    """Dispatch one validated request without allowing pipe termination."""
+    rid = req.get("id")
+    cmd = req["cmd"]
+    args = req.get("args") or {}
+    try:
+        if cmd == "quit":
+            return {"id": rid, "ok": True, "data": "bye"}, True
+        if cmd == "observe":
+            return {
+                "id": rid, "ok": True, "obs": compact_obs(d.observe())
+            }, False
+        if cmd == "screen":
+            return {
+                "id": rid,
+                "ok": True,
+                "screen": d.emu.screen_text(),
+                "ui": {
+                    "textbox": d.textbox(),
+                    "battle": bool(d.battle()),
+                },
+                "frame": d.emu.frame,
+            }, False
+        if cmd == "memory":
+            n = int(args.get("tail", 10))
+            return {
+                "id": rid,
+                "ok": True,
+                "frontier": [
+                    f"[{start}-{end}]L{level}: {content}"
+                    for start, end, level, content in ap.mem.frontier()
+                ],
+                "tail": [content for _, content in ap.mem.tail(n)],
+            }, False
+        if cmd == "save":
+            path = args.get("path")
+            if not path:
+                raise ValueError("save needs {'path': <file.state>}")
+            target = Path(path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            d.emu.save(target)
+            return {
+                "id": rid,
+                "ok": True,
+                "saved": str(target),
+                "frame": d.emu.frame,
+            }, False
+        if cmd == "decision":
+            return ap.cycle(args, rid=rid), False
+        raise ValueError(
+            f"unknown cmd {cmd!r}; expected "
+            "decision|observe|screen|memory|save|quit"
+        )
+    except (Exception, SystemExit) as e:
+        logging.getLogger("autopilot").exception(
+            "request %r failed", cmd
+        )
+        return {
+            "id": rid,
+            "ok": False,
+            "error": f"{type(e).__name__}: {e}",
+        }, False
+
+
 def main():
-    import logging
     logging.basicConfig(stream=sys.stderr, level=logging.INFO,
                         format="%(message)s")
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -444,8 +573,7 @@ def main():
     state = Path(args.state)
     allow_default = os.environ.get("CRYSTAL_ALLOW_DEFAULT", "") \
         .strip().lower() in ("1", "yes", "true")
-    if state.resolve() == (Path("saves") / "default.state").resolve() \
-            and not allow_default:
+    if state.resolve() == paths.DEFAULT_STATE.resolve() and not allow_default:
         ap.error("refusing shared saves/default.state implicitly; fork it "
                  "or set CRYSTAL_ALLOW_DEFAULT=1 deliberately")
     session = args.session or state.stem
@@ -460,60 +588,27 @@ def main():
         line = line.strip()
         if not line:
             continue
+        quit_now = False
         try:
-            req = json.loads(line)
+            raw = json.loads(line)
+            req = NDJSONRequest.model_validate(raw).model_dump()
         except json.JSONDecodeError as e:
             resp = {"id": None, "ok": False, "error": f"bad JSON: {e}"}
+        except ValidationError as e:
+            first = e.errors()[0]
+            resp = {
+                "id": None,
+                "ok": False,
+                "error": f"bad request: {first['msg']} at "
+                         f"{list(first['loc'])}",
+            }
         else:
-            rid = req.get("id") if isinstance(req, dict) else None
-            cmd = req.get("cmd")
-            if cmd == "quit":
-                json.dump({"id": rid, "ok": True, "data": "bye"},
-                          sys.stdout)
-                sys.stdout.write("\n")
-                sys.stdout.flush()
-                break
-            if cmd == "observe":
-                resp = {"id": rid, "ok": True,
-                        "obs": compact_obs(d.observe())}
-            elif cmd == "screen":
-                # Pure peek: decoded 20x18 screen text + UI flags, no
-                # journal/stuck rails. For wedged-UI diagnosis.
-                resp = {"id": rid, "ok": True,
-                        "screen": d.emu.screen_text(),
-                        "ui": {"textbox": d.textbox(),
-                               "battle": bool(d.battle())},
-                        "frame": d.emu.frame}
-            elif cmd == "memory":
-                # Rolling-memory view for decider re-injection: summary
-                # frontier plus the raw tail. Pure read, no rails.
-                n = int((req.get("args") or {}).get("tail", 10))
-                resp = {"id": rid, "ok": True,
-                        "frontier": [f"[{s}-{e}]L{l}: {c}"
-                                     for s, e, l, c in ap_.mem.frontier()],
-                        "tail": [c for _, c in ap_.mem.tail(n)]}
-            elif cmd == "save":
-                # Force-save CURRENT WRAM (mid-battle included) to
-                # args.path as .state + .meta sidecar. No rails.
-                p = (req.get("args") or {}).get("path")
-                if not p:
-                    resp = {"id": rid, "ok": False,
-                            "error": "save needs {'path': <file.state>}"}
-                else:
-                    target = Path(p)
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    d.emu.save(target)
-                    resp = {"id": rid, "ok": True,
-                            "saved": str(target), "frame": d.emu.frame}
-            elif cmd == "decision":
-                resp = ap_.cycle(req.get("args") or {}, rid=rid)
-            else:
-                resp = {"id": rid, "ok": False,
-                        "error": f"unknown cmd {cmd!r}; expected "
-                                 f"decision|observe|screen|memory|save|quit"}
+            resp, quit_now = handle_request(ap_, d, req)
         json.dump(resp, sys.stdout)
         sys.stdout.write("\n")
         sys.stdout.flush()
+        if quit_now:
+            break
 
     print("[autopilot] done", file=sys.stderr, flush=True)
     d.emu.stop()

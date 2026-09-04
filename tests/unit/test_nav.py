@@ -2,7 +2,7 @@
 import pytest
 
 from crystalagent.nav import (
-    COLL_PIT, ICE, MapData, WALKABLE, WARPS,
+    COLL_PIT, ICE, MapData, TrekNav, WALKABLE, WARPS,
 )
 
 pytestmark = pytest.mark.unit
@@ -32,10 +32,22 @@ def mknav(grids, warps=None, warp_cells=None, conns=None, cls=MapData):
 
 
 def trek(grids, blocked=None, **kw):
-    from trek import TrekNav
     md = mknav(grids, cls=TrekNav, **kw)
     md.blocked = blocked or {}
     return md
+
+def test_map_name_resolver_accepts_all_public_spellings():
+    nav = MapData.__new__(MapData)
+    nav.consts = {"NEW_BARK_TOWN": (1, 1, 10, 9)}
+    nav.camel = {"NEW_BARK_TOWN": "NewBarkTown"}
+    nav.const_by_camel = {"NewBarkTown": "NEW_BARK_TOWN"}
+    nav._const_by_normalized = {"newbarktown": "NEW_BARK_TOWN"}
+    for name in (
+        "NEW_BARK_TOWN", "NewBarkTown", "new bark town", "new_bark_town",
+        "NEWBARKTOWN",
+    ):
+        assert nav.resolve(name) == "NEW_BARK_TOWN"
+    assert nav.resolve("NO_SUCH_MAP") is None
 
 
 def test_straight_corridor_optimal():

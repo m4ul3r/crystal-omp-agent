@@ -10,12 +10,13 @@ times before declaring an open door impassable.
 """
 import pytest
 
-import trek
+from crystalagent.driver import Driver
+from crystalagent.nav import STEP
 
 pytestmark = pytest.mark.unit
 
 
-class Slider(trek.Driver):
+class Slider(Driver):
     """Only _slide_is_clear runs; the map is a dict of tile kinds."""
 
     def __init__(self, tiles, missing=False):
@@ -54,7 +55,7 @@ def test_unknown_map_data_does_not_block_the_slide():
     assert d._slide_is_clear((11, 15), (9, 15)) is True
 
 
-class Lander(trek.Driver):
+class Lander(Driver):
     """step_off_warp only: tiles and stepping are faked."""
 
     def __init__(self, tiles, here=(4, 16), moves_ok=True):
@@ -79,7 +80,7 @@ class Lander(trek.Driver):
         self.steps.append(mv)
         if not self.moves_ok:
             return "blocked"
-        dx, dy = trek.STEP[mv]
+        dx, dy = STEP[mv]
         self.here = (self.here[0] + dx, self.here[1] + dy)
         return "moved"
 

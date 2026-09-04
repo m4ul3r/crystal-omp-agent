@@ -8,12 +8,12 @@ dependencies = [
     # every .state in saves/ (same rationale as ai-plays-pokemon).
     "pyboy==2.7.0",
     "pillow>=12,<13",
+    "pydantic>=2",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8",
-    "pydantic>=2",
 ]
 
 [tool.pytest.ini_options]

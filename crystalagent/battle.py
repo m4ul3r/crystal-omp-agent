@@ -110,7 +110,6 @@ def norm_item(name):
                   .replace("É", "E").replace("\x80", "e").upper())
 
 
-_norm_item = norm_item   # legacy import name (trek.py)
 
 
 def cheapest_heal(table, bag, allow, need_hp, status, fainted):

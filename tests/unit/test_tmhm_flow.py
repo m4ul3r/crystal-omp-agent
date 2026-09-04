@@ -17,7 +17,7 @@ BEFORE any press because an A press there picks a mon.
 """
 import pytest
 
-from trek import Driver
+from crystalagent.driver import Driver
 
 pytestmark = pytest.mark.unit
 

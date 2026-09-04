@@ -70,7 +70,7 @@ class EnemyObs(_Strict):
     level: int
     hp: int
     max_hp: int
-    types: list[str] = []
+    types: list[str] = Field(default_factory=list)
 
 
 class BattleState(_Strict):
@@ -134,7 +134,7 @@ class ObserveOut(_Strict):
     badges: list[str]
     flags: dict[str, bool]
     npcs: list[list[int]]
-    sprites: list[SpriteObs] = []   # live positions incl. player (slot 0)
+    sprites: list[SpriteObs] = Field(default_factory=list)
     ui: UIState
     enemy: Optional[EnemyObs] = None   # present only while battling
     frame: int
@@ -151,24 +151,17 @@ class RouteStep(BaseModel):
 
 # -- NDJSON envelopes -------------------------------------------------------
 
-class ServeRequest(BaseModel):
+class NDJSONRequest(BaseModel):
     id: Optional[int] = None
     cmd: str
     args: dict = Field(default_factory=dict)
-
-
-class ServeReply(BaseModel):
-    id: Optional[int] = None
-    ok: bool
-    data: object = None
-    error: Optional[str] = None
 
 
 # -- autopilot decisions ----------------------------------------------------
 
 class ActionSpec(_Strict):
     name: str
-    kwargs: dict = {}
+    kwargs: dict = Field(default_factory=dict)
 
 
 class SuccessSpec(_Strict):

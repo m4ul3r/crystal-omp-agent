@@ -14,8 +14,9 @@ The engine facts these pin, all from engine/pokemon/bills_pc.asm:
 """
 import pytest
 
-import trek
-from trek import Driver
+import crystalagent.driver.inventory as inventory_driver
+from crystalagent.nav import _tile_kind
+from crystalagent.driver import Driver
 from crystalagent.menus import Menus
 from crystalagent.state import box_mons, box_state
 
@@ -55,6 +56,7 @@ class FakeEmu:
         self.frame = 0
         self.rows = [" " * 20 for _ in range(18)]
         self.u8 = {}
+        self.reads = []
         self.sym = FakeSym({
             "sBoxCount": (SBANK, SBOX_COUNT),
             "sBoxMon1Species": (SBANK, SBOX_MON1),
@@ -75,6 +77,7 @@ class FakeEmu:
         return self.u8.get(name, 0)
 
     def read(self, where, n=1):
+        self.reads.append((where, n))
         addr = self.sym[where][1] if isinstance(where, str) else where[1]
         return bytes(self.mem[addr:addr + n])
 
@@ -99,9 +102,14 @@ def boxed_emu(mons=((118, 24, "GOLDEEN"), (175, 5, "TOGEPI"))):
 # -- SRAM decode -------------------------------------------------------------
 
 def test_box_mons_reads_the_current_box_out_of_sram():
-    mons = box_mons(boxed_emu(), FakeNames())
+    emu = boxed_emu()
+    mons = box_mons(emu, FakeNames())
     assert [(m["name"], m["level"], m["nickname"]) for m in mons] == [
         ("GOLDEEN", 24, "GOLDEEN"), ("TOGEPI", 5, "TOGEPI")]
+    assert emu.reads == [
+        ((SBANK, SBOX_MON1), SBOX_STRIDE * 2),
+        ((SBANK, SBOX_NICKS), NICK_LEN * 2),
+    ]
 
 
 def test_box_state_reports_capacity_and_1_based_box_number():
@@ -179,7 +187,7 @@ def pc_driver(party, box_count=2, monkeypatch=None):
     d._pc_exit = lambda **kw: True
     if monkeypatch is not None:
         # the held-item check (mail cannot be boxed) reads game_state
-        monkeypatch.setattr(trek, "game_state", lambda emu, names: {
+        monkeypatch.setattr(inventory_driver, "game_state", lambda emu, names: {
             "party": [{"nickname": m["nick"], "name": m["species"],
                        "item": None} for m in party]})
     return d
@@ -300,7 +308,7 @@ def test_pc_index_is_cursor_plus_scroll():
 
 
 def test_pc_tile_kind_names_the_terminal():
-    assert trek._tile_kind(0x93) == "pc"   # COLL_PC, journal #45
+    assert _tile_kind(0x93) == "pc"   # COLL_PC, journal #45
 
 
 # -- box roster + CHANGE BOX (full-box throws bounce; journal, TALLY run) ----

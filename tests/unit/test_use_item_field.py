@@ -23,10 +23,12 @@ heal_party's cheapest-sufficient item choice.
 """
 import pytest
 
-import trek
-from trek import (Driver, _field_clear, _no_effect_message,
-                  _party_target_list, _norm_item)
-from crystalagent.battle import cheapest_heal
+import crystalagent.driver.inventory as inventory_driver
+from crystalagent.battle import cheapest_heal, norm_item
+from crystalagent.driver import Driver
+from crystalagent.driver.inventory import (
+    _field_clear, _no_effect_message, _party_target_list,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -166,9 +168,9 @@ def field_world(d, monkeypatch, *, qty=2, start_row=0, pocket_index=0,
     """
     world = {"qty": qty, "confirms": 0, "pack_open": False,
              "party_open": False, "a_rows": []}
-    monkeypatch.setattr(trek, "bag_item_index", lambda *a, **k: pocket_index)
-    monkeypatch.setattr(trek, "bag_quantity", lambda *a, **k: world["qty"])
-    monkeypatch.setattr(trek, "goto_pocket",
+    monkeypatch.setattr(inventory_driver, "bag_item_index", lambda *a, **k: pocket_index)
+    monkeypatch.setattr(inventory_driver, "bag_quantity", lambda *a, **k: world["qty"])
+    monkeypatch.setattr(inventory_driver, "goto_pocket",
                         lambda menu, pocket: world["pack_open"])
     d.emu.u8["wMenuCursorY"] = start_row + 1
 
@@ -291,7 +293,7 @@ def test_use_item_full_hp_target_is_a_distinct_no_op(monkeypatch):
 def test_use_item_missing_item_never_opens_a_menu(monkeypatch):
     d = bare_driver()
     field_world(d, monkeypatch)
-    monkeypatch.setattr(trek, "bag_item_index", lambda *a, **k: None)
+    monkeypatch.setattr(inventory_driver, "bag_item_index", lambda *a, **k: None)
     presses = []
     inner, d.press = d.press, lambda seq: presses.append(seq) or inner(seq)
     assert d.use_item("POTION") is False
@@ -307,7 +309,7 @@ PARTY = [{"nickname": "BROOK", "hp": 74, "max_hp": 211, "egg": False},
 
 
 def with_party(monkeypatch, party=PARTY):
-    monkeypatch.setattr(trek, "game_state",
+    monkeypatch.setattr(inventory_driver, "game_state",
                         lambda emu, names: {"party": [dict(m) for m in party]})
 
 
@@ -437,14 +439,14 @@ def heal_driver(monkeypatch, party, bag, status=None):
     d = bare_driver()
     st = dict(status or {})
     used = []
-    monkeypatch.setattr(trek, "game_state",
+    monkeypatch.setattr(inventory_driver, "game_state",
                         lambda emu, names: {"party": [dict(m) for m in party]})
     d._heal_items = lambda: TABLE
     d._bag = lambda: bag
     d._status_byte = lambda slot: st.get(slot, 0)
 
     def use_item(item_name, target_slot=0, **kw):
-        key = _norm_item(item_name)
+        key = norm_item(item_name)
         assert bag.get(key), f"heal_party spent a {item_name} it had none of"
         bag[key] -= 1
         if not bag[key]:
@@ -553,7 +555,7 @@ def test_heal_table_is_read_from_the_rom_tables():
         pytest.skip("built ROM/sym not found")
     sym = Symbols(paths.SYM)
     names = Names(paths.ROM, sym, Charmap(paths.CHARMAP), paths.MAP_CONSTANTS)
-    table = trek._load_heal_table(paths.ROM, sym, names)
+    table = inventory_driver._load_heal_table(paths.ROM, sym, names)
     for key, item in TABLE.items():
         assert table[key] == item, key
     # a non-curative item never lands in the table
