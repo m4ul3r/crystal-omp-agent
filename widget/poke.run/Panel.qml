@@ -414,6 +414,46 @@ Panel {
                   isLead: index === 0
                 }
               }
+
+              // The team's shape belongs with the party it describes, and
+              // it fills the column under six slots instead of a footer cell.
+              PanelSeparator {
+                visible: teamColumn.visible
+                foreground: root.foreground
+              }
+
+              Column {
+                id: teamColumn
+                readonly property var team: Model.team(feed.state)
+                readonly property string coverage: Model.coverageLabel(team)
+
+                visible: team !== null
+                width: parent.width
+                spacing: Style.space(6)
+
+                PanelSectionHeader {
+                  text: "TEAM"
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                }
+
+                StatGrid {
+                  width: parent.width
+                  columns: 2
+                  cells: Model.teamCells(feed.state)
+                }
+
+                // Full width: the list is as long as the number of types the
+                // team cannot answer, and eliding it would throw away the
+                // only part of it that matters.
+                Stat {
+                  visible: teamColumn.coverage !== ""
+                  width: parent.width
+                  label: "GAPS"
+                  value: teamColumn.coverage
+                  wrap: true
+                }
+              }
             }
 
             // ---- centre: the screen in its bezel, the matchup under it ------
@@ -628,6 +668,52 @@ Panel {
                   }
                 }
               }
+
+              // What the agent is trying to do: the one thing a watcher
+              // cannot work out by looking at the game, so it captions the
+              // screen. Glass width, so a retarget's longer wording still
+              // fits on two lines.
+              PanelSeparator {
+                visible: objectiveColumn.visible
+                foreground: root.foreground
+              }
+
+              Column {
+                id: objectiveColumn
+                // STICKY. A single state write without an objective would
+                // otherwise unmount this whole column for one frame. Keep the
+                // last one that existed; it is stale for a tick at worst.
+                readonly property var incoming: Model.objective(feed.state)
+                property var objective: null
+                onIncomingChanged: if (incoming !== null) objective = incoming
+
+                visible: objective !== null
+                width: parent.width
+                spacing: Style.space(4)
+
+                PanelSectionHeader {
+                  text: "OBJECTIVE"
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                }
+
+                ProgressRow {
+                  width: parent.width
+                  title: objectiveColumn.objective ? objectiveColumn.objective.name : ""
+                  detail: objectiveColumn.objective ? objectiveColumn.objective.detail : ""
+                  value: objectiveColumn.objective
+                    ? Model.percentLabel(objectiveColumn.objective.percent) : ""
+                  titleSize: Style.font.body
+                  bold: true
+                  // Faded rather than unmounted: percent goes null between
+                  // objectives, and a track that comes and goes moves the
+                  // rows under it on every retarget.
+                  trackOpacity: (objectiveColumn.objective
+                    && objectiveColumn.objective.percent !== null) ? 1 : 0
+                  fraction: objectiveColumn.objective
+                    ? Model.fraction(objectiveColumn.objective.percent) : 0
+                }
+              }
             }
 
             // ---- right instrument: where, the trainer card, the goal --------
@@ -685,47 +771,6 @@ Panel {
               }
 
               PanelSeparator {
-                visible: objectiveColumn.visible
-                foreground: root.foreground
-              }
-
-              Column {
-                id: objectiveColumn
-                // STICKY. A single state write without an objective would
-                // otherwise unmount this whole column for one frame. Keep the
-                // last one that existed; it is stale for a tick at worst.
-                readonly property var incoming: Model.objective(feed.state)
-                property var objective: null
-                onIncomingChanged: if (incoming !== null) objective = incoming
-
-                visible: objective !== null
-                width: parent.width
-                spacing: Style.space(4)
-
-                PanelSectionHeader {
-                  text: "OBJECTIVE"
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                }
-
-                ProgressRow {
-                  width: parent.width
-                  title: objectiveColumn.objective ? objectiveColumn.objective.name : ""
-                  detail: objectiveColumn.objective ? objectiveColumn.objective.detail : ""
-                  value: objectiveColumn.objective
-                    ? Model.percentLabel(objectiveColumn.objective.percent) : ""
-                  bold: true
-                  // Faded rather than unmounted: percent goes null between
-                  // objectives, and a track that comes and goes moves the
-                  // rows under it on every retarget.
-                  trackOpacity: (objectiveColumn.objective
-                    && objectiveColumn.objective.percent !== null) ? 1 : 0
-                  fraction: objectiveColumn.objective
-                    ? Model.fraction(objectiveColumn.objective.percent) : 0
-                }
-              }
-
-              PanelSeparator {
                 visible: progressColumn.visible
                 foreground: root.foreground
               }
@@ -778,15 +823,42 @@ Panel {
                   }
                 }
               }
+
+              PanelSeparator {
+                visible: counterColumn.visible
+                foreground: root.foreground
+              }
+
+              Column {
+                id: counterColumn
+                readonly property var cells: Model.counterCells(feed.state)
+
+                visible: cells.length > 0
+                width: parent.width
+                spacing: Style.space(6)
+
+                PanelSectionHeader {
+                  text: "COUNTERS"
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                }
+
+                StatGrid {
+                  width: parent.width
+                  columns: 2
+                  cells: counterColumn.cells
+                }
+              }
             }
           }
 
-          // ---- footer strip: the totals, in as many columns as have something
-          // to say. TEAM has nothing before the first catch; PACE nothing
-          // before the second badge.
+          // ---- footer strip: what the agent says -----------------------------
+          // The pace estimate and the narration log, the two things that are
+          // prose. Narration gets the width: a log line that fits on one
+          // line is read; one that wraps is skimmed.
 
           PanelSeparator {
-            visible: footer.shown > 0
+            visible: paceColumn.visible || notesColumn.visible
             foreground: root.foreground
           }
 
@@ -795,72 +867,19 @@ Panel {
             width: parent.width
             spacing: root.columnGap
 
-            readonly property int shown:
-              (teamColumn.visible ? 1 : 0) + (counterColumn.visible ? 1 : 0)
-              + (paceColumn.visible ? 1 : 0) + (notesColumn.visible ? 1 : 0)
-            readonly property real columnWidth:
-              shown > 0 ? (width - (shown - 1) * spacing) / shown : width
-
-            Column {
-              id: teamColumn
-              readonly property var team: Model.team(feed.state)
-              readonly property string coverage: Model.coverageLabel(team)
-
-              visible: team !== null
-              width: footer.columnWidth
-              spacing: Style.space(6)
-
-              PanelSectionHeader {
-                text: "TEAM"
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-              }
-
-              StatGrid {
-                width: parent.width
-                columns: 2
-                cells: Model.teamCells(feed.state)
-              }
-
-              // Full width: the list is as long as the number of types the
-              // team cannot answer, and eliding it would throw away the only
-              // part of it that matters.
-              Stat {
-                visible: teamColumn.coverage !== ""
-                width: parent.width
-                label: "GAPS"
-                value: teamColumn.coverage
-                wrap: true
-              }
-            }
-
-            Column {
-              id: counterColumn
-              readonly property var cells: Model.counterCells(feed.state)
-
-              visible: cells.length > 0
-              width: footer.columnWidth
-              spacing: Style.space(6)
-
-              PanelSectionHeader {
-                text: "COUNTERS"
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-              }
-
-              StatGrid {
-                width: parent.width
-                columns: 2
-                cells: counterColumn.cells
-              }
-            }
+            // The pace column is the party column's width, so the narration
+            // starts on the same line the screen does: one grid, top to
+            // bottom.
+            readonly property real paceWidth: root.partyWidth
+            readonly property real notesWidth:
+              paceColumn.visible ? width - paceWidth - spacing : width
 
             Column {
               id: paceColumn
               readonly property var rows: Model.paceLines(feed.state)
 
               visible: rows.length > 0
-              width: footer.columnWidth
+              width: footer.paceWidth
               spacing: Style.space(4)
 
               PanelSectionHeader {
@@ -899,7 +918,7 @@ Panel {
             Column {
               id: notesColumn
               visible: feed.notes.length > 0
-              width: footer.columnWidth
+              width: footer.notesWidth
               spacing: Style.space(4)
 
               PanelSectionHeader {
