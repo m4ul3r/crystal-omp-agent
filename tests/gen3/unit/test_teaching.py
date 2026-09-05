@@ -10,6 +10,8 @@ and asks questions later teaches the wrong move to the wrong mon, and there is
 no undo without a savestate.
 """
 
+from types import SimpleNamespace
+
 import pytest
 
 from pokeagent.teaching import Teacher
@@ -119,3 +121,30 @@ def test_knows_reports_the_holder():
     t = make(party, {(2, HM06)})
     assert t.knows(HM06).nickname == "MIGHTYENA"
     assert t.knows(HM01) is None
+
+
+@pytest.mark.parametrize("completes", [False, True])
+def test_existing_knower_does_not_complete_another_members_teaching(completes):
+    previous = Mon("TWIN", 1, moves=[ROCK_SMASH])
+    target = Mon("TWIN", 2, moves=[CUT])
+    teacher = make([previous, target], {(1, HM06), (2, HM06)})
+    teacher._before_moves = list(target.moves)
+    teacher.forgot = None
+    teacher.emu = SimpleNamespace(frame=0)
+
+    def press(_sequence):
+        teacher.emu.frame += 16
+        if completes:
+            target.moves.append(ROCK_SMASH)
+
+    teacher.emu.run_sequence = press
+    teacher.d.settle = lambda: None
+    teacher.d.advance_scene = lambda _frames: None
+    teacher._back_out = lambda: None
+    teacher._at_forget_prompt = lambda: False
+
+    result = teacher._settle_learn(1, ROCK_SMASH, "ROCK SMASH", "TWIN", 32)
+    assert result is completes
+    assert (ROCK_SMASH in target.moves) is completes
+    assert teacher.taught_to == ("TWIN" if completes else None)
+    assert previous.moves == [ROCK_SMASH]

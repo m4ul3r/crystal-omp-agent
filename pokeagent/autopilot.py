@@ -79,12 +79,14 @@ COMMANDS = ("decision", "observe", "screen", "memory", "save", "quit")
 #: zero-delta digest after one of them is not evidence of anything.  Checked
 #: against the registry at import time: a rename there must not silently turn
 #: a read into a "stuck" report here.
-IDLE_ACTIONS = frozenset(
+READ_ONLY_ACTIONS = frozenset(
     {
         "observe", "status", "map_view", "find_tiles", "exits", "live_npcs",
-        "battle_frame", "outlook", "recommend", "settle", "drain_scene", "save",
+        "battle_frame", "outlook", "recommend", "missables", "field_moves",
+        "needs_flash",
     }
 )
+IDLE_ACTIONS = READ_ONLY_ACTIONS | {"settle", "drain_scene", "save"}
 _drifted = IDLE_ACTIONS - set(registry.ACTIONS)
 if _drifted:
     raise RuntimeError(
@@ -499,8 +501,21 @@ class Autopilot:
             kwargs.setdefault("max_frames", self.budget)
 
         error = None
+        result = None
+        action_failed = False
+        failure_reason = None
         try:
-            registry.callable_for(self.d, name)(**kwargs)
+            result = registry.callable_for(self.d, name)(**kwargs)
+            # Boolean queries (notably needs_flash) may legitimately say no.
+            action_failed = result is False and name not in READ_ONLY_ACTIONS
+            if action_failed:
+                reason_name = {
+                    "walk": "step", "step_dir": "step", "take_warp": "warp",
+                    "talk_to": "talk", "advance_scene": "scene",
+                }.get(name, name)
+                reason = getattr(self.d, f"last_{name}_reason", None)
+                reason = reason or getattr(self.d, f"last_{reason_name}_reason", None)
+                failure_reason = f"{name} failed: {reason or 'driver returned False'}"
             if name not in IDLE_ACTIONS:
                 self.d.settle(max_frames=600)
         except (Exception, SystemExit) as exc:
@@ -512,7 +527,9 @@ class Autopilot:
 
         why = []
         ok = not error
-        if ok:
+        if action_failed:
+            why.append(failure_reason)
+        if not error:
             why += self._check_success(after, success)
             if used > self.budget * 3 // 2:
                 why.append(f"spent {used} frames on a {self.budget}-frame budget")
@@ -530,6 +547,10 @@ class Autopilot:
         else:
             self.stuck_run = 0
 
+        wiped = party_wiped(after)
+        if wiped:
+            ok = False
+            why.append("party wiped")
         lead = next((m for m in after.get("party") or [] if not m.get("egg")), {})
         record = {
             "t": t0.isoformat(timespec="seconds"),
@@ -549,7 +570,6 @@ class Autopilot:
         self._journal_cycle(record)
 
         # -- post-execution rails -------------------------------------------
-        wiped = party_wiped(after)
         recovered = None
         checkpoints = []
         if wiped:
@@ -580,7 +600,8 @@ class Autopilot:
         if self.mem.last_fold_reason:
             log.warning("rolling memory: %s", self.mem.last_fold_reason)
 
-        reply = {"id": rid, "ok": ok, "obs": compact_obs(after), "used": used}
+        reply = {"id": rid, "ok": ok, "obs": compact_obs(after), "used": used,
+                 "result": result}
         if fired_stuck:
             reply["error"] = "stuck"
         elif error:
@@ -694,7 +715,7 @@ def main(argv=None) -> int:
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(message)s")
 
     state = Path(a.state)
-    if state == paths.DEFAULT_STATE and not a.allow_default:
+    if state.resolve() == paths.DEFAULT_STATE.resolve() and not a.allow_default:
         # default.state is a shared fork point; silently mutating it cost the
         # predecessor project real progress more than once.
         sys.exit(

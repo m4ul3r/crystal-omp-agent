@@ -364,14 +364,28 @@ class MapData:
         return src[off] & METATILE_ATTR_BEHAVIOR_MASK
 
     def set_live_cells(self, map_name, cells: dict) -> int:
-        """Override decoded cells for one map. Returns how many changed.
+        """Merge observed cells for one map; return changed effective cells.
 
-        Clears the reachability memo, because a barrier that just opened
-        changes exactly the answer that cache is holding.
+        A cell matching the shipped grid removes its old override. Unobserved
+        cells remain untouched, including when a live-grid read is unavailable.
+        Clears reachability only when the effective map changes.
         """
+        if not cells:
+            return 0
+        grid = self.grid(map_name)
         book = self._live.setdefault(map_name, {})
-        changed = sum(1 for k, v in cells.items() if book.get(k) != v)
-        book.update(cells)
+        changed = 0
+        for (x, y), cell in cells.items():
+            static = (grid[y][x]
+                      if 0 <= y < len(grid) and 0 <= x < len(grid[y])
+                      else None)
+            changed += book.get((x, y), static) != cell
+            if cell == static:
+                book.pop((x, y), None)
+            else:
+                book[(x, y)] = cell
+        if not book:
+            self._live.pop(map_name, None)
         if changed:
             self._reach_cache.clear()
         return changed

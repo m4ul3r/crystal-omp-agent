@@ -1262,10 +1262,10 @@ class Teacher:
         start = self.emu.frame
         while self.emu.frame - start < max_frames:
             party = self.d.state.party()
-            # Who ACTUALLY learned it, not who was asked for. The party cursor
-            # cannot be read, so the moveset is the only honest answer.
-            learner = next((m for m in party if move_id in m.moves), None)
-            if learner is not None:
+            # Existing knowers elsewhere in the party are not evidence that
+            # the requested recipient passed the learn/forget prompts.
+            learner = party[index] if 0 <= index < len(party) else None
+            if learner is not None and move_id in learner.moves:
                 got = learner.nickname or self.names.species(learner.species)
                 # The moveset is written BEFORE "X learned ROCK SMASH!"
                 # finishes drawing, so backing out immediately fires B presses
@@ -1286,12 +1286,9 @@ class Teacher:
                                     self.forgot, actually)
                     self.forgot = actually
                 if got != label:
-                    log.warning("taught %s to %s, not the requested %s",
-                                move_name, got, label)
-                    self.last_reason = f"taught {move_name} to {got}, not {label}"
-                else:
-                    log.info("taught %s to %s (forgot %s)", move_name, got,
-                             self.forgot or "nothing")
+                    return self._fail(f"taught {move_name} to {got}, not {label}")
+                log.info("taught %s to %s (forgot %s)", move_name, got,
+                         self.forgot or "nothing")
                 self.taught_to = got
                 return True
             # The OVERWORLD prompt, not the battle one. `battle.at_learn_prompt`

@@ -42,7 +42,7 @@ def main(argv=None):
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(message)s")
 
     state = Path(a.state)
-    if state == paths.DEFAULT_STATE and not a.allow_default:
+    if state.resolve() == paths.DEFAULT_STATE.resolve() and not a.allow_default:
         # default.state is a shared fork point; silently mutating it cost the
         # predecessor project real progress more than once.
         sys.exit(

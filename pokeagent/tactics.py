@@ -822,6 +822,20 @@ class Tactics:
                     continue
         return self._item_ids.get(norm_item(name))
 
+    def pick_ball(self, balls):
+        """Cheapest stocked ball by ROM price, reserving MASTER BALL for callers."""
+        best, best_price = None, None
+        for name, quantity in balls.items():
+            if not isinstance(quantity, int) or quantity <= 0:
+                continue
+            item_id = self.item_id(name)
+            if not item_id or item_id == self.items["ITEM_MASTER_BALL"]:
+                continue
+            price = self.names.item_data(item_id).price
+            if best_price is None or price < best_price:
+                best, best_price = name, price
+        return best
+
     # ---- one move ------------------------------------------------------------
 
     def move_view(
@@ -1212,7 +1226,7 @@ class Tactics:
                 m for m in self.switch_options(analysis)
                 if m.get("can_damage")
             ]
-            if bench and analysis.get("can_switch"):
+            if bench:
                 pick = bench[0]
                 return ("switch", pick["index"]), (
                     f"nothing left in this moveset damages "

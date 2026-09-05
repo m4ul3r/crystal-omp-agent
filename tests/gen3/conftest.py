@@ -12,6 +12,7 @@ fresh clone with only the ROM built. Savestate-driven scenarios live in
 tests/integration and are marked.
 """
 
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -74,7 +75,14 @@ def cstruct():
 
 @pytest.fixture(scope="session")
 def emu(symbols, charmap):
-    from pokeagent.emu import Sapphire
+    if importlib.util.find_spec("mgba") is None:
+        pytest.skip("mGBA is unavailable in this Python environment; install .[gen3]")
+    from pokeagent.emu import Sapphire, _preload_libmgba
+
+    try:
+        _preload_libmgba()
+    except ImportError as exc:
+        pytest.skip(str(exc))
 
     return Sapphire(sym=symbols, charmap=charmap)
 

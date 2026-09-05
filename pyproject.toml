@@ -1,3 +1,11 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["crystalagent*", "pokeagent*"]
+namespaces = false
+
 [project]
 name = "pokeagent"
 version = "0.1.0"
@@ -42,7 +50,7 @@ dev = [
 # artifacts are absent, so a checkout set up for one lane does not fail on
 # the other's tests.
 testpaths = ["tests"]
-addopts = "-q -m \"not integration\""
+addopts = "-q --import-mode=importlib -m \"not integration\""
 markers = [
     "unit: pure logic, no emulator",
     "integration: drives the emulator",

@@ -1,3 +1,197 @@
+## 2026-09-05 - session pr2-fixes: merge-readiness remediation
+
+User authorized fixing the reported setup and runtime defects, adding targeted
+regressions, then deciding merge readiness. Working branch: `gen3-sapphire-lane`
+in the isolated PR worktree. No merge or push is authorized by this session.
+NavigationFix owns navigation/save-target/deadline/grid repairs; BattleFix owns
+Safari/ball-selection/tactics repairs; ProtocolFix owns server/autopilot/autosave
+repairs. Main owns setup, test isolation, fresh-game handoff and teaching.
+All milestone states remain read-only; live verification uses fresh forks.
+
+### Result: all 16 reported defects fixed, lane is mergeable
+
+Setup/packaging: `pyproject.toml` gained the missing `[build-system]` and
+`[tool.setuptools.packages.find]` (both `pokeagent*` and `crystalagent*`), so
+`uv pip install -e '.[gen3]'` and `-e '.[gen2]'` both work and
+`uv build --wheel` produces `pokeagent-0.1.0-py3-none-any.whl`. Dependencies
+no longer need hand-installing (the 2026-09-04 entry's workaround is obsolete).
+`--import-mode=importlib` fixes combined collection of the same-named test
+modules across lanes; `tests/conftest.py` skips Crystal-artifact tests by name
+and `tests/gen3/conftest.py` skips mGBA tests when the interpreter has no
+`mgba`, so ONE checkout serves both Python minors without errors.
+`tests/integration/conftest.py` now SKIPS by name when no Crystal milestone
+directory exists instead of letting `iterdir` raise -- a checkout without
+`claude_saves/` used to produce 16 fixture ERRORs, which is exactly the
+"lane cannot run here" misreading of journal #53, and the two integration
+conftests now agree.
+`docs/gen3/README.md` documents the Ubuntu `libmgba0.10t64` extraction (the
+vendor script is Arch-only) and now names modules as they are actually
+importable (`pokeagent.trek`, `python -m pokeagent.serve`).
+
+Opening handoff: `scripts/to_starter.py` drives `InsideOfTruck` itself
+(`_leave_truck`), so the documented two-command opening runs end to end from a
+power-on save. Proven live this session: `newgame.py` -> truck @7648,
+`to_starter.py` -> `lab.state` @36796 with EMBER (TORCHIC) L5 21/21, plus
+`route101`/`starter`/`first-battle` checkpoints in
+`saves/pr2-remediation-20260904/`.
+
+Runtime defects fixed, each with a regression:
+- gate/warp searches load scratch states with `adopt=False`, restore
+  `state_path` in `finally`, and `rmtree` their scratch dir on every exit --
+  a search no longer redirects the caller's saves into `/tmp`.
+- `travel` restores the previous journey deadline in `finally`; a nested trip
+  inherits the stricter deadline and cannot lift an outer budget.
+- `nav.set_live_cells` merges observations and DROPS overrides that match the
+  shipped grid, so a reverted barrier stops haunting BFS.
+- Safari battles skip ordinary `outlook()` entirely, count balls from the zone
+  pool, and log the intentionally blank player block instead of inventing HP.
+- one shared `Tactics.pick_ball` for both automatic selectors: cheapest
+  stocked ball by ROM price, MASTER BALL reserved for an explicit throw.
+- dry-moveset switching reads `switch_options` (the previous
+  `analysis.can_switch` did not exist).
+- `Autosave.checkpoint` allocates permanent names from DISK, and failed writes
+  no longer advance save/milestone accounting -- a restarted session cannot
+  overwrite its own milestones.
+- `Autopilot` returns the action's result, fails a mutating `False` with the
+  driver's own `last_*_reason`, and classifies all twelve read-only registry
+  actions so a query is never reported as stuck; whiteouts journal as failed
+  before recovery.
+- both entrypoints compare RESOLVED paths before refusing `default.state`.
+- `Teacher` no longer credits a teach to an existing knower elsewhere in the
+  party: only the requested recipient's moveset counts.
+
+Verification (this session, after every edit):
+- gen3 env (py3.11, mGBA): `pytest tests` -> 1602 passed, 15 skipped.
+- gen2 env (py3.12, PyBoy): `pytest tests` -> 1500 passed, 117 skipped.
+- `pytest -m integration tests/gen3/integration` -> 17 passed, 23 skipped
+  (skips are late-game checkpoints and the pokecrystal decomp, absent here).
+- `pytest -m integration tests/gen3/integration tests/integration` in the gen3
+  env -> 17 passed, 39 skipped (the Crystal lane skips cleanly with no
+  milestone dir; it ERRORed 16 times before the conftest fix).
+- `pytest -m integration tests/integration` in the gen2 env: 16 skipped with no
+  `CRYSTAL_MILESTONES`, 16 passed against the sibling checkout's read-only
+  `backup/claude_saves`.
+- new `test_opening_cli_accepts_the_newgame_truck_checkpoint` drives
+  `to_starter.main` from the truck milestone and asserts the lab map, the
+  nicknamed starter and a live first battle.
+
+Merge verdict: **ready**. No milestone savestate was mutated; the Sapphire
+submodule pin is now committed (`pret` @ pokeruby, the pin MERGING.md names).
+Still environmental, not blocking: Crystal's own decomp is not built in this
+checkout, so `tests/gen3/integration/test_crystal_regression.py` skips here
+and Gen-2 was cross-checked against the sibling checkout instead.
+
+
+## 2026-09-04 - session dogfood-local: fresh Ubuntu setup
+
+This is an independent smoke-test timeline, not a continuation of port-68.
+Working directory: `/media/ssd/pokecrystal/crystal-agent-pr2` at PR #2
+`16e2bff`. Checkpoints live under `saves/dogfood-20260904/`; no existing
+Crystal or Sapphire checkpoints were used.
+
+Prerequisites verified:
+- Official source: `https://github.com/pret/pokeruby.git`, detached at
+  `63a8cbf0016b351a4e68f7036fa0b77e23d2f2c1` (the intended pin in MERGING.md).
+- CPython 3.11.14; separate `.venv` with `mgba==0.10.2`, Pillow 12.3.0,
+  pytest 9.1.1 and pydantic 2.13.5. Dependencies installed directly because
+  editable package discovery is broken; no implementation changes made.
+- Ubuntu `libmgba0.10t64=0.10.2+dfsg-1.1build3` downloaded with apt and
+  extracted under `vendor/root`, not installed system-wide. Package SHA256:
+  `3c2088fec5a3219082f7d77dd95911ef2cae1aca838f60a560a261c0bed7d23b`.
+- `vendor/lib/libmgba.so.0.10` links to the extracted library. All its
+  dynamic dependencies resolve; Python imports report native mGBA 0.10.2.
+- Existing system ARM GCC 13.2.1/binutils, host C/C++ tools, make, perl,
+  git and libpng 1.6.43 successfully built `scripts/build_rom.sh`.
+- The bundled vendor script assumes Arch/pacman and was NOT run on Ubuntu.
+
+Build succeeded with `JOBS=8 bash scripts/build_rom.sh` in about 75 seconds,
+including agbcc bootstrap. agbcc commit:
+`da598c1d918402c42c0c0d7128ba14567f3175e9`.
+Verified Sapphire US Rev 2 SHA1:
+`89b45fb172e6b55d51fc0e61989775187f6fe63c`; 50,963 symbol rows.
+`pokesapphire.gba` links to `pret/pokesapphire_rev2.gba` and
+`pokesapphire_rev2.sym` links to `pret/pokesapphire_rev2.sym`.
+No ROM-download site was involved.
+
+Runtime proof:
+- `scripts/newgame.py --state saves/dogfood-20260904/littleroot.state
+  --name PROBE` booted, typed PROBE and saved at frame 7648 in InsideOfTruck.
+- The documented handoff to `scripts/to_starter.py` is incomplete: that
+  script expects the player already inside Brendan's house, not the truck.
+- Used a fork `dogfood-working.state` plus metadata with `pokeagent.serve`.
+  `take_warp(4,2)` physically reached LittlerootTown but returned False;
+  `observe` proved the map change. `advance_scene(max_frames=60000)` completed
+  the arrival, then saved `house-arrived.state` at frame 11915.
+- `scripts/to_starter.py --state saves/dogfood-20260904/house-arrived.state
+  --out saves/dogfood-20260904/starter.state --starter MUDKIP --nickname PROBE`
+  completed the clock, rival intro, starter choice, first Poochyena battle,
+  and lab sequence in about 25 seconds.
+- New milestones: `route101.state`, `starter.state`, `first-battle.state`,
+  `lab.state`, each with `.meta`. Lab: frame 36777, Birch's lab (6,5),
+  PROBE/MUDKIP L5 20/20, money 3000, 0 badges. Public `./sapphire status`
+  reloaded and confirmed it.
+- Live framebuffer visually confirmed house and lab rendering. Cold
+  `./sapphire screen` immediately after loading produced a blank frame;
+  use the driving emulator's published image for visual evidence.
+
+Unit lane: `--import-mode=importlib --continue-on-collection-errors
+tests/gen3/unit` produced 709 passed, 15 skipped, one collection error.
+`tests/gen3/unit/test_autopilot.py:13` imports the old top-level `autopilot`
+instead of `pokeagent.autopilot`, and cannot import `healthy_checkpoints`.
+No implementation or test changes have been made to hide this failure.
+Integration fixture discovery: despite the battle test's Mudkip docstring,
+four assertions require TORCHIC with SCRATCH/GROWL and nickname EMBER.
+The Mudkip fixture run gave 12 passed, 4 fixture-mismatch failures, 23 skips.
+Preserved that timeline and forked the initial checkpoints into
+`saves/dogfood-torchic-20260904/`; ran the opening with `--starter TORCHIC
+--nickname EMBER`. Final integration result: **16 passed, 23 skipped**.
+Skips: 15 missing separate Crystal/Red artifacts, six missing stone-badge
+shop scenarios, two missing badge-five surf scenarios. All tests drove forks;
+the fixture's end-of-session checks confirmed milestone bytes unchanged.
+
+Ready-to-use working fork: `saves/dogfood-20260904/play.state` plus `.meta`,
+copied from the successful Mudkip lab checkpoint. No driver left running.
+Retained screenshots: `saves/dogfood-20260904/house-arrived.png` and `lab.png`.
+The Omarchy desktop widget itself has not been installed or exercised.
+
+Exact clean-checkout setup on this Ubuntu machine (run in the PR worktree):
+
+```sh
+git clone --filter=blob:none --no-checkout https://github.com/pret/pokeruby.git pret
+git -C pret checkout --detach 63a8cbf0016b351a4e68f7036fa0b77e23d2f2c1
+git clone https://github.com/pret/agbcc.git agbcc
+git -C agbcc checkout --detach da598c1d918402c42c0c0d7128ba14567f3175e9
+uv venv --python 3.11 .venv
+uv pip install --python .venv/bin/python mgba==0.10.2 pillow==12.3.0 pytest==9.1.1 pydantic==2.13.5
+mkdir -p vendor/cache vendor/root vendor/lib
+(cd vendor/cache && apt-get download libmgba0.10t64=0.10.2+dfsg-1.1build3)
+dpkg-deb -x vendor/cache/libmgba0.10t64_0.10.2+dfsg-1.1build3_amd64.deb vendor/root
+ln -s ../root/usr/lib/x86_64-linux-gnu/libmgba.so.0.10 vendor/lib/libmgba.so.0.10
+JOBS=8 bash scripts/build_rom.sh
+ln -s pret/pokesapphire_rev2.gba pokesapphire.gba
+sha1sum pokesapphire.gba
+```
+
+On the ALREADY prepared checkout, do not repeat the creation steps. Resume:
+
+```sh
+./sapphire --state saves/dogfood-20260904/play.state status
+.venv/bin/python -m pokeagent.serve --state saves/dogfood-20260904/play.state
+```
+
+Repeat the integration verification:
+
+```sh
+SAPPHIRE_SAVES="$PWD/saves/dogfood-torchic-20260904" \
+  .venv/bin/python -m pytest --import-mode=importlib -m integration -rs tests/gen3/integration
+```
+
+Remaining setup/merge defects: missing committed pret gitlink; broken editable
+package discovery; Arch-only vendor script; wrong Gen-3 autopilot-test import;
+combined test-module name collisions; fresh-game-to-starter truck handoff.
+The earlier PR review's runtime findings remain unfixed. This setup proves
+local build and opening-gameplay viability, not safe unattended full-game play.
+
 ## session port-68: TMs work now, and the Elite Four economy is understood
 
 **The TM path was broken and is fixed, which unblocked real movesets.**

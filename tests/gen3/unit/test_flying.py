@@ -15,6 +15,7 @@ get right on the live run:
 """
 
 import json
+from functools import cache
 
 import pytest
 
@@ -26,8 +27,10 @@ from pokeagent.symbols import Symbols
 
 pytestmark = pytest.mark.unit
 
-#: The submenu row ids, from the anonymous enum in include/pokemon_menu.h.
-POKEMENU = enum_values("include/pokemon_menu.h", "POKEMENU_SUMMARY")
+@cache
+def pokemenu():
+    """Read the submenu enum only after artifact fixtures have run."""
+    return enum_values("include/pokemon_menu.h", "POKEMENU_SUMMARY")
 
 
 # ---- ROM without an emulator ---------------------------------------------
@@ -275,7 +278,7 @@ def make_flight(consts, fly_map, *, map_name="FortreeCity", knower="SEA BIRD",
     f.consts = consts
     f.map = fly_map
     f.map_types = consts.ns("map_types.h")
-    f.pokemenu = POKEMENU
+    f.pokemenu = pokemenu()
     move_ids = [consts.moves[m] for m in moves]
     f.state = FakeState(
         consts, [Mon(move_ids)], held=tuple(badges) + tuple(visited),
@@ -492,10 +495,10 @@ class FakePopup:
 
 
 def popup_flight(*row_names, cursor=0, stuck=False):
-    rows = [POKEMENU[name] for name in row_names]
+    rows = [pokemenu()[name] for name in row_names]
     f = object.__new__(Flight)
     f.last_detail = ""
-    f.pokemenu = POKEMENU
+    f.pokemenu = pokemenu()
     f.emu = fake = FakePopup(rows, cursor=cursor, stuck=stuck)
     f.popup_rows = lambda: list(fake.rows)
     f.popup_cursor = lambda: fake.pos

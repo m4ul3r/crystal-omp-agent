@@ -1260,58 +1260,98 @@ class Driver:
 
         deadline = _time.time() + budget_s
         tmp = tempfile.mkdtemp(prefix="gatemaze-")
-        root = os.path.join(tmp, "root.state")
-        self.save(root)
+        home = self.state_path
+        try:
+            root = os.path.join(tmp, "root.state")
+            self.save(root)
 
-        def node_key():
-            # THE MAP IS PART OF THE NODE. Keyed on position alone, the search
-            # walks out through a warp and calls a same-numbered tile on
-            # another map "arrived": it reported reaching (8,4) while standing
-            # in MossdeepCity_House1, because the gym has a door and (8,4)
-            # exists on both sides of it.
-            return (self.map_name(), self.pos(), signature())
+            def node_key():
+                # THE MAP IS PART OF THE NODE. Keyed on position alone, the search
+                # walks out through a warp and calls a same-numbered tile on
+                # another map "arrived": it reported reaching (8,4) while standing
+                # in MossdeepCity_House1, because the gym has a door and (8,4)
+                # exists on both sides of it.
+                return (self.map_name(), self.pos(), signature())
 
-        start = node_key()
-        if start[1] == target and start[0] == here:
-            return True
-        # BEST-FIRST, not breadth-first. The state space is every cell times
-        # every gate configuration, and plain BFS spent 500 nodes wandering the
-        # south of Fortree's gym while Winona stood at the top. Expanding the
-        # node CLOSEST to the target first turns that into a search that
-        # actually arrives; the dedupe on (position, gates) is what keeps it
-        # honest, because a gate config revisited is a real repeat.
-        import heapq
+            start = node_key()
+            if start[1] == target and start[0] == here:
+                return True
+            # BEST-FIRST, not breadth-first. The state space is every cell times
+            # every gate configuration, and plain BFS spent 500 nodes wandering the
+            # south of Fortree's gym while Winona stood at the top. Expanding the
+            # node CLOSEST to the target first turns that into a search that
+            # actually arrives; the dedupe on (position, gates) is what keeps it
+            # honest, because a gate config revisited is a real repeat.
+            import heapq
 
-        def far(pos):
-            return abs(pos[0] - target[0]) + abs(pos[1] - target[1])
+            def far(pos):
+                return abs(pos[0] - target[0]) + abs(pos[1] - target[1])
 
-        seen = {start}
-        counter = 0
-        # (distance, tiebreak, statefile, moves)
-        frontier = [(far(start[1]), 0, root, [])]
-        nodes = 0
-        winner = None
-        while frontier and winner is None:
-            _dist, _tb, statefile, moves = heapq.heappop(frontier)
-            for mv in list("URDL") + list(extra_moves):
-                if _time.time() > deadline or nodes >= max_nodes:
-                    frontier = []
-                    break
-                self.load(statefile)
-                if self.in_battle():
-                    if on_battle == "fight":
-                        self.fight()
+            seen = {start}
+            counter = 0
+            # (distance, tiebreak, statefile, moves)
+            frontier = [(far(start[1]), 0, root, [])]
+            nodes = 0
+            winner = None
+            while frontier and winner is None:
+                _dist, _tb, statefile, moves = heapq.heappop(frontier)
+                for mv in list("URDL") + list(extra_moves):
+                    if _time.time() > deadline or nodes >= max_nodes:
+                        frontier = []
+                        break
+                    self.load(statefile, adopt=False)
+                    if self.in_battle():
+                        if on_battle == "fight":
+                            self.fight()
+                        else:
+                            continue
+                    before = self.pos()
+                    if mv == "A":
+                        # PRESSING IS A MOVE. Mossdeep's arrows are re-pointed by
+                        # four switches that are `bg_events` of type "sign" -- you
+                        # face them and press A. With only the four steps in the
+                        # move set the search explored 7,480 nodes and could not
+                        # solve the room, because no amount of walking flips a
+                        # switch. The node signature already carries the flags, so
+                        # a press that changes one is simply a new node.
+                        self.emu.run_sequence("A:4 .:24")
+                        self.settle(60)
+                        self.advance_scene(20000)
+                        self.sync_grid()
                     else:
+                        self.step_dir(mv)
+                        self.settle(20)
+                    key = node_key()
+                    nodes += 1
+                    if key in seen:
                         continue
-                before = self.pos()
+                    seen.add(key)
+                    child = os.path.join(tmp, f"n{nodes}.state")
+                    self.save(child)
+                    path = moves + [mv]
+                    if key[1] == target and key[0] == here:
+                        winner = path
+                        break
+                    # A step that neither moved us nor turned a gate is a wall;
+                    # keep it out of the frontier rather than re-expanding it.
+                    if key[1] != before or key[2] != start[2] or key[0] != here:
+                        counter += 1
+                        heapq.heappush(
+                            frontier, (far(key[1]), counter, child, path)
+                        )
+            log.info("[gates] explored %d nodes; %s", nodes,
+                     f"solved in {len(winner)} steps" if winner else "no solution")
+            self.load(root, adopt=False)
+            if winner is None:
+                self.last_goto_reason = (
+                    f"rotating gates: {nodes} nodes explored without reaching "
+                    f"{target} on {here}"
+                )
+                return False
+            for mv in winner:
+                if self.in_battle() and on_battle == "fight":
+                    self.fight()
                 if mv == "A":
-                    # PRESSING IS A MOVE. Mossdeep's arrows are re-pointed by
-                    # four switches that are `bg_events` of type "sign" -- you
-                    # face them and press A. With only the four steps in the
-                    # move set the search explored 7,480 nodes and could not
-                    # solve the room, because no amount of walking flips a
-                    # switch. The node signature already carries the flags, so
-                    # a press that changes one is simply a new node.
                     self.emu.run_sequence("A:4 .:24")
                     self.settle(60)
                     self.advance_scene(20000)
@@ -1319,61 +1359,17 @@ class Driver:
                 else:
                     self.step_dir(mv)
                     self.settle(20)
-                key = node_key()
-                nodes += 1
-                if key in seen:
-                    continue
-                seen.add(key)
-                child = os.path.join(tmp, f"n{nodes}.state")
-                self.save(child)
-                path = moves + [mv]
-                if key[1] == target and key[0] == here:
-                    winner = path
-                    break
-                # A step that neither moved us nor turned a gate is a wall;
-                # keep it out of the frontier rather than re-expanding it.
-                if key[1] != before or key[2] != start[2] or key[0] != here:
-                    counter += 1
-                    heapq.heappush(
-                        frontier, (far(key[1]), counter, child, path)
-                    )
-        log.info("[gates] explored %d nodes; %s", nodes,
-                 f"solved in {len(winner)} steps" if winner else "no solution")
-        self.load(root)
-        # THE SCRATCH DIES WITH THE SEARCH. This used to leak the whole
-        # directory on every exit path, and a search writes one savestate per
-        # expanded node -- 300-400 MB a solve. Thirty-eight of them filled the
-        # tmpfs quota, and what surfaced first was a GAMEPLAY error:
-        # "could not reach LilycoveCity_DepartmentStore_2F: [Errno 122] Disk
-        # quota exceeded". A search bounded in nodes and seconds has to be
-        # bounded on disk too. Loaded `root` first: the states must outlive the
-        # search only until the winning line is replayed from memory.
-        _leftover = tmp
-        shutil.rmtree(_leftover, ignore_errors=True)
-        if winner is None:
-            self.last_goto_reason = (
-                f"rotating gates: {nodes} nodes explored without reaching "
-                f"{target} on {here}"
-            )
-            return False
-        for mv in winner:
-            if self.in_battle() and on_battle == "fight":
-                self.fight()
-            if mv == "A":
-                self.emu.run_sequence("A:4 .:24")
-                self.settle(60)
-                self.advance_scene(20000)
-                self.sync_grid()
-            else:
-                self.step_dir(mv)
-                self.settle(20)
-        ok = self.pos() == target and self.map_name() == here
-        if not ok:
-            self.last_goto_reason = (
-                f"the solution replayed to {self.map_name()} {self.pos()}, "
-                f"not {here} {target}"
-            )
-        return ok
+            ok = self.pos() == target and self.map_name() == here
+            if not ok:
+                self.last_goto_reason = (
+                    f"the solution replayed to {self.map_name()} {self.pos()}, "
+                    f"not {here} {target}"
+                )
+            return ok
+        finally:
+            self.state_path = home
+            # Node and time limits must also bound scratch disk usage.
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def solve_warp_maze(self, x, y, map_name=None, on_battle="fight",
                         max_nodes=48, budget_s=600) -> bool:
@@ -1490,76 +1486,70 @@ class Driver:
         # restart replayed from two badges earlier. The search is a question
         # asked of a scratch timeline; it must leave the real one alone.
         home = self.state_path
-        start = f"{tmp}/s0.state"
-        self.save(start)
-        frontier = [(start, [])]
-        seen: set = set()
-        found = None
-        n = 0
-        while frontier and found is None and len(seen) < max_nodes \
-                and _time.time() - t0 < budget_s:
-            state, hops = frontier.pop(0)
-            self.load(state)
-            unfreeze()
-            if arrived():
-                found = hops
-                break
-            k = key_now()
-            if k in seen:
-                continue
-            seen.add(k)
-            for sp in springs_here():
-                self.load(state)
+        try:
+            start = f"{tmp}/s0.state"
+            self.save(start)
+            frontier = [(start, [])]
+            seen: set = set()
+            found = None
+            n = 0
+            while frontier and found is None and len(seen) < max_nodes \
+                    and _time.time() - t0 < budget_s:
+                state, hops = frontier.pop(0)
+                self.load(state, adopt=False)
                 unfreeze()
-                before = (self.map_name(), self.pos())
+                if arrived():
+                    found = hops
+                    break
+                k = key_now()
+                if k in seen:
+                    continue
+                seen.add(k)
+                for sp in springs_here():
+                    self.load(state, adopt=False)
+                    unfreeze()
+                    before = (self.map_name(), self.pos())
+                    try:
+                        self.goto(*sp, map_name=self.map_name(),
+                                  on_battle=on_battle, max_replans=25)
+                    except TravelInterrupted:
+                        if on_battle != "fight":
+                            raise
+                        self.fight()
+                    unfreeze()
+                    if (self.map_name(), self.pos()) == before:
+                        continue
+                    n += 1
+                    st = f"{tmp}/s{n}.state"
+                    self.save(st)
+                    frontier.append((st, hops + [sp]))
+            if found is None:
+                self.load(start, adopt=False)
+                unfreeze()
+                self.last_goto_reason = (
+                    f"warp-maze search exhausted ({len(seen)} states) heading "
+                    f"for {(x, y)} on {target_map}"
+                )
+                return False
+            log.info("[maze] solved in %d states / %d hops: %s",
+                     len(seen), len(found), found)
+            # Replay on the real timeline.
+            self.load(start, adopt=False)
+            unfreeze()
+            for sp in found:
                 try:
                     self.goto(*sp, map_name=self.map_name(),
-                              on_battle=on_battle, max_replans=25)
+                              on_battle=on_battle, max_replans=30)
                 except TravelInterrupted:
                     if on_battle != "fight":
                         raise
                     self.fight()
                 unfreeze()
-                if (self.map_name(), self.pos()) == before:
-                    continue
-                n += 1
-                st = f"{tmp}/s{n}.state"
-                self.save(st)
-                frontier.append((st, hops + [sp]))
-        if found is None:
-            self.load(start)
-            unfreeze()
+            return self.goto(x, y, map_name=target_map, on_battle=on_battle,
+                             max_replans=30) or arrived()
+        finally:
             self.state_path = home
             shutil.rmtree(tmp, ignore_errors=True)
-            self.last_goto_reason = (
-                f"warp-maze search exhausted ({len(seen)} states) heading "
-                f"for {(x, y)} on {target_map}"
-            )
-            return False
-        log.info("[maze] solved in %d states / %d hops: %s",
-                 len(seen), len(found), found)
-        # Replay on the real timeline.
-        self.load(start)
-        unfreeze()
-        for sp in found:
-            try:
-                self.goto(*sp, map_name=self.map_name(),
-                          on_battle=on_battle, max_replans=30)
-            except TravelInterrupted:
-                if on_battle != "fight":
-                    raise
-                self.fight()
-            unfreeze()
-        self.state_path = home
-        # Every state this search wrote has now been replayed onto the real
-        # timeline, so nothing reads the scratch any more. Leaking it cost
-        # 5.5 GB of tmpfs across one session and surfaced as a GAMEPLAY error
-        # -- "could not reach LilycoveCity_DepartmentStore_2F: [Errno 122]
-        # Disk quota exceeded" -- a miserable way to learn that a search
-        # bounded in nodes and seconds was unbounded on disk.
-        shutil.rmtree(tmp, ignore_errors=True)
-        return self.goto(x, y, map_name=target_map, on_battle=on_battle,
-                         max_replans=30) or arrived()
 
     def can_dive(self) -> bool:
         """DIVE is usable: badge 7 held and a party member knows it."""
@@ -1997,211 +1987,215 @@ class Driver:
         # ever returning to the loop that was watching the clock. Every
         # nested walk checks this.
         prev_deadline = getattr(self, "_journey_deadline", None)
+        if prev_deadline is not None:
+            deadline = (prev_deadline if deadline is None
+                        else min(deadline, prev_deadline))
         self._journey_deadline = deadline
-        attempts: dict[tuple[str, str], int] = {}
-        #: One step-outside per journey. Retrying it would loop on a building
-        #: whose door genuinely does not help.
-        stepped_out = False
-        for _leg in range(max_legs):
-            self.heartbeat(f"leg {_leg + 1} to {dest_map} from "
-                           f"{self.map_name()} {self.pos()}")
-            if deadline is not None and _time.time() > deadline:
-                self.last_goto_reason = (
-                    f"travel budget spent ({budget_s:.0f}s) at "
-                    f"{self.map_name()} {self.pos()} heading for {dest_map}; "
-                    f"resuming next cycle"
-                )
-                log.info("[travel] %s", self.last_goto_reason)
-                self._journey_deadline = prev_deadline
-                return False
-            if self.in_battle():
-                if on_battle == "fight":
-                    self.fight()
+        try:
+            attempts: dict[tuple[str, str], int] = {}
+            #: One step-outside per journey. Retrying it would loop on a building
+            #: whose door genuinely does not help.
+            stepped_out = False
+            for _leg in range(max_legs):
+                self.heartbeat(f"leg {_leg + 1} to {dest_map} from "
+                               f"{self.map_name()} {self.pos()}")
+                if deadline is not None and _time.time() > deadline:
+                    self.last_goto_reason = (
+                        f"travel budget spent at "
+                        f"{self.map_name()} {self.pos()} heading for {dest_map}; "
+                        f"resuming next cycle"
+                    )
+                    log.info("[travel] %s", self.last_goto_reason)
+                    return False
+                if self.in_battle():
+                    if on_battle == "fight":
+                        self.fight()
+                        self.advance_scene(40000)
+                    else:
+                        raise TravelInterrupted(self.map_name(), self.pos(), dest_map)
+                if self.scene_active():
                     self.advance_scene(40000)
-                else:
-                    raise TravelInterrupted(self.map_name(), self.pos(), dest_map)
-            if self.scene_active():
-                self.advance_scene(40000)
-            here = self.map_name()
-            if here == dest_map:
-                self._journey_deadline = prev_deadline
-                return True
-            # Reachability-aware: the exit has to be one we can WALK to. Route
-            # 104's northern seam to Rustboro is real, listed, and unusable
-            # from its southern half -- the two halves only meet through
-            # Petalburg Woods -- so map-level routing planned that seam and the
-            # journey failed twelve times with nothing to say but "could not
-            # cross the U seam". Re-planned every leg, so a warp that lands
-            # somewhere unexpected is corrected on the next pass.
-            # A long way round can be many hops -- Route 112's southern half
-            # reaches Rustboro only via Mauville, Verdanturf and Rusturf
-            # Tunnel, which is seven -- and the old 40-hop default quietly
-            # returned nothing for journeys that were perfectly possible.
-            # Mark the live bodies on THIS map before the first plan, not just
-            # after it. `mark_blocked` is what invalidates the reachability
-            # cache, so skipping it here meant the opening plan was drawn
-            # against whatever a previous `goto` had cached -- and if an NPC
-            # had been standing in a doorway at that moment, the cached answer
-            # said the exit did not exist. The plan came back None, travel
-            # raised "no walkable route", and the marking below -- which would
-            # have fixed it -- was inside the `if legs:` branch it never
-            # reached.
-            #
-            # Live on a brand-new save: Littleroot's north seam to Route 101,
-            # every gate variable satisfied and the connection right there in
-            # exits(), reported unreachable until the cache was cleared.
-            self._mark_npcs(here)
-            legs = self.nav.route_legs(here, self.pos(), dest_map,
-                                       max_hops=80, deadline=deadline)
-            # Plan, then LEARN, then re-plan. `_mark_npcs` only knows the map
-            # that is loaded, so the first plan is drawn on maps whose shut
-            # gates are invisible -- and Route 111's desert is shut. The
-            # router therefore proposed Mauville -> Route 111 -> Route 113,
-            # walked into the sandstorm, failed, and proposed it again: three
-            # identical legs and a loop. Marking the gates on every map the
-            # plan names costs one pass over already-parsed script data and
-            # reroutes around the desert via Fiery Path, which is the road the
-            # game actually intends.
-            # LIVE BODIES BEFORE PLANNING, not just shut gates.
-            #
-            # `goto` marks NPCs every pass and `mark_blocked` invalidates the
-            # reachability cache, but travel marked only gates -- so it planned
-            # against whatever the cache still held from the last goto. If an
-            # NPC had been standing in a doorway then, the cached answer said
-            # the exit did not exist, and travel reported "no walkable route"
-            # for a road that was wide open.
-            #
-            # Caught on a brand-new save: Littleroot's north seam to Route 101,
-            # every gate variable already satisfied (INTRO_STATE 8,
-            # LITTLEROOT_STATE 1) and the connection right there in exits().
-            # route_legs said None; marking NPCs (which clears the cache) made
-            # the same call return a one-leg plan and the walk succeeded
-            # immediately. NPCs wander, so a reachability answer that outlives
-            # them is not an answer.
-            if legs:
-                for leg in legs:
-                    self._mark_gates(leg["to_map"])
-                self._mark_gates(here)
+                here = self.map_name()
+                if here == dest_map:
+                    return True
+                # Reachability-aware: the exit has to be one we can WALK to. Route
+                # 104's northern seam to Rustboro is real, listed, and unusable
+                # from its southern half -- the two halves only meet through
+                # Petalburg Woods -- so map-level routing planned that seam and the
+                # journey failed twelve times with nothing to say but "could not
+                # cross the U seam". Re-planned every leg, so a warp that lands
+                # somewhere unexpected is corrected on the next pass.
+                # A long way round can be many hops -- Route 112's southern half
+                # reaches Rustboro only via Mauville, Verdanturf and Rusturf
+                # Tunnel, which is seven -- and the old 40-hop default quietly
+                # returned nothing for journeys that were perfectly possible.
+                # Mark the live bodies on THIS map before the first plan, not just
+                # after it. `mark_blocked` is what invalidates the reachability
+                # cache, so skipping it here meant the opening plan was drawn
+                # against whatever a previous `goto` had cached -- and if an NPC
+                # had been standing in a doorway at that moment, the cached answer
+                # said the exit did not exist. The plan came back None, travel
+                # raised "no walkable route", and the marking below -- which would
+                # have fixed it -- was inside the `if legs:` branch it never
+                # reached.
+                #
+                # Live on a brand-new save: Littleroot's north seam to Route 101,
+                # every gate variable satisfied and the connection right there in
+                # exits(), reported unreachable until the cache was cleared.
                 self._mark_npcs(here)
-                legs = self.nav.route_legs(
-                    here, self.pos(), dest_map, max_hops=80,
-                    deadline=deadline)
-            if legs:
-                edge = legs[0]["edge"]
-                nxt = legs[0]["to_map"]
-            elif not stepped_out and not self.flight.flyable_here():
-                # INDOORS IS NOT NOWHERE. `route_legs` plans over the warp and
-                # seam graph, and from inside a building the only edge is the
-                # door -- which it will not cross to reach a destination that
-                # is several maps beyond it. So a story step asked for from
-                # a lab, a Centre or a shop answers "no walkable route" and
-                # the caller gives up on the DESTINATION rather than on the
-                # building.
+                legs = self.nav.route_legs(here, self.pos(), dest_map,
+                                           max_hops=80, deadline=deadline)
+                # Plan, then LEARN, then re-plan. `_mark_npcs` only knows the map
+                # that is loaded, so the first plan is drawn on maps whose shut
+                # gates are invisible -- and Route 111's desert is shut. The
+                # router therefore proposed Mauville -> Route 111 -> Route 113,
+                # walked into the sandstorm, failed, and proposed it again: three
+                # identical legs and a loop. Marking the gates on every map the
+                # plan names costs one pass over already-parsed script data and
+                # reroutes around the desert via Fiery Path, which is the road the
+                # game actually intends.
+                # LIVE BODIES BEFORE PLANNING, not just shut gates.
                 #
-                # That is exactly how a fresh run stalled: the very first
-                # objective is "beat the rival on Route 103", it was issued
-                # while standing in Birch's lab, and it failed eight times
-                # with "no walkable route from
-                # LittlerootTown_ProfessorBirchsLab to Route103". Eight
-                # failures tripped the sticky give-up, the loop fell through
-                # to training, and it then ground 240 battles on Route 101
-                # taking its starter from L5 to L20 without ever advancing the
-                # story. The same trap caught the collector at Devon Corp 2F.
+                # `goto` marks NPCs every pass and `mark_blocked` invalidates the
+                # reachability cache, but travel marked only gates -- so it planned
+                # against whatever the cache still held from the last goto. If an
+                # NPC had been standing in a doorway then, the cached answer said
+                # the exit did not exist, and travel reported "no walkable route"
+                # for a road that was wide open.
                 #
-                # `step_outside` already knows how to leave a building; it was
-                # only ever wired into Fly. Walk out and re-plan ONCE.
-                stepped_out = True
-                if self.flight.step_outside():
-                    log.info("travel: stepped outside to %s to plan for %s",
-                             self.map_name(), dest_map)
-                    continue
-                raise TravelError(
-                    f"no walkable route from {here} to {dest_map}: indoors "
-                    f"and could not step outside{self._gate_hint(here)}"
-                )
-            else:
-                # NO graph fallback. The map graph knows which maps touch;
-                # it does not know which of them can be REACHED from where the
-                # player is standing, and a map's halves are often separate
-                # places. Route 112 is split by the mountain, so the graph
-                # cheerfully proposed crossing north into Route 113 from a
-                # component with no northern border at all -- and travel tried
-                # it 318 times, because a plan that cannot be walked fails
-                # exactly the same way each attempt.
-                #
-                # route_legs already answers the real question. When it says
-                # no, that is the answer.
-                raise TravelError(
-                    f"no walkable route from {here} to {dest_map}"
-                    f"{self._gate_hint(here)}"
-                )
-            seen = attempts[(here, nxt)] = attempts.get((here, nxt), 0) + 1
-            if seen >= 3:
-                loop = " -> ".join(m for m, _ in sorted(
-                    attempts, key=lambda k: -attempts[k])[:4])
-                raise TravelError(
-                    f"stuck in a loop heading for {dest_map}: tried "
-                    f"{here} -> {nxt} {seen} times without progress "
-                    f"(cycling {loop}){self._gate_hint(here)}"
-                )
-            if edge["kind"] == "dive":
-                # A vertical seam: walk to a diveable tile, then press A.
-                gate = edge.get("cross_at")
-                if gate and self.pos() != tuple(gate):
-                    if not self.goto(*gate, map_name=here,
-                                     on_battle=on_battle, max_replans=40):
-                        raise TravelError(
-                            f"could not reach the dive gate {tuple(gate)} on "
-                            f"{here}: {self.last_goto_reason}"
-                        )
-                if not self.dive():
-                    raise TravelError(
-                        f"could not dive to {nxt} from {self.pos()}: "
-                        f"{self.last_field_reason}"
-                    )
-                continue
-            if edge["kind"] == "warp":
-                if not self.take_warp(edge["x"], edge["y"]):
-                    # Jagged Pass's exits are ash grass: a wild encounter can
-                    # open in the middle of the entry-plus-follow-through and
-                    # eat the firing step. That is a BATTLE, not a broken
-                    # warp, and reporting "could not take the warp" for it
-                    # sent the caller away from a door that works fine.
-                    if self.in_battle():
-                        if on_battle == "fight":
-                            self.fight()
-                            self.advance_scene(40000)
-                            continue
-                        raise TravelInterrupted(
-                            self.map_name(), self.pos(), dest_map)
-                    raise TravelError(
-                        f"could not take the warp to {nxt}: {self.last_warp_reason}"
-                    )
-            else:
-                if not self._cross_seam(here, edge, on_battle):
-                    # SAME RECOVERY AS THE WARP BRANCH ABOVE. A wild that
-                    # appears on the walk to the crossing cell leaves the
-                    # crossing untried, and reporting it as "could not cross
-                    # the seam" sends the caller away from a border that works.
+                # Caught on a brand-new save: Littleroot's north seam to Route 101,
+                # every gate variable already satisfied (INTRO_STATE 8,
+                # LITTLEROOT_STATE 1) and the connection right there in exits().
+                # route_legs said None; marking NPCs (which clears the cache) made
+                # the same call return a one-leg plan and the walk succeeded
+                # immediately. NPCs wander, so a reachability answer that outlives
+                # them is not an answer.
+                if legs:
+                    for leg in legs:
+                        self._mark_gates(leg["to_map"])
+                    self._mark_gates(here)
+                    self._mark_npcs(here)
+                    legs = self.nav.route_legs(
+                        here, self.pos(), dest_map, max_hops=80,
+                        deadline=deadline)
+                if legs:
+                    edge = legs[0]["edge"]
+                    nxt = legs[0]["to_map"]
+                elif not stepped_out and not self.flight.flyable_here():
+                    # INDOORS IS NOT NOWHERE. `route_legs` plans over the warp and
+                    # seam graph, and from inside a building the only edge is the
+                    # door -- which it will not cross to reach a destination that
+                    # is several maps beyond it. So a story step asked for from
+                    # a lab, a Centre or a shop answers "no walkable route" and
+                    # the caller gives up on the DESTINATION rather than on the
+                    # building.
                     #
-                    # Route 116 is wall-to-wall grass and Rustboro is through
-                    # its west edge: a fresh run logged `could not cross the L
-                    # seam to RustboroCity` six times, abandoned "trigger the
-                    # stolen Devon Goods errand", and ground the route instead
-                    # at 0 badges. Driven by hand -- fight the wild, then
-                    # goto(0,8) and one step L -- it crossed first try.
-                    if self.in_battle():
-                        if on_battle == "fight":
-                            self.fight()
-                            self.advance_scene(40000)
-                            continue
-                        raise TravelInterrupted(
-                            self.map_name(), self.pos(), dest_map)
+                    # That is exactly how a fresh run stalled: the very first
+                    # objective is "beat the rival on Route 103", it was issued
+                    # while standing in Birch's lab, and it failed eight times
+                    # with "no walkable route from
+                    # LittlerootTown_ProfessorBirchsLab to Route103". Eight
+                    # failures tripped the sticky give-up, the loop fell through
+                    # to training, and it then ground 240 battles on Route 101
+                    # taking its starter from L5 to L20 without ever advancing the
+                    # story. The same trap caught the collector at Devon Corp 2F.
+                    #
+                    # `step_outside` already knows how to leave a building; it was
+                    # only ever wired into Fly. Walk out and re-plan ONCE.
+                    stepped_out = True
+                    if self.flight.step_outside():
+                        log.info("travel: stepped outside to %s to plan for %s",
+                                 self.map_name(), dest_map)
+                        continue
                     raise TravelError(
-                        f"could not cross the {edge['direction']} seam to "
-                        f"{nxt}{self._gate_hint(here)}"
+                        f"no walkable route from {here} to {dest_map}: indoors "
+                        f"and could not step outside{self._gate_hint(here)}"
                     )
-        raise TravelError(f"gave up after {max_legs} legs heading for {dest_map}")
+                else:
+                    # NO graph fallback. The map graph knows which maps touch;
+                    # it does not know which of them can be REACHED from where the
+                    # player is standing, and a map's halves are often separate
+                    # places. Route 112 is split by the mountain, so the graph
+                    # cheerfully proposed crossing north into Route 113 from a
+                    # component with no northern border at all -- and travel tried
+                    # it 318 times, because a plan that cannot be walked fails
+                    # exactly the same way each attempt.
+                    #
+                    # route_legs already answers the real question. When it says
+                    # no, that is the answer.
+                    raise TravelError(
+                        f"no walkable route from {here} to {dest_map}"
+                        f"{self._gate_hint(here)}"
+                    )
+                seen = attempts[(here, nxt)] = attempts.get((here, nxt), 0) + 1
+                if seen >= 3:
+                    loop = " -> ".join(m for m, _ in sorted(
+                        attempts, key=lambda k: -attempts[k])[:4])
+                    raise TravelError(
+                        f"stuck in a loop heading for {dest_map}: tried "
+                        f"{here} -> {nxt} {seen} times without progress "
+                        f"(cycling {loop}){self._gate_hint(here)}"
+                    )
+                if edge["kind"] == "dive":
+                    # A vertical seam: walk to a diveable tile, then press A.
+                    gate = edge.get("cross_at")
+                    if gate and self.pos() != tuple(gate):
+                        if not self.goto(*gate, map_name=here,
+                                         on_battle=on_battle, max_replans=40):
+                            raise TravelError(
+                                f"could not reach the dive gate {tuple(gate)} on "
+                                f"{here}: {self.last_goto_reason}"
+                            )
+                    if not self.dive():
+                        raise TravelError(
+                            f"could not dive to {nxt} from {self.pos()}: "
+                            f"{self.last_field_reason}"
+                        )
+                    continue
+                if edge["kind"] == "warp":
+                    if not self.take_warp(edge["x"], edge["y"]):
+                        # Jagged Pass's exits are ash grass: a wild encounter can
+                        # open in the middle of the entry-plus-follow-through and
+                        # eat the firing step. That is a BATTLE, not a broken
+                        # warp, and reporting "could not take the warp" for it
+                        # sent the caller away from a door that works fine.
+                        if self.in_battle():
+                            if on_battle == "fight":
+                                self.fight()
+                                self.advance_scene(40000)
+                                continue
+                            raise TravelInterrupted(
+                                self.map_name(), self.pos(), dest_map)
+                        raise TravelError(
+                            f"could not take the warp to {nxt}: {self.last_warp_reason}"
+                        )
+                else:
+                    if not self._cross_seam(here, edge, on_battle):
+                        # SAME RECOVERY AS THE WARP BRANCH ABOVE. A wild that
+                        # appears on the walk to the crossing cell leaves the
+                        # crossing untried, and reporting it as "could not cross
+                        # the seam" sends the caller away from a border that works.
+                        #
+                        # Route 116 is wall-to-wall grass and Rustboro is through
+                        # its west edge: a fresh run logged `could not cross the L
+                        # seam to RustboroCity` six times, abandoned "trigger the
+                        # stolen Devon Goods errand", and ground the route instead
+                        # at 0 badges. Driven by hand -- fight the wild, then
+                        # goto(0,8) and one step L -- it crossed first try.
+                        if self.in_battle():
+                            if on_battle == "fight":
+                                self.fight()
+                                self.advance_scene(40000)
+                                continue
+                            raise TravelInterrupted(
+                                self.map_name(), self.pos(), dest_map)
+                        raise TravelError(
+                            f"could not cross the {edge['direction']} seam to "
+                            f"{nxt}{self._gate_hint(here)}"
+                        )
+            raise TravelError(f"gave up after {max_legs} legs heading for {dest_map}")
+        finally:
+            self._journey_deadline = prev_deadline
 
     #: Tasks that own the whole screen and must be BACKED OUT of, never
     #: advanced. Matched by prefix because the engine names variants
@@ -2311,13 +2305,12 @@ class Driver:
         return out
 
     def sync_grid(self, rect=None) -> int:
-        """Push the live map into nav so PATHING sees the open barriers."""
+        """Reconcile observed live tiles, including barriers that closed."""
         name = self.map_name()
-        # ONLY the cells that actually differ. Storing the whole grid would
-        # report "synced 210" on a map where nothing moved, and an override
-        # that merely restates the shipped data is a lie waiting to be read.
-        cells = {(x, y): live for x, y, _static, live in self.grid_drift(rect)}
-        changed = self.nav.set_live_cells(name, cells)
+        # Send unchanged observations too: they remove stale overrides after
+        # a barrier closes or an older savestate is loaded. Missing cells are
+        # unknown, not evidence that the shipped tile has returned.
+        changed = self.nav.set_live_cells(name, self.live_grid(rect))
         if changed:
             log.info("synced %d live cells on %s", changed, name)
         return changed
