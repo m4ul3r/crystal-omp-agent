@@ -1,0 +1,7 @@
+#!/bin/sh
+# Launcher for the Sapphire agent CLI. Uses the tool's own venv and, when the
+# system libmgba is absent, the vendored copy under ./vendor.
+DIR="$(cd "$(dirname "$0")" && pwd)"
+PYTHONPATH="$DIR" PYTHONWARNINGS=ignore \
+LD_LIBRARY_PATH="$DIR/vendor/lib:$LD_LIBRARY_PATH" \
+exec "$DIR/.venv/bin/python" -m pokeagent.cli "$@"

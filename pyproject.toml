@@ -1,14 +1,34 @@
 [project]
-name = "crystal-agent"
+name = "pokeagent"
 version = "0.1.0"
-description = "Headless Pokemon Crystal driver: sym-derived maps, savestate forks, NDJSON/autopilot servers."
-requires-python = ">=3.12,<3.14"
+description = "Headless Pokemon drivers for agents: disassembly-derived data, savestate forks, NDJSON/autopilot servers, and a desktop widget."
+# WIDENED TO ADMIT BOTH LANES, and the emulators are NOT installed together.
+#
+# The two backends disagree about Python: PyBoy publishes wheels for 3.12+,
+# while the `mgba` wheels are built per CPython minor and the pin that matches
+# the Gen-3 savestates in this tree is 3.11. That is a real constraint, not a
+# packaging preference -- a savestate is a whole machine state and is coupled
+# to the core version that wrote it, so a floating core invalidates every
+# `.state` on disk.
+#
+# So neither emulator is a hard dependency. Pick a lane with an extra:
+#
+#     uv pip install -e '.[gen2]'   # Crystal / Red, PyBoy, needs >=3.12
+#     uv pip install -e '.[gen3]'   # Sapphire, mGBA, needs 3.11
+#
+# Installing both in one environment is not supported and does not need to be:
+# the lanes never import each other.
+requires-python = ">=3.11,<3.14"
 dependencies = [
-    # Exact pin: savestate format is version-coupled. A floating pyboy invalidates
-    # every .state in saves/ (same rationale as ai-plays-pokemon).
-    "pyboy==2.7.0",
     "pillow>=12,<13",
 ]
+
+[project.optional-dependencies]
+# Exact pin: the savestate format is version-coupled. A floating pyboy
+# invalidates every .state in saves/ (same rationale as ai-plays-pokemon).
+gen2 = ["pyboy==2.7.0"]
+# Exact pin for the same reason, plus the wheels are per CPython minor.
+gen3 = ["mgba==0.10.2"]
 
 [dependency-groups]
 dev = [
@@ -17,6 +37,10 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+# Collects both lanes: the Crystal suite under tests/{unit,integration} and
+# the Sapphire suite under tests/gen3/. Each skips itself when its own build
+# artifacts are absent, so a checkout set up for one lane does not fail on
+# the other's tests.
 testpaths = ["tests"]
 addopts = "-q -m \"not integration\""
 markers = [
