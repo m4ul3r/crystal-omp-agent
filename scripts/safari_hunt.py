@@ -353,6 +353,11 @@ class SafariCollector(Collector):
     #: balls, never a stalemate.
     SAFARI_TURNS = 48
 
+    #: How often the fallback press below was needed at all, over the whole
+    #: run. Zero means the menu always arrived on its own and no input this
+    #: script sends can ever be mistaken for a menu answer.
+    blind_presses = 0
+
     def fight(self):
         d = self.d
         for _ in range(80):
@@ -394,20 +399,29 @@ class SafariCollector(Collector):
                 b.handle_nickname(None)
                 continue
             if not b.at_action_menu():
-                # WAIT FOR THE MENU, DO NOT PRESS A AT IT. Gen 3 battle text
-                # advances on its own timer; the A press is only insurance
-                # against a line that really is waiting on a button. Pressing
-                # it on every poll loses the race the moment the four-option
-                # box becomes interactive mid-press, and A on the box's
-                # default cursor is BALL: measured, 5 of 9 encounters this run
-                # was told to RUN from ended `B_OUTCOME_CAUGHT` with a Safari
-                # Ball spent and an ODDISH named for it
-                # (`bx_battle_menu_t6_2` cursor 0,
-                # src/battle_controller_safari.c:207-228).
+                # NEVER PRESS A WHILE THE MENU MIGHT BE ARRIVING. Gen 3 battle
+                # text advances on its own; the intro (sprite slide, "Wild X
+                # appeared!") just takes longer than a short poll. An A press
+                # issued in that window is consumed by the four-option box the
+                # instant it becomes interactive, and its cursor is zeroed at
+                # battle setup (`gActionSelectionCursor[i] = 0`,
+                # src/battle_controllers.c:92) -- cursor 0 is BALL
+                # (`bx_battle_menu_t6_2`, src/battle_controller_safari.c:207-228).
+                #
+                # Measured with A: roughly half of the encounters this hunt was
+                # told to RUN from ended `B_OUTCOME_CAUGHT` with a Safari Ball
+                # spent and `safari_flee` never even called, and one encounter
+                # burned NINE balls that way.
+                #
+                # B is the fix, not a longer sleep: that menu handles A_BUTTON
+                # and the d-pad and nothing else, so a stray B is discarded
+                # while still dismissing any battle line that does wait on a
+                # button.
                 if b._wait(lambda: b.at_action_menu() or not b.active()
-                           or b.outcome(), timeout_frames=180):
+                           or b.outcome(), timeout_frames=600):
                     continue
-                d.emu.run_sequence("A:2 .:10")
+                self.blind_presses += 1
+                d.emu.run_sequence("B:2 .:10")
                 continue
             if not want or d.state.safari_balls() <= 0:
                 b.safari_flee()
@@ -421,8 +435,9 @@ class SafariCollector(Collector):
         d.advance_scene(40_000)
         result = {"outcome": b.outcome_name(), "thrown": thrown,
                   "balls": d.state.safari_balls()}
-        log.info("[safari] %s after %d ball(s), %d left", result["outcome"],
-                 thrown, result["balls"])
+        log.info("[safari] %s after %d ball(s), %d left (%d fallback press(es)"
+                 " this run)", result["outcome"], thrown, result["balls"],
+                 self.blind_presses)
         return result
 
 
@@ -436,13 +451,172 @@ def wanted_here(c, area: str) -> set:
         return {-1}          # unreadable: assume there is still work
 
 
+def safe_walk(c, path, deadline) -> str:
+    """Walk `path`, one step at a time, stopping the instant a battle starts.
+
+    THE SAFARI ZONE CANNOT BE PACED WITH `goto`, and this is the whole reason
+    this function exists instead of `Collector.pace_map`.
+
+    When an encounter fires mid-chunk, `step_dir` reports
+    "scene-owns-input (gPlayerAvatar.preventStep)", `walk` returns False, and
+    `goto` answers that by calling `advance_scene(40000)`
+    (pokeagent/trek.py:933-936). That is right for a frozen player and wrong
+    for a battle: `advance_scene` presses A whenever the picture stops
+    changing, and A on the Safari four-option box is BALL -- its cursor is
+    zeroed at battle setup (`gActionSelectionCursor[i] = 0`,
+    src/battle_controllers.c:92) and cursor 0 emits the throw
+    (`bx_battle_menu_t6_2`, src/battle_controller_safari.c:207-228).
+
+    Traced, not inferred. One `goto` call across Northeast's grass:
+
+        PRESS 'A:4 .:14' balls 30 | advance_scene:680 <- goto:934
+        PRESS 'A:4 .:14' balls 29 | advance_scene:680 <- goto:934
+        ... 25 presses, six balls gone, and the walk returned with
+        tasks ['Task_HandleInput', 'Task_80B64D4', 'Task_NamingScreenMain']
+
+    -- six Safari Balls spent on mons the catcher had never even been asked
+    about, one of them caught and waiting to be named. Over a trip that is
+    the entire ball budget.
+
+    So the walk is driven here, with `Driver.walk` on one-step chunks: it
+    presses the d-pad (which the Safari menu merely moves its cursor with) and
+    A only to MOUNT SURF, never to answer a battle. Returns "battle", "left"
+    (the trip ended under us), or "done".
+    """
+    d = c.d
+    for step in path:
+        if d.in_battle():
+            return "battle"
+        if not d.state.in_safari():
+            return "left"
+        if time.time() > deadline:
+            return "done"
+        d.walk([step])
+        if d.in_battle():
+            return "battle"
+        if d.scene_active():
+            # Waits it out and presses NOTHING (trek.py:563-574), which is
+            # the distinction `advance_scene` does not make.
+            d.drain_scene(6000)
+            if d.in_battle():
+                return "battle"
+    return "done"
+
+
+def _resolve(c, got: int) -> int:
+    """Play the battle in front of us and say whether it added a dex entry."""
+    before = c._caught_count()
+    c.fight()
+    c.d.advance_scene(20_000)
+    if c._caught_count() > before:
+        c.save()
+        return got + 1
+    return got
+
+
+def pace_safari(c, deadline, terrain: str = "grass") -> int:
+    """`Collector.pace_map`'s job -- cross this terrain until time runs out."""
+    d = c.d
+    got = 0
+    if terrain == "water":
+        # Water is only traversable with this set: it is what makes a
+        # land->water step a MOUNT rather than a refused walk.
+        d.nav.surfing = True
+    cells = c.terrain_cells(terrain)
+    if not cells:
+        log.info("   no reachable %s on %s", terrain, d.map_name())
+        return 0
+    log.info("   %d reachable %s cells on %s, nearest %s", len(cells),
+             terrain, d.map_name(), cells[0])
+    i, blocked = 0, 0
+    while time.time() < deadline and d.state.in_safari() and blocked < 8:
+        if c.watch.stalled:
+            log.info("   abandoning %s: %s", d.map_name(), c.watch.detail)
+            c.watch.clear()
+            break
+        i += 1
+        # STAY INSIDE THE PATCH. A wild encounter is rolled per step taken ON
+        # the terrain, so a long leg across the map's bare floor spends the
+        # Safari's 500-step clock without ever rolling. Picking the far side
+        # of the map (`cells[(i * 7) % len(cells)]`, which is what
+        # `Collector.pace_map` does) got 5 encounters out of a whole 424-step
+        # trip. These are re-sorted from where we are STANDING each round and
+        # a near one is taken, so a leg is a few tiles of grass rather than a
+        # cross-country walk that happens to end on some.
+        px, py = d.pos()
+        near = sorted(cells,
+                      key=lambda t: abs(t[0] - px) + abs(t[1] - py))
+        target = near[2 + (i % 8)] if len(near) > 10 else near[-1]
+        if target == d.pos():
+            continue
+        path = d.nav.find_path(d.map_name(), d.pos(), target, d.elevation())
+        if not path:
+            blocked += 1
+            continue
+        what = safe_walk(c, path, deadline)
+        if what == "battle":
+            got = _resolve(c, got)
+            blocked = 0
+        elif what == "left":
+            break
+        else:
+            blocked = 0 if d.pos() == target else blocked + 1
+    return got
+
+
+def fish_safari(c, deadline, casts: int = 16) -> int:
+    """Cast at the nearest shore. A cast costs no Safari STEP, only balls."""
+    d = c.d
+    got = 0
+    for _ in range(casts):
+        if time.time() > deadline or not d.state.in_safari():
+            break
+        # PLAY THE BATTLE THE LAST CAST STARTED. `Fishing.fish` returns False
+        # for a rod that hooked something the caller never answered, and its
+        # reason then reads `cast-failed: already in a battle` -- thirteen of
+        # those in a row on one trip, every later cast refused while a Safari
+        # battle sat open. A live battle is the FIRST thing to clear, not a
+        # reason to skip to the next cast.
+        if d.in_battle():
+            got = _resolve(c, got)
+            continue
+        spot = c.water_edge()
+        if spot is None:
+            log.info("   no shore to fish from on %s", d.map_name())
+            break
+        cell, face = spot
+        if d.pos() != cell:
+            path = d.nav.find_path(d.map_name(), d.pos(), cell, d.elevation())
+            if not path:
+                break
+            if safe_walk(c, path, deadline) == "battle":
+                got = _resolve(c, got)
+                continue
+        if d.pos() != cell:
+            continue
+        if d.facing() != face:
+            # TURN, DO NOT STEP: a held key walks onto the shore cell instead
+            # of aiming the rod at the water.
+            d.emu.run_sequence(f"{face}:4 .:12")
+            if d.facing() != face:
+                continue
+        if not d.fish():
+            if d.last_fish_reason == "no-rod":
+                break
+            if d.in_battle():
+                got = _resolve(c, got)
+            continue
+        got = _resolve(c, got)
+    return got
+
+
 def hunt(c, area: str, deadline) -> int:
     """Spend the rest of the trip on this quadrant's encounter terrain.
 
     Sliced, and re-checked between slices, because the trip can END under the
     hunt's feet: at zero steps `gUnknown_081C3448` warps the player back to
-    the gate (safari_zone.inc:25-32), and `pace_map` would then keep asking
-    `goto` for cells on a map we are no longer standing on.
+    the gate (safari_zone.inc:25-32), and the pacer would then keep planning
+    routes on a map we are no longer standing on.
     """
     d = c.d
     got = 0
@@ -475,8 +649,8 @@ def hunt(c, area: str, deadline) -> int:
             if time.time() >= deadline or not d.state.in_safari():
                 break
             slice_end = min(deadline, time.time() + 180.0)
-            got += (c.fish_map(slice_end) if terrain == "rod"
-                    else c.pace_map(slice_end, terrain))
+            got += (fish_safari(c, slice_end) if terrain == "rod"
+                    else pace_safari(c, slice_end, terrain))
         if d.state.in_safari() and d.state.safari_steps() >= steps_before:
             stuck += 1
             log.info("hunt: a whole round spent no steps (%s at %s) -- "

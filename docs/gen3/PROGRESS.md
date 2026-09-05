@@ -3874,10 +3874,11 @@ do anything hard. In order:
 
 ## session lead — dex 99 -> 111, eight parallel hunters (Sep 5 2026)
 
-**Canonical: `saves/line3.state` = dex 111/178 (62.4%), MtPyre_Summit (34,5),
+**Canonical: `saves/line3.state` = dex 113/178 (63.5%), Route121_SafariZoneEntrance (9,4),**
 clean field state.** Milestones this session, each a NEW filename:
 `milestone-dex105.state`, `milestone-dex107.state`, `milestone-dex108.state`,
-`milestone-dex111.state`. Fork from the newest; never drive `line3.state`
+`milestone-dex111.state`, `milestone-dex113.state`. Fork from the newest;
+never drive `line3.state`
 directly (`pyre_shoal.py` refuses it on purpose).
 
 ### What landed
@@ -3891,6 +3892,7 @@ directly (`pyre_shoal.py` refuses it on purpose).
 | CLAYDOL, BANETTE | `skypillar_grind.py` | 12 min |
 | CRAWDAUNT | evolved itself at L30 walking off the pillar | free |
 | VULPIX, DUSKULL, CHIMECHO | `pyre_shoal.py --legs pyre` | 13 min |
+| RHYHORN, PINSIR | `safari_hunt.py --area nw` | 9 min |
 
 ### Harness bugs fixed (all were mine, all found by playing)
 1. **`naming.py accept()` was TYPING the letter "A".** It sent `START` then
@@ -3936,7 +3938,10 @@ directly (`pyre_shoal.py` refuses it on purpose).
   silently reverted dex 107 -> 105. Milestones are what saved it.
 
 ### Next
-70 to go, of which 16 are unreachable by design (7 version-exclusive,
-6 trade-evolution, 3 event-only), so 62 are achievable. Cheapest first:
+65 to go, of which 16 are unreachable by design (7 version-exclusive,
+6 trade-evolution, 3 event-only), so 49 are achievable. Cheapest first:
+`safari_hunt --area ne` (HERACROSS, PHANPY — banked already on
+`saves/sb-ne-out.state`, ~4 min to reproduce), SEAKING (20% of the Safari
+super-rod table and a cast costs no steps),
 `pyre_shoal --legs shoal` (SPHEAL now, SNORUNT at low tide), `safari_hunt`
 (HERACROSS, PHANPY), `breed.py --baby azurill` once the incense equips.
