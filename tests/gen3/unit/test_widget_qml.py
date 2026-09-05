@@ -78,6 +78,9 @@ def test_the_panel_still_renders_every_section_the_feed_publishes():
         "the opponent is no longer drawn"
     assert "BadgePips" in text and "Model.badgeCount(feed.state)" in text, \
         "the badge case is gone"
+    # Who is driving lives on the hero's trailing edge, not in a section.
+    assert "AgentCard" in text and "Model.agent(feed.state)" in text, \
+        "the agent card is gone"
 
 
 def test_the_stage_helpers_the_panel_calls_exist_in_the_model():

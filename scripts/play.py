@@ -112,6 +112,8 @@ class Session:
     def __init__(self, state, minutes, game="sapphire", use_brain=True,
                  feed_name="default", session="play"):
         self.brain = Brain() if use_brain else None
+        self.session = session
+        self.state_path = str(state)
         self.d = Driver(state, game=game, brain=self.brain)
         self.objective = ObjectiveEngine(self.d)
         self.quest = Quest(self.d)
@@ -165,6 +167,7 @@ class Session:
             existing.detach()
             self.d.feed = existing = None
         self.feed = existing or LiveFeed(feed_name).attach(self.d)
+        self.feed.extra["agent"] = self.agent_card()
         #: minutes <= 0 means run until stopped. The user's framing for this
         #: project is an idle game -- something that keeps going in the
         #: background -- and a fixed budget silently ends the run and leaves a
@@ -1418,7 +1421,8 @@ class Session:
     PROJECTION_EVERY = 60.0
 
     def publish_projection(self):
-        """Put the "how long will this take" numbers in the feed.
+        """Put the "how long will this take" numbers in the feed, and refresh
+        the agent card beside them.
 
         The point of the run is partly the claim it can support -- "N hours of
         idle time to beat the game" -- and a number nobody can see is a number
@@ -1433,8 +1437,36 @@ class Session:
         try:
             self.feed.extra["projection"] = self.metrics.projection()
             self.feed.extra["totals"] = self.metrics.summary()
+            self.feed.extra["agent"] = self.agent_card()
         except Exception as exc:  # noqa: BLE001 - a metric must never stop play
             log.debug("projection failed: %s", exc)
+
+    def agent_card(self) -> dict:
+        """What is driving this run, for the widget: the session, the risk it
+        runs at, and the local model it consults -- with whether that model
+        is actually answering, because "gemma4:e4b" on a card means nothing
+        if every decision has been falling back to the maths for an hour.
+
+        The feed adds the process identity (script, pid, host, uptime) itself.
+        ``Brain.available()`` is a probe cached for its own TTL, so refreshing
+        this once a minute costs one ``/api/tags`` at most.
+        """
+        card = {
+            "session": self.session,
+            "state": self.state_path,
+            "risk": self.settings["risk"],
+            "risk_label": usersettings.mood(self.settings["risk"]),
+        }
+        if self.brain is None:
+            card["model_state"] = "off"
+            return card
+        card["model"] = self.brain.model
+        card["model_host"] = self.brain.host
+        card["model_state"] = "ready" if self.brain.available() else "unreachable"
+        card["model_reason"] = self.brain.last_reason
+        stats = self.brain.stats()
+        card["decisions"] = {k: stats.get(k, 0) for k in ("hits", "fallbacks", "timeouts")}
+        return card
 
     def blocker_hint(self, dest_map=None, warp=None) -> str:
         """Why a road is shut, named from the map data.

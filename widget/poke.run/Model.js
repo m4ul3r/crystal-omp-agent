@@ -694,11 +694,104 @@ function tooltip(state, running, configured, feedName) {
   if (play) progress.push(play.split(":")[0] + "h")
   if (progress.length) lines.push(progress.join("  \u00b7  "))
 
+  // Line 5: who is driving. A game can be driven by the play loop, a
+  // serve.py client or a bare kernel, and which one matters when the run
+  // does something odd.
+  var driver = agentLine(state)
+  if (driver !== "") lines.push(driver)
+
   // Only say something is wrong when it is.
   if (!running)
     lines.push(state.live === false ? "\u2014 run ended" : "\u2014 feed stale")
 
   return lines.join("\n")
+}
+
+// ------------------------------------------------------------------- agent
+//
+// Who is running the game. The feed always names the process (script, pid,
+// host, when it attached); the play loop adds its session name, the risk it
+// runs at and the local model it consults -- with whether that model is
+// actually answering, since a model name on a card means nothing if every
+// decision has been falling back to the maths.
+
+function agent(state) {
+  var a = group(state, "agent")
+  if (!a) return null
+  var out = {
+    name: str(a.name),
+    session: str(a.session),
+    pid: num(a.pid),
+    host: str(a.host),
+    started: num(a.started),
+    model: str(a.model),
+    modelState: str(a.model_state),
+    modelReason: str(a.model_reason),
+    risk: num(a.risk),
+    riskLabel: str(a.risk_label),
+    decisions: (a.decisions && typeof a.decisions === "object") ? a.decisions : null
+  }
+  if (out.name === "" && out.session === "" && out.model === "" && out.risk === null)
+    return null
+  return out
+}
+
+// "4 h 05 m" of run, measured against the publisher's OWN clock (`t`), so a
+// run that has ended stops counting instead of ageing forever.
+function uptimeLabel(state, a) {
+  if (!a || a.started === null || !state || typeof state.t !== "number") return ""
+  var s = Math.max(0, Math.round(state.t - a.started))
+  var h = Math.floor(s / 3600)
+  var m = Math.floor((s % 3600) / 60)
+  if (h > 0) return h + " h " + (m < 10 ? "0" : "") + m + " m"
+  if (m > 0) return m + " min"
+  return s + " s"
+}
+
+// "play.py · live": the script and its session. Uptime is its own cell.
+function agentDriver(a) {
+  if (!a) return ""
+  var bits = []
+  if (a.name !== "") bits.push(a.name)
+  if (a.session !== "") bits.push(a.session)
+  return bits.join(" \u00b7 ")
+}
+
+// The brain cell's label carries the STATE -- "BRAIN · UNREACHABLE" -- and
+// its value the model name. The state is the part worth reading: it says
+// whether the model is in the loop right now, and a label can say it in the
+// same small caps the rest of the card uses without crowding the name.
+function agentModelLabel(a) {
+  if (!a || a.modelState === "") return "BRAIN"
+  return "BRAIN \u00b7 " + a.modelState.toUpperCase()
+}
+
+function agentModel(a) {
+  if (!a) return ""
+  if (a.model !== "") return a.model
+  return a.modelState === "off" ? "none" : ""
+}
+
+// "0.35 balanced"
+function agentRisk(a) {
+  if (!a || a.risk === null) return ""
+  var n = Math.round(a.risk * 100) / 100
+  return a.riskLabel !== "" ? n + " " + a.riskLabel : String(n)
+}
+
+// One sentence for the tooltip: "Driven by play.py (live), gemma4:e4b
+// unreachable, risk 0.35 balanced".
+function agentLine(state) {
+  var a = agent(state)
+  if (!a) return ""
+  var bits = []
+  if (a.name !== "")
+    bits.push("Driven by " + a.name + (a.session !== "" ? " (" + a.session + ")" : ""))
+  if (a.model !== "")
+    bits.push(a.modelState !== "" ? a.model + " " + a.modelState : a.model)
+  var risk = agentRisk(a)
+  if (risk !== "") bits.push("risk " + risk)
+  return bits.join(", ")
 }
 
 // "Route111" and "MauvilleCity_Gym_1F" are map CONSTANTS, not English. Split

@@ -312,6 +312,16 @@ Panel {
                   tint: root.foreground
                 }
               }
+              // Who is driving, on the header's far edge: the game on the
+              // left, the agent on the right. Reserved through the slot above
+              // like the rest of the hero, so a card that appears with the
+              // first snapshot cannot move the frame.
+              trailingControl: Component {
+                AgentCard {
+                  agent: Model.agent(feed.state)
+                  visible: agent !== null
+                }
+              }
             }
           }
 
@@ -1140,6 +1150,7 @@ Panel {
     property string label: ""
     property string value: ""
     property bool wrap: false
+    property color valueColor: root.foreground
     property Component valueComponent: null
 
     spacing: Style.space(2)
@@ -1158,7 +1169,7 @@ Panel {
       visible: stat.valueComponent === null
       width: parent.width
       text: stat.value
-      color: root.foreground
+      color: stat.valueColor
       font.family: root.fontFamily
       font.pixelSize: Style.font.bodySmall
       wrapMode: stat.wrap ? Text.WordWrap : Text.NoWrap
@@ -1199,6 +1210,55 @@ Panel {
         label: cell ? cell.label : ""
         value: cell ? cell.value : ""
       }
+    }
+  }
+
+  // Who is driving: the script and its session, how long it has been at it,
+  // the model it consults and whether that model is answering, the risk it
+  // runs at. Small facts in the same micro-label vocabulary as the HUD, on
+  // the hero's far edge. A brain that is not answering is the one thing
+  // here worth colouring: the run is then on the maths alone, which the log
+  // calls "policy declined" a hundred times an hour.
+  component AgentCard: Row {
+    id: card
+
+    property var agent: null
+
+    readonly property string driver: Model.agentDriver(agent)
+    readonly property string uptime: Model.uptimeLabel(feed.state, agent)
+    readonly property string model: Model.agentModel(agent)
+    readonly property string risk: Model.agentRisk(agent)
+    readonly property bool modelDown: agent !== null && agent.modelState === "unreachable"
+
+    spacing: Style.space(14)
+
+    Stat {
+      visible: card.driver !== ""
+      width: Style.space(144)
+      label: "DRIVER"
+      value: card.driver
+    }
+
+    Stat {
+      visible: card.uptime !== ""
+      width: Style.space(64)
+      label: "UP"
+      value: card.uptime
+    }
+
+    Stat {
+      visible: card.model !== ""
+      width: Style.space(124)
+      label: Model.agentModelLabel(card.agent)
+      value: card.model
+      valueColor: card.modelDown ? root.urgent : root.foreground
+    }
+
+    Stat {
+      visible: card.risk !== ""
+      width: Style.space(92)
+      label: "RISK"
+      value: card.risk
     }
   }
 
