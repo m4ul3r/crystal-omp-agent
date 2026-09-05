@@ -85,6 +85,9 @@ def main():
     ap.add_argument("--minutes", type=float, default=600.0)
     ap.add_argument("--per-lap", type=float, default=16.0)
     ap.add_argument("--budget", type=int, default=12)
+    ap.add_argument("--passes", type=int, default=3,
+                    help="gauntlet passes per staging; the rooms re-arm on "
+                         "leaving, so this amortises the staging cost")
     a = ap.parse_args()
     stop = time.time() + a.minutes * 60
     py = sys.executable
@@ -131,14 +134,25 @@ def main():
                  "--protect-bench", "--minutes", str(a.per_lap),
                  "--feed", "default"], minutes=a.per_lap + 6)
             continue
-        # FIGHT THE CHAMPION, NOT THE GAUNTLET. Steven is repeatable, his
-        # mons are L77-79 rather than L46-57, and the fight is reached in one
-        # walk instead of four rooms -- `steven_fights` measures 14,161 exp a
-        # run with half to the benched holder. The Elite Four lap was paying a
-        # low-level holder only two levels for the same wall clock.
-        run([py, "scripts/champion_run.py", "--state", a.state,
-             "--protect-bench", "--rounds", "6",
-             "--minutes", str(a.per_lap)], minutes=a.per_lap + 6)
+        # SEVERAL PASSES PER STAGING. Staging costs ~4 minutes (fly, PC, take
+        # and give the share, fly back), so one gauntlet per staging spends
+        # most of the lap on overhead. The four Elite Four rooms RE-ARM when
+        # the building is left -- their flags are cleared on the way out -- so
+        # the walk can simply be repeated, and each pass is ~20 knockouts of
+        # L46-57 with half the experience going to the benched holder.
+        #
+        # The Champion is not used: `walk_league_chain` reports "door (6,2) is
+        # shut -- engaging the trainer" for each member and then leaves the
+        # building rather than reaching Corridor4, so `steven_fights` returned
+        # `RESULT 0 champion fights` every lap while the four members supplied
+        # all of the experience anyway (SHROOMISH L5 -> L16 in one pass).
+        for pass_no in range(a.passes):
+            run([py, "scripts/elite_four.py", "--state", a.state,
+                 "--protect-bench", "--minutes", str(a.per_lap),
+                 "--feed", "default"], minutes=a.per_lap + 6)
+            if owned_and_targets(a.state, a.budget)[0] > n:
+                log.info("  banked on pass %d -- next target", pass_no + 1)
+                break
 
         after, rows_after = owned_and_targets(a.state, a.budget)
         if after > n:

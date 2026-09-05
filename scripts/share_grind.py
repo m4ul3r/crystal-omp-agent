@@ -284,8 +284,16 @@ def main():
     # PELIPPER fainting forces the holder into the ring, where it is knocked
     # out and stops earning for the rest of the lap.
     fresh2 = DexTarget(d.emu, d.names, d.consts, d.nav, spec=d.spec)
-    for species in ("BLAZIKEN", "AGGRON", "MIGHTYENA", "NINJASK"):
-        if len(party(d)) >= 4:
+    # FILL ALL SIX SLOTS. The holder can only be dragged into the ring as a
+    # FORCED replacement, which happens once every escort in front of it has
+    # fainted -- and a fainted mon earns nothing for the rest of the run
+    # (`battle_script_commands.c:3361-3364`). With only two escorts the holder
+    # was being knocked out partway through the first pass (`A 0/44`), so the
+    # second and third passes of a lap paid it nothing at all. Four escorts is
+    # four more faints the gauntlet has to get through first.
+    for species in ("BLAZIKEN", "AGGRON", "MIGHTYENA", "NINJASK",
+                    "WHISCASH", "LOMBRE", "SWELLOW", "LINOONE"):
+        if len(party(d)) >= 6:
             break
         if any(spn(d, m) == species for m in party(d)):
             continue
