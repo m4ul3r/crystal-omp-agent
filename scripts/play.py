@@ -1448,8 +1448,10 @@ class Session:
         if every decision has been falling back to the maths for an hour.
 
         The feed adds the process identity (script, pid, host, uptime) itself.
-        ``Brain.available()`` is a probe cached for its own TTL, so refreshing
-        this once a minute costs one ``/api/tags`` at most.
+        ``Brain.state()`` does no I/O: it reads the breaker, the last decision
+        and the last probe. The one probe is the note at the top of ``run()``;
+        asking ``available()`` here stalled the loop 20s a minute against a
+        dead host, because a failed probe is cached for only 30s.
         """
         card = {
             "session": self.session,
@@ -1462,7 +1464,7 @@ class Session:
             return card
         card["model"] = self.brain.model
         card["model_host"] = self.brain.host
-        card["model_state"] = "ready" if self.brain.available() else "unreachable"
+        card["model_state"] = self.brain.state()
         card["model_reason"] = self.brain.last_reason
         stats = self.brain.stats()
         card["decisions"] = {k: stats.get(k, 0) for k in ("hits", "fallbacks", "timeouts")}

@@ -725,6 +725,7 @@ function agent(state) {
     host: str(a.host),
     started: num(a.started),
     model: str(a.model),
+    modelHost: str(a.model_host),
     modelState: str(a.model_state),
     modelReason: str(a.model_reason),
     risk: num(a.risk),
@@ -787,8 +788,13 @@ function agentLine(state) {
   var bits = []
   if (a.name !== "")
     bits.push("Driven by " + a.name + (a.session !== "" ? " (" + a.session + ")" : ""))
-  if (a.model !== "")
-    bits.push(a.modelState !== "" ? a.model + " " + a.modelState : a.model)
+  if (a.model !== "") {
+    // The host rides along: a run quietly asking a box the user does not
+    // recognise should say so where the user actually looks.
+    var model = a.modelState !== "" ? a.model + " " + a.modelState : a.model
+    if (a.modelHost !== "") model += " at " + a.modelHost
+    bits.push(model)
+  }
   var risk = agentRisk(a)
   if (risk !== "") bits.push("risk " + risk)
   return bits.join(", ")

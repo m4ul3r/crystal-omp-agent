@@ -55,9 +55,12 @@ from dataclasses import dataclass
 
 log = logging.getLogger("pokeagent.brain")
 
-#: Where the Ollama server lives. Overridable so a checkout on another
-#: machine, or a test box with a local ``ollama serve``, needs no edit.
-DEFAULT_HOST = os.environ.get("POKEAGENT_OLLAMA_HOST", "http://76.33.63.22:11434")
+#: Where the Ollama server lives. Ollama's own default bind, so a machine
+#: running ``ollama serve`` needs no edit and a machine running nothing fails
+#: fast with a refused connection instead of a 20s timeout. The lane was
+#: written against a box on a public address; that is a per-machine fact and
+#: belongs in the environment, never in the source.
+DEFAULT_HOST = os.environ.get("POKEAGENT_OLLAMA_HOST", "http://127.0.0.1:11434")
 DEFAULT_MODEL = os.environ.get("POKEAGENT_OLLAMA_MODEL", "gemma4:e4b")
 
 #: Seconds to wait for one decision. Measured against the real server, a
@@ -279,6 +282,29 @@ class Brain:
             "circuit_trips": self._breaker.trips,
             "circuit_open_for": round(self._breaker.blocked(now), 1),
         }
+
+    def state(self) -> str:
+        """One word for the widget's card, with NO I/O: ``off``, ``ready``,
+        ``unreachable`` or ``unknown``.
+
+        Most recent evidence wins: an open breaker, then the last decision
+        (a model answer or a transport failure), then the last probe. A
+        card refreshed once a minute must never cost a 20s probe -- the loop
+        stalled for exactly that when it asked ``available()`` instead.
+        """
+        if not self.enabled:
+            return "off"
+        if self._breaker.blocked(self._clock()):
+            return "unreachable"
+        last = self.last_decision
+        if last is not None:
+            if last.source == "model":
+                return "ready"
+            if last.source == "fallback" and self._breaker.failures > 0:
+                return "unreachable"
+        if self._probe is not None:
+            return "ready" if self._probe[1] else "unreachable"
+        return "unknown"
 
     # ---- decisions ----------------------------------------------------
 

@@ -434,6 +434,37 @@ def test_a_disabled_brain_never_calls_out():
     assert b.last_reason == "brain disabled"
 
 
+def test_state_never_calls_out():
+    """The widget's card is refreshed once a minute; against a dead host a
+    probe costs the full timeout, so the card reads what the brain already
+    knows and nothing else."""
+    b, t = make({"models": [{"name": "gemma4:e4b"}]})
+    assert b.state() == "unknown"
+    assert t.calls == [], "state() must not probe"
+    assert b.available() is True
+    assert b.state() == "ready"
+    assert len(t.calls) == 1
+
+
+def test_state_follows_the_most_recent_evidence():
+    clock = FakeClock()
+    t = FakeTransport(ConnectionRefusedError("nope"), reply(choice="A"))
+    b = Brain(transport=t, clock=clock, failures=3, cooldown=60.0)
+    assert b.available() is False
+    assert b.state() == "unreachable"
+    # A real answer outranks a stale failed probe.
+    b.choose("q", ["A", "B"], fallback="B")
+    assert b.state() == "ready"
+
+
+def test_state_is_off_when_disabled_and_unreachable_while_the_breaker_is_open():
+    assert make(enabled=False)[0].state() == "off"
+    b = Brain(transport=FakeTransport(TimeoutError("dead")), clock=FakeClock(),
+              failures=1, cooldown=60.0)
+    b.choose("q", ["A", "B"], fallback="A")
+    assert b.state() == "unreachable"
+
+
 # ---- caller bugs raise rather than degrade ---------------------------
 
 

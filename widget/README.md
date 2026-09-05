@@ -109,7 +109,7 @@ claim the run is at 0%.
 | `map`, `pos {x, y, facing}` | header fallback, and the place line over the HUD |
 | `badges`, `money`, `play_time` | the badge pips and the HUD cells |
 | `game {id, name, generation, region}` | the popup header: **which of Gen 1–3 is running** |
-| `agent {name, session, pid, host, started, model, model_state, risk, risk_label}` | the header's far edge: **who is driving**. The feed fills `name`/`pid`/`host`/`started` from the process itself; `scripts/play.py` adds the rest (`model_state` is `ready`, `unreachable` or `off`) |
+| `agent {name, session, pid, host, started, model, model_state, risk, risk_label}` | the header's far edge: **who is driving**. The feed fills `name`/`pid`/`host`/`started` from the process itself; `scripts/play.py` adds the rest (`model_state` is `ready`, `unreachable`, `unknown` or `off`; the bar tooltip also names `model_host`) |
 | `objective {name, detail, percent}` | the `OBJECTIVE` block under the screen, with a progress bar |
 | `dex {caught, achievable, percent}` | the first `PROGRESS` row; `percent` is derived from the counts if absent |
 | `stages[] {name, percent, current, done}` | the rest of `PROGRESS`; only the current stage draws a track |

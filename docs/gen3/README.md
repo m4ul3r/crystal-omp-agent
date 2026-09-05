@@ -44,6 +44,24 @@ or with any process supervisor you like; the only requirements are
 The working state is re-saved on every autosave tick, so a restart RESUMES
 where it died instead of replaying from wherever the file was at launch.
 
+### The brain
+
+The loop computes everything it can compute exactly; a small local model
+(`pokeagent/brain.py`) only breaks ties the maths declares equal and picks
+nicknames. It talks to an Ollama server, by default the one on this machine:
+
+```sh
+POKEAGENT_OLLAMA_HOST=http://127.0.0.1:11434   # default: Ollama's own bind
+POKEAGENT_OLLAMA_MODEL=gemma4:e4b              # default
+```
+
+With no server there, every decision falls back to the maths and the widget's
+header shows `BRAIN · UNREACHABLE` in the urgent colour; the run plays on.
+`--no-brain` skips the model entirely (`BRAIN · OFF`). Point the host at
+another machine through the environment, never in the source: the bar
+tooltip names the host the run is asking, so a box you do not recognise is
+visible.
+
 
 ## Why a ROM build is part of the setup
 
