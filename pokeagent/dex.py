@@ -1481,13 +1481,27 @@ class DexTarget:
         blob = self.emu.read(base, span)
         found, bad = [], 0
         for i in range(span // pokemon.BOX_SIZE):
-            mon = pokemon.parse_mon(
-                blob[i * pokemon.BOX_SIZE:(i + 1) * pokemon.BOX_SIZE])
+            raw = blob[i * pokemon.BOX_SIZE:(i + 1) * pokemon.BOX_SIZE]
+            mon = pokemon.parse_mon(raw)
             if mon is None:
                 continue
             if not mon.checksum_ok:
                 bad += 1
                 continue
+            # parse_mon leaves the name blank on purpose -- it has no charmap
+            # ("filled by the caller", pokemon.py:194) -- and this caller never
+            # did, so EVERY boxed mon read as nickname ''. That is not cosmetic:
+            # it silently defeats matching a mon by name (a withdraw by nickname
+            # failed for a boxed PELIPPER earlier in this run) and it makes
+            # auditing names impossible, which is worse -- a scan for mons
+            # wrongly named "A" returned zero from the boxes no matter what was
+            # in them, so a real one hid there until it was withdrawn and
+            # evolved. A BoxPokemon is the first 80 bytes of a Pokemon, so the
+            # party's own offsets apply with box == 0.
+            mon.nickname = self.emu.charmap.decode(
+                raw[0x08:0x08 + pokemon.NICKNAME_LEN])
+            mon.ot_name = self.emu.charmap.decode(
+                raw[0x14:0x14 + pokemon.OT_NAME_LEN])
             if mon.species and not mon.is_egg:
                 found.append((i, mon))
         if bad:

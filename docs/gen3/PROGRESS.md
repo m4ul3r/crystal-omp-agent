@@ -3874,11 +3874,11 @@ do anything hard. In order:
 
 ## session lead — dex 99 -> 111, eight parallel hunters (Sep 5 2026)
 
-**Canonical: `saves/line3.state` = dex 115/178 (64.6%), LilycoveCity_PokemonCenter_1F (7,4), healed.**
+**Canonical: `saves/line3.state` = dex 132/178 (74.2%), OldaleTown_PokemonCenter_1F (7,8), healed, ZERO junk nicknames.**
 clean field state.** Milestones this session, each a NEW filename:
 `milestone-dex105.state`, `milestone-dex107.state`, `milestone-dex108.state`,
-`milestone-dex111.state`, `milestone-dex113.state`, `milestone-dex115.state`.
-Fork from the newest;
+`milestone-dex111.state`, `milestone-dex113.state`, `milestone-dex115.state`,
+`milestone-dex132.state`. Fork from the newest;
 never drive `line3.state`
 directly (`pyre_shoal.py` refuses it on purpose).
 
@@ -3895,8 +3895,22 @@ directly (`pyre_shoal.py` refuses it on purpose).
 | VULPIX, DUSKULL, CHIMECHO | `pyre_shoal.py --legs pyre` | 13 min |
 | RHYHORN, PINSIR | `safari_hunt.py --area nw` | 9 min |
 | HERACROSS, PHANPY | `safari_hunt.py --area ne` | 10 min |
+| +17 more (dex 115 -> 132) | `share_loop.py` unattended, 131 laps | overnight |
 
 ### Harness bugs fixed (all were mine, all found by playing)
+0. **The "A" names: cause fixed, and then 59 hidden ones found.** The cause
+   was `accept()` (below). But `DexTarget.boxed()` never filled in the
+   nickname -- `parse_mon` leaves it to the caller and this caller was not
+   one -- so every boxed mon read as `''` and an audit for junk names
+   returned zero from the boxes *no matter what was in them*. The real count
+   was 59. `scripts/fix_names.py` clears them in one pass, writing the field
+   directly: the secure block starts at `0x20` and the checksum covers only
+   it, while the nickname sits at `0x08` in the plaintext header, so a rename
+   cannot touch species/EXP/IVs/moves. **The frozen count is the proof the
+   naming bug is dead**: exactly 59 on dex105, dex111, dex115 and dex132, so
+   the 17 species caught after the fix branded none. `nickname` is a
+   FIXED-WIDTH 10-byte field, so a 10-character name (WIGGLYTUFF) is written
+   unterminated rather than overflowing into `language`.
 1. **`naming.py accept()` was TYPING the letter "A".** It sent `START` then
    `A` to take the pre-filled species name, but START is swallowed during
    menu setup (gotcha 2), so the `A` typed a character. That is the source
