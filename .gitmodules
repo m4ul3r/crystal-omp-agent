@@ -1,0 +1,3 @@
+[submodule "pret"]
+	path = pret
+	url = https://github.com/pret/pokeruby.git

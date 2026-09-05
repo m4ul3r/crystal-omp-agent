@@ -1,0 +1,6050 @@
+{
+ "AbandonedShip_CaptainsOffice": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_EXCHANGED_SCANNER"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_ITEM_ABANDONED_SHIP_HIDDEN_FLOOR_ROOM_2_SCANNER"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "AbandonedShip_Corridors_B1F": [
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_USED_STORAGE_KEY"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_USED_STORAGE_KEY"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_USED_STORAGE_KEY"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "AbandonedShip_HiddenFloorCorridors": [
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_USED_ROOM_1_KEY"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_USED_ROOM_2_KEY"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_USED_ROOM_4_KEY"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_USED_ROOM_6_KEY"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_USED_ROOM_1_KEY"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_USED_ROOM_2_KEY"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_USED_ROOM_4_KEY"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_USED_ROOM_6_KEY"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_USED_ROOM_1_KEY"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_USED_ROOM_2_KEY"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_USED_ROOM_4_KEY"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_USED_ROOM_6_KEY"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "AbandonedShip_HiddenFloorRooms": [
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_2",
+   "value": 21
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_2",
+   "value": 36
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_3",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_4",
+   "value": 1
+  }
+ ],
+ "AbandonedShip_Rooms2_1F": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "AncientTomb": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_SYS_CTRL_OBJ_DELETE"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_SYS_BRAILLE_FLY"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_SYS_BRAILLE_FLY"
+  }
+ ],
+ "AquaHideout_1F": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_MT_PYRE_ORB_STOLEN"
+  }
+ ],
+ "AquaHideout_B1F": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_SYS_CTRL_OBJ_DELETE"
+  }
+ ],
+ "AquaHideout_B2F": [
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  }
+ ],
+ "BattleTower_BattleRoom": [
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_0",
+   "value": 1
+  }
+ ],
+ "BattleTower_Corridor": [
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_0",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_0",
+   "value": 0
+  }
+ ],
+ "BattleTower_Elevator": [
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_0",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_0",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  }
+ ],
+ "BattleTower_Lobby": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_GOLD_SHIELD"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_SILVER_SHIELD"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 6
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 49
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 100
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_0",
+   "value": 5
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_BRAVO_TRAINER_BATTLE_TOWER_ON",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_0",
+   "value": 0
+  }
+ ],
+ "BattleTower_Outside": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_BRAVO_TRAINER_BATTLE_TOWER_ON",
+   "value": 0
+  }
+ ],
+ "CaveOfOrigin_1F": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_LEGENDARY_BATTLE_COMPLETED"
+  }
+ ],
+ "CaveOfOrigin_B1F": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_LEGENDARY_BATTLE_COMPLETED"
+  }
+ ],
+ "CaveOfOrigin_B2F": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_LEGENDARY_BATTLE_COMPLETED"
+  }
+ ],
+ "CaveOfOrigin_B3F": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_LEGENDARY_BATTLE_COMPLETED"
+  }
+ ],
+ "CaveOfOrigin_B4F": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_SYS_CTRL_OBJ_DELETE"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_LEGENDARY_BATTLE_COMPLETED"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_RESULT",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_RESULT",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_CAVE_OF_ORIGIN_B4F_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_MT_PYRE_STATE",
+   "value": 2
+  }
+ ],
+ "DesertRuins": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_SYS_CTRL_OBJ_DELETE"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_SYS_BRAILLE_STRENGTH"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_SYS_BRAILLE_STRENGTH"
+  }
+ ],
+ "DewfordTown": [
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_DELIVERED_STEVEN_LETTER"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_OLD_ROD"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_DELIVERED_DEVON_GOODS"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_DELIVERED_DEVON_GOODS"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_BOARD_BRINEY_BOAT_ROUTE104_STATE",
+   "value": 2
+  }
+ ],
+ "DewfordTown_Gym": [
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_RECEIVED_TM_BULK_UP"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEFEATED_DEWFORD_GYM"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_BADGE02_GET"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_PETALBURG_GYM_STATE",
+   "value": 6
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "DewfordTown_Hall": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_TM_SLUDGE_BOMB"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 4
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "DewfordTown_House2": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_SILK_SCARF"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "EverGrandeCity": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_SYS_WEATHER_CTRL"
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  }
+ ],
+ "EverGrandeCity_ChampionsRoom": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  }
+ ],
+ "EverGrandeCity_DrakesRoom": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_DEFEATED_ELITE_4_DRAKE"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEFEATED_ELITE_4_DRAKE"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_ELITE_4_STATE",
+   "value": 4
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_ELITE_4_STATE",
+   "value": 4
+  }
+ ],
+ "EverGrandeCity_GlaciasRoom": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_DEFEATED_ELITE_4_GLACIA"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEFEATED_ELITE_4_GLACIA"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_ELITE_4_STATE",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_ELITE_4_STATE",
+   "value": 3
+  }
+ ],
+ "EverGrandeCity_HallOfFame": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  }
+ ],
+ "EverGrandeCity_PhoebesRoom": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_DEFEATED_ELITE_4_PHOEBE"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEFEATED_ELITE_4_PHOEBE"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_ELITE_4_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_ELITE_4_STATE",
+   "value": 2
+  }
+ ],
+ "EverGrandeCity_PokemonLeague": [
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_ENTERED_ELITE_FOUR"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_ENTERED_ELITE_FOUR"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_BADGE06_GET"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_0",
+   "value": 11
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_0",
+   "value": 8
+  }
+ ],
+ "EverGrandeCity_SidneysRoom": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_DEFEATED_ELITE_4_SYDNEY"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEFEATED_ELITE_4_SYDNEY"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_ELITE_4_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_ELITE_4_STATE",
+   "value": 1
+  }
+ ],
+ "FallarborTown": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEFEATED_EVIL_TEAM_MT_CHIMNEY"
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LINK_CONTEST_ROOM_STATE",
+   "value": 0
+  }
+ ],
+ "FallarborTown_ContestLobby": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_CONTEST_SKETCH_CREATED"
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_CONTEST_RANK",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_CONTEST_LOCATION",
+   "value": 2
+  }
+ ],
+ "FallarborTown_House1": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_TM_RETURN"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_TEMP_2"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_TEMP_2"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEFEATED_EVIL_TEAM_MT_CHIMNEY"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "FallarborTown_House2": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_TEMP_1"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "FortreeCity": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_KECLEON_FLED_FORTREE"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "FortreeCity_Gym": [
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_RECEIVED_TM_AERIAL_ACE"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEFEATED_FORTREE_GYM"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_BADGE06_GET"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "FortreeCity_House1": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_FORTREE_NPC_TRADE_COMPLETED"
+  }
+ ],
+ "FortreeCity_House2": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_TM10"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_MET_HIDDEN_POWER_GIVER"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "FortreeCity_House4": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_MENTAL_HERB"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_WINGULL_DELIVERED_MAIL"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_WINGULL_SENT_ON_ERRAND"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "GraniteCave_1F": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_HM05"
+  }
+ ],
+ "GraniteCave_StevensRoom": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 4
+  }
+ ],
+ "InsideOfTruck": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LITTLEROOT_INTRO_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LITTLEROOT_HOUSES_STATE_2",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LITTLEROOT_INTRO_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LITTLEROOT_HOUSES_STATE",
+   "value": 1
+  }
+ ],
+ "IslandCave": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_SYS_CTRL_OBJ_DELETE"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_SYS_BRAILLE_WAIT"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_SYS_BRAILLE_WAIT"
+  }
+ ],
+ "JaggedPass": [
+  {
+   "kind": "compare",
+   "var": "VAR_JAGGED_PASS_ASH_WEATHER",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "LavaridgeTown": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_DEFEATED_EVIL_TEAM_MT_CHIMNEY"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_LAVARIDGE_EGG"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_LAVARIDGE_RIVAL_STATE",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 4
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 6
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LAVARIDGE_RIVAL_STATE",
+   "value": 2
+  }
+ ],
+ "LavaridgeTown_Gym_1F": [
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_RECEIVED_TM_OVERHEAT"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEFEATED_LAVARIDGE_GYM"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_BADGE04_GET"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_PETALBURG_GYM_STATE",
+   "value": 6
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_B",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_C",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_D",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_E",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_F",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_B",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_C",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_D",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_E",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_F",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LAVARIDGE_RIVAL_STATE",
+   "value": 1
+  }
+ ],
+ "LavaridgeTown_HerbShop": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_CHARCOAL"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "LilycoveCity": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_SYS_WEATHER_CTRL"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_EVIL_TEAM_ESCAPED_IN_SUBMARINE"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_BADGE07_GET"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DAILY_RECEIVED_BERRY_LILYCOVE"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_BADGE07_GET"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_EVIL_TEAM_ESCAPED_IN_SUBMARINE"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_SYS_GAME_CLEAR"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_MET_WAILMER_TRAINER"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_DECLINED_RIVAL_BATTLE_LILYCOVE"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_DECLINED_RIVAL_BATTLE_LILYCOVE"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_BADGE06_GET"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_BADGE08_GET"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LINK_CONTEST_ROOM_STATE",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "LilycoveCity_ContestLobby": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_HIDE_LILYCOVE_MUSEUM_CURATOR"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_TEMP_2"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_TEMP_3"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_RECEIVED_CONTEST_PASS"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 4
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 5
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 6
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LILYCOVE_CONTEST_LOBBY_STATE",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_CONTEST_RANK",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LINK_CONTEST_ROOM_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_CONTEST_LOCATION",
+   "value": 5
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_CONTEST_RANK",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_CONTEST_LOCATION",
+   "value": 4
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LILYCOVE_CONTEST_LOBBY_STATE",
+   "value": 1
+  }
+ ],
+ "LilycoveCity_CoveLilyMotel_1F": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_SYS_GAME_CLEAR"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_BADGE07_GET"
+  }
+ ],
+ "LilycoveCity_CoveLilyMotel_2F": [
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_TEMP_2"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_TEMP_2"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "LilycoveCity_DepartmentStoreElevator": [
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_TEMP_2"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_DEPT_STORE_FLOOR",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_DEPT_STORE_FLOOR",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_DEPT_STORE_FLOOR",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_DEPT_STORE_FLOOR",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_DEPT_STORE_FLOOR",
+   "value": 4
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_DEPT_STORE_FLOOR",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_DEPT_STORE_FLOOR",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_DEPT_STORE_FLOOR",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_DEPT_STORE_FLOOR",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_DEPT_STORE_FLOOR",
+   "value": 4
+  }
+ ],
+ "LilycoveCity_DepartmentStoreRooftop": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 2
+  }
+ ],
+ "LilycoveCity_DepartmentStore_1F": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DAILY_PICKED_LOTTO_TICKET"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_LOTTERY_PRIZE",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LOTTERY_PRIZE",
+   "value": 0
+  }
+ ],
+ "LilycoveCity_Harbor": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_SYS_GAME_CLEAR"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_SYS_GAME_CLEAR"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_ENCOUNTERED_LATIAS_OR_LATIOS"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_SYS_HAS_EON_TICKET"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 4
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_PORTHOLE_STATE",
+   "value": 5
+  }
+ ],
+ "LilycoveCity_House2": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_TM44"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "LilycoveCity_LilycoveMuseum_1F": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "LilycoveCity_LilycoveMuseum_2F": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_COOL_PAINTING_MADE"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_BEAUTY_PAINTING_MADE"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_CUTE_PAINTING_MADE"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_SMART_PAINTING_MADE"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_TOUGH_PAINTING_MADE"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_GLASS_ORNAMENT"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "LilycoveCity_MoveDeletersHouse": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "LilycoveCity_PokemonCenter_1F": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_BADGE07_GET"
+  }
+ ],
+ "LilycoveCity_PokemonTrainerFanClub": [
+  {
+   "kind": "compare",
+   "var": "VAR_LILYCOVE_FAN_CLUB_STATE",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_LILYCOVE_FAN_CLUB_STATE",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_LILYCOVE_FAN_CLUB_STATE",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 7
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LILYCOVE_FAN_CLUB_STATE",
+   "value": 2
+  }
+ ],
+ "LinkContestRoom1": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 4
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_9",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_0",
+   "value": 8
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_0",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_RESULT",
+   "value": 32
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 5
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 6
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 7
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 8
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 10
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 11
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 12
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 13
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 14
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 15
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 17
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 18
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 19
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 20
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 21
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 22
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 25
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 26
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 27
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 47
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 30
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 31
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 32
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 33
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 34
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 35
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 36
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 37
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 38
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 44
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 45
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 46
+  }
+ ],
+ "LittlerootTown": [
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_RESCUED_BIRCH"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_ADVENTURE_STARTED"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RESCUED_BIRCH"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_LITTLEROOT_INTRO_STATE",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_LITTLEROOT_STATE",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_LITTLEROOT_HOUSES_STATE",
+   "value": 4
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_LITTLEROOT_HOUSES_STATE_2",
+   "value": 4
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_OLDALE_STATE",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_LITTLEROOT_RIVAL_STATE",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_LITTLEROOT_STATE",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_OLDALE_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LITTLEROOT_HOUSES_STATE",
+   "value": 5
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LITTLEROOT_HOUSES_STATE_2",
+   "value": 5
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LITTLEROOT_INTRO_STATE",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LITTLEROOT_INTRO_STATE",
+   "value": 8
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LITTLEROOT_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LITTLEROOT_STATE",
+   "value": 4
+  }
+ ],
+ "LittlerootTown_BrendansHouse_1F": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_RECEIVED_RUNNING_SHOES"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_LITTLEROOT_INTRO_STATE",
+   "value": 6
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_LITTLEROOT_INTRO_STATE",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_LITTLEROOT_INTRO_STATE",
+   "value": 5
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LITTLEROOT_HOUSES_STATE",
+   "value": 2
+  }
+ ],
+ "LittlerootTown_BrendansHouse_2F": [
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_DEFEATED_RIVAL_ROUTE103"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_LITTLEROOT_INTRO_STATE",
+   "value": 4
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_SECRET_BASE_INITIALIZED",
+   "value": 0
+  }
+ ],
+ "LittlerootTown_MaysHouse_1F": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_RECEIVED_RUNNING_SHOES"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEFEATED_RIVAL_ROUTE103"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RIVAL_LEFT_FOR_ROUTE103"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_LITTLEROOT_INTRO_STATE",
+   "value": 6
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_LITTLEROOT_INTRO_STATE",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_LITTLEROOT_INTRO_STATE",
+   "value": 5
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_LITTLEROOT_RIVAL_STATE",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LITTLEROOT_HOUSES_STATE_2",
+   "value": 2
+  }
+ ],
+ "LittlerootTown_MaysHouse_2F": [
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_DEFEATED_RIVAL_ROUTE103"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_MET_RIVAL_LILYCOVE"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_MET_RIVAL_IN_HOUSE_AFTER_LILYCOVE"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_LITTLEROOT_INTRO_STATE",
+   "value": 4
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 4
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_SECRET_BASE_INITIALIZED",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LITTLEROOT_RIVAL_STATE",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LITTLEROOT_STATE",
+   "value": 1
+  }
+ ],
+ "LittlerootTown_ProfessorBirchsLab": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_BIRCH_AIDE_MET"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_UNKNOWN_BIRCH_380"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_BIRCH_LAB_STATE",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_BIRCH_LAB_STATE",
+   "value": 5
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_BIRCH_LAB_STATE",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_BIRCH_LAB_STATE",
+   "value": 5
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_ROUTE102_ACCESSIBLE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LITTLEROOT_RIVAL_STATE",
+   "value": 4
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LITTLEROOT_STATE",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "MagmaHideout_B1F": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_SYS_CTRL_OBJ_DELETE"
+  }
+ ],
+ "MauvilleCity": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_GOT_TM_THUNDERBOLT_FROM_WATTSON"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_TV_EXPLAINED"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DECLINED_WALLY_BATTLE_MAUVILLE"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_GOT_TM_THUNDERBOLT_FROM_WATTSON"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_BASEMENT_KEY"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_NEW_MAUVILLE_STATE",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_MAUVILLE_GYM_STATE",
+   "value": 0
+  }
+ ],
+ "MauvilleCity_BikeShop": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_BIKE"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DECLINED_BIKE"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "MauvilleCity_GameCorner": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_STARTER_DOLL"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_20_COINS"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 9950
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 9500
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_2",
+   "value": 1000
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_2",
+   "value": 1500
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_2",
+   "value": 3500
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_2",
+   "value": 4000
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 4
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 5
+  }
+ ],
+ "MauvilleCity_Gym": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEFEATED_MAUVILLE_GYM"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_MAUVILLE_GYM_BARRIERS_STATE"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_RECEIVED_TM_SHOCK_WAVE"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_MAUVILLE_GYM_BARRIERS_STATE"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_BADGE03_GET"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_NEW_MAUVILLE_STATE",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_PETALBURG_GYM_STATE",
+   "value": 6
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_MAUVILLE_GYM_STATE",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_MAUVILLE_GYM_STATE",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_MAUVILLE_GYM_STATE",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_MAUVILLE_GYM_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_MAUVILLE_GYM_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_MAUVILLE_GYM_STATE",
+   "value": 3
+  }
+ ],
+ "MauvilleCity_House1": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_HM06"
+  }
+ ],
+ "MauvilleCity_House2": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_COIN_CASE"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "MeteorFalls_1F_1R": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_MET_PROF_COSMO"
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_METEOR_FALLS_STATE",
+   "value": 1
+  }
+ ],
+ "MeteorFalls_1F_2R": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "MossdeepCity": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_SYS_WEATHER_CTRL"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_KINGS_ROCK"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  }
+ ],
+ "MossdeepCity_GameCorner_1F": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_GAME_CORNER_STATE",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_GAME_CORNER_STATE",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_GAME_CORNER_STATE",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_GAME_CORNER_STATE",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 4
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_GAME_CORNER_STATE",
+   "value": 0
+  }
+ ],
+ "MossdeepCity_GameCorner_B1F": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_GAME_CORNER_STATE",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_GAME_CORNER_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_GAME_CORNER_STATE",
+   "value": 2
+  }
+ ],
+ "MossdeepCity_Gym": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_MOSSDEEP_GYM_SWITCH_1"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_MOSSDEEP_GYM_SWITCH_2"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_MOSSDEEP_GYM_SWITCH_3"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_MOSSDEEP_GYM_SWITCH_4"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_RECEIVED_TM_CALM_MIND"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEFEATED_MOSSDEEP_GYM"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_BADGE07_GET"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "MossdeepCity_House1": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "MossdeepCity_House2": [
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 3
+  }
+ ],
+ "MossdeepCity_House3": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_SUPER_ROD"
+  }
+ ],
+ "MossdeepCity_House4": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_SYS_GAME_CLEAR"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "MossdeepCity_SpaceCenter_1F": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_SUN_STONE_MOSSDEEP"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "MossdeepCity_StevensHouse": [
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_SYS_GAME_CLEAR"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_OMIT_DIVE_FROM_STEVEN_LETTER"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_STEVENS_HOUSE_STATE",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 6
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_STEVENS_HOUSE_STATE",
+   "value": 1
+  }
+ ],
+ "MtChimney": [
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_DEFEATED_EVIL_TEAM_MT_CHIMNEY"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_METEORITE"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_JAGGED_PASS_ASH_WEATHER",
+   "value": 1
+  }
+ ],
+ "MtChimney_CableCarStation": [
+  {
+   "kind": "compare",
+   "var": "VAR_CABLE_CAR_STATION_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_CABLE_CAR_STATION_STATE",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_CABLE_CAR_STATION_STATE",
+   "value": 2
+  }
+ ],
+ "MtPyre_1F": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_CLEANSE_TAG"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "MtPyre_6F": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "MtPyre_Exterior": [
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 12
+  }
+ ],
+ "MtPyre_Summit": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RETURNED_RED_OR_BLUE_ORB"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_LEGENDARY_BATTLE_COMPLETED"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_LEGEND_ESCAPED_SEAFLOOR_CAVERN"
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_SLATEPORT_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_SLATEPORT_HARBOR_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_MT_PYRE_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_MT_PYRE_STATE",
+   "value": 3
+  }
+ ],
+ "NewMauville_Entrance": [
+  {
+   "kind": "compare",
+   "var": "VAR_NEW_MAUVILLE_STATE",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_NEW_MAUVILLE_STATE",
+   "value": 1
+  }
+ ],
+ "NewMauville_Inside": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_SYS_CTRL_OBJ_DELETE"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_2",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_NEW_MAUVILLE_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_2",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_2",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_NEW_MAUVILLE_STATE",
+   "value": 2
+  }
+ ],
+ "OldaleTown": [
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_ADVENTURE_STARTED"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_RECEIVED_POTION_OLDALE"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_ADVENTURE_STARTED"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_POTION_OLDALE"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_TEMP_1"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_ADVENTURE_STARTED"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_ROUTE102_ACCESSIBLE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_OLDALE_STATE",
+   "value": 2
+  }
+ ],
+ "OldaleTown_Mart": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_ADVENTURE_STARTED"
+  }
+ ],
+ "OldaleTown_PokemonCenter_1F": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_SYS_POKEDEX_GET"
+  }
+ ],
+ "PacifidlogTown_House2": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_FANCLUB_TM_THIS_WEEK"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_MET_FANCLUB_YOUNGER_BROTHER"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_MET_FANCLUB_YOUNGER_BROTHER"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_RECEIVED_FANCLUB_TM_THIS_WEEK"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 4
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "PacifidlogTown_House3": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_PACIFIDLOG_NPC_TRADE_COMPLETED"
+  }
+ ],
+ "PacifidlogTown_House5": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "PetalburgCity": [
+  {
+   "kind": "compare",
+   "var": "VAR_PETALBURG_STATE",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_PETALBURG_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_PETALBURG_STATE",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_PETALBURG_GYM_STATE",
+   "value": 1
+  }
+ ],
+ "PetalburgCity_Gym": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_SYS_GAME_CLEAR"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_RECEIVED_TM42"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_SYS_GAME_CLEAR"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEFEATED_PETALBURG_GYM"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_BADGE05_GET"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_PETALBURG_GYM_STATE",
+   "value": 6
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_PETALBURG_GYM_STATE",
+   "value": 7
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_PETALBURG_GYM_STATE",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_ENIGMA_BERRY_AVAILABLE",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 4
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_PETALBURG_GYM_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_PETALBURG_GYM_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_PETALBURG_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_ENIGMA_BERRY_AVAILABLE",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_PETALBURG_GYM_STATE",
+   "value": 7
+  }
+ ],
+ "PetalburgCity_Mart": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_PETALBURG_MART_EXPANDED_ITEMS"
+  }
+ ],
+ "PetalburgCity_PokemonCenter_1F": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_STARTER_MON",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_STARTER_MON",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_STARTER_MON",
+   "value": 2
+  }
+ ],
+ "PetalburgCity_WallysHouse": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEFEATED_WALLY_VICTORY_ROAD"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_HM_SURF"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEFEATED_PETALBURG_GYM"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_THANKED_FOR_PLAYING_WITH_WALLY"
+  }
+ ],
+ "PetalburgWoods": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_MIRACLE_SEED"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_PETALBURG_WOODS_STATE",
+   "value": 1
+  }
+ ],
+ "Route101": [
+  {
+   "kind": "setvar",
+   "var": "VAR_ROUTE101_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_ROUTE101_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_BIRCH_LAB_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_ROUTE101_STATE",
+   "value": 3
+  }
+ ],
+ "Route102": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "Route103": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_ROUTE103_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_BIRCH_LAB_STATE",
+   "value": 4
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_OLDALE_STATE",
+   "value": 1
+  }
+ ],
+ "Route104": [
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_MET_PRETTY_PETAL_SHOP_OWNER"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_BADGE03_GET"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_CHESTO_BERRY_ROUTE104"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_WHITE_HERB"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_TM09"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_DELIVERED_STEVEN_LETTER"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DELIVERED_STEVEN_LETTER"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_BOARD_BRINEY_BOAT_ROUTE104_STATE",
+   "value": 0
+  }
+ ],
+ "Route104_MrBrineysHouse": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_RECEIVED_POKENAV"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_MR_BRINEY_SAILING_INTRO"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_DELIVERED_STEVEN_LETTER"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_DELIVERED_DEVON_GOODS"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_BRINEY_HOUSE_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_BOARD_BRINEY_BOAT_ROUTE104_STATE",
+   "value": 1
+  }
+ ],
+ "Route104_PrettyPetalFlowerShop": [
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_MET_PRETTY_PETAL_SHOP_OWNER"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_BADGE03_GET"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_TEMP_1"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_MET_PRETTY_PETAL_SHOP_OWNER"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_RECEIVED_WAILMER_PAIL"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DAILY_RECEIVED_BERRY_FLOWER_SHOP"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "Route104_Prototype": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_ROUTE104_PROTOTYPE_COMPLETED_2"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_ROUTE104_PROTOTYPE_COMPLETED_1"
+  }
+ ],
+ "Route105": [
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_REGI_DOORS_OPENED"
+  }
+ ],
+ "Route106": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "Route107": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "Route109": [
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_DELIVERED_DEVON_GOODS"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_SOFT_SAND"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "Route109_SeashoreHouse": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_6_SODA_POP"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEFEATED_SEASHORE_HOUSE_TRAINERS"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_TEMP_2"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "Route110": [
+  {
+   "kind": "compare",
+   "var": "VAR_CYCLING_CHALLENGE_STATE",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_CYCLING_CHALLENGE_STATE",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_CYCLING_CHALLENGE_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_CYCLING_CHALLENGE_STATE",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_ROUTE110_STATE",
+   "value": 1
+  }
+ ],
+ "Route110_SeasideCyclingRoadNorthEntrance": [
+  {
+   "kind": "compare",
+   "var": "VAR_CYCLING_CHALLENGE_STATE",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_CYCLING_CHALLENGE_STATE",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_CYCLING_CHALLENGE_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_CYCLING_CHALLENGE_STATE",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 0
+  }
+ ],
+ "Route110_SeasideCyclingRoadSouthEntrance": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 0
+  }
+ ],
+ "Route110_TrickHouseCorridor": [
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_STATE",
+   "value": 1
+  }
+ ],
+ "Route110_TrickHouseEnd": [
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 4
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_2",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_2",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_PRIZE_PICKUP",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_PRIZE_PICKUP",
+   "value": 1
+  }
+ ],
+ "Route110_TrickHouseEntrance": [
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_BADGE03_GET"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_BADGE04_GET"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_BADGE05_GET"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_BADGE06_GET"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_BADGE07_GET"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_BADGE08_GET"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_SYS_GAME_CLEAR"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_STATE",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_PRIZE_PICKUP",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_ENTRANCE_STATE_2",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_ENTRANCE_STATE_3",
+   "value": 5
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_ENTRANCE_STATE_3",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_ENTRANCE_STATE_3",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_ROOMS_COMPLETED",
+   "value": 8
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_ROOMS_COMPLETED",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_ROOMS_COMPLETED",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_ROOMS_COMPLETED",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_ROOMS_COMPLETED",
+   "value": 4
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_ROOMS_COMPLETED",
+   "value": 5
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_ROOMS_COMPLETED",
+   "value": 6
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_ROOMS_COMPLETED",
+   "value": 7
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_ROOMS_COMPLETED",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_1_STATE",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_2_STATE",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_3_STATE",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_4_STATE",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_5_STATE",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_6_STATE",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_7_STATE",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_8_STATE",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_ENTRANCE_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_ENTRANCE_STATE_3",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_ENTRANCE_STATE_3",
+   "value": 6
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_STATE",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_ENTRANCE_STATE_3",
+   "value": 5
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_ENTRANCE_STATE_3",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_ENTRANCE_STATE_3",
+   "value": 4
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_ENTRANCE_STATE_3",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_ENTRANCE_STATE",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_ENTRANCE_STATE_3",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_ENTRANCE_STATE_2",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_ENTRANCE_STATE_2",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_PRIZE_PICKUP",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_1_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_2_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_3_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_4_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_5_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_6_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_7_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_8_STATE",
+   "value": 2
+  }
+ ],
+ "Route110_TrickHousePuzzle1": [
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_1_STATE",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_1_STATE",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_1_STATE",
+   "value": 1
+  }
+ ],
+ "Route110_TrickHousePuzzle2": [
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_2",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_3",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_4",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_2_STATE",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_2",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_3",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_4",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_2_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_2",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_3",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_4",
+   "value": 1
+  }
+ ],
+ "Route110_TrickHousePuzzle3": [
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_9",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_9",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_8",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_8",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_8",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_8",
+   "value": 4
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_8",
+   "value": 5
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_8",
+   "value": 6
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_8",
+   "value": 7
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_3_STATE",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_2",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_3",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_4",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_5",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_6",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_7",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_8",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_9",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_8",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_8",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_8",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_8",
+   "value": 4
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_8",
+   "value": 5
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_8",
+   "value": 6
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_8",
+   "value": 7
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_2",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_3",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_4",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_5",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_6",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_7",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_9",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_3_STATE",
+   "value": 1
+  }
+ ],
+ "Route110_TrickHousePuzzle4": [
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_4_STATE",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_4_STATE",
+   "value": 1
+  }
+ ],
+ "Route110_TrickHousePuzzle5": [
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_5_STATE",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_2",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_3",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_4",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_5",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_9",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_9",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_9",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_8",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_8",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_8",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_8",
+   "value": 4
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_8",
+   "value": 5
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_9",
+   "value": 4
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_9",
+   "value": 5
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_2",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_3",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_4",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_5",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_8",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_5_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_9",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_9",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_9",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_9",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_8",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_2",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_8",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_3",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_8",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_4",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_8",
+   "value": 4
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_5",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_8",
+   "value": 5
+  }
+ ],
+ "Route110_TrickHousePuzzle6": [
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_6_STATE",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_6_STATE",
+   "value": 1
+  }
+ ],
+ "Route110_TrickHousePuzzle7": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_TRICK_HOUSE_PUZZLE_7_SWITCH_1"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_TRICK_HOUSE_PUZZLE_7_SWITCH_2"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_TRICK_HOUSE_PUZZLE_7_SWITCH_3"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_TRICK_HOUSE_PUZZLE_7_SWITCH_4"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_TRICK_HOUSE_PUZZLE_7_SWITCH_5"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_TRICK_HOUSE_PUZZLE_7_SWITCH_1"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_TRICK_HOUSE_PUZZLE_7_SWITCH_1"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_TRICK_HOUSE_PUZZLE_7_SWITCH_1"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_TRICK_HOUSE_PUZZLE_7_SWITCH_2"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_TRICK_HOUSE_PUZZLE_7_SWITCH_2"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_TRICK_HOUSE_PUZZLE_7_SWITCH_2"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_TRICK_HOUSE_PUZZLE_7_SWITCH_3"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_TRICK_HOUSE_PUZZLE_7_SWITCH_3"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_TRICK_HOUSE_PUZZLE_7_SWITCH_3"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_TRICK_HOUSE_PUZZLE_7_SWITCH_4"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_TRICK_HOUSE_PUZZLE_7_SWITCH_4"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_TRICK_HOUSE_PUZZLE_7_SWITCH_4"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_TRICK_HOUSE_PUZZLE_7_SWITCH_5"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_TRICK_HOUSE_PUZZLE_7_SWITCH_5"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_TRICK_HOUSE_PUZZLE_7_SWITCH_5"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_7_STATE_2",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_7_STATE",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_7_STATE_2",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_7_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_7_STATE_2",
+   "value": 1
+  }
+ ],
+ "Route110_TrickHousePuzzle8": [
+  {
+   "kind": "compare",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_8_STATE",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TRICK_HOUSE_PUZZLE_8_STATE",
+   "value": 1
+  }
+ ],
+ "Route111": [
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_REGI_DOORS_OPENED"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DAILY_RECEIVED_BERRY_ROUTE111"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 34
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 107
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 72
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_0",
+   "value": 2000
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_0",
+   "value": 8
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_3",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_3",
+   "value": 0
+  }
+ ],
+ "Route111_WinstrateFamilysHouse": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_MACHO_BRACE"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_TEMP_4"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "Route112": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_JAGGED_PASS_ASH_WEATHER",
+   "value": 0
+  }
+ ],
+ "Route112_CableCarStation": [
+  {
+   "kind": "compare",
+   "var": "VAR_CABLE_CAR_STATION_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_CABLE_CAR_STATION_STATE",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_CABLE_CAR_STATION_STATE",
+   "value": 1
+  }
+ ],
+ "Route113": [
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_0",
+   "value": 19
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_0",
+   "value": 84
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "Route113_GlassWorkshop": [
+  {
+   "kind": "compare",
+   "var": "VAR_GLASS_WORKSHOP_STATE",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_GLASS_WORKSHOP_STATE",
+   "value": 10
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_GLASS_WORKSHOP_STATE",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_ASH_GATHER_COUNT",
+   "value": 250
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_ASH_GATHER_COUNT",
+   "value": 500
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_ASH_GATHER_COUNT",
+   "value": 1000
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_ASH_GATHER_COUNT",
+   "value": 6000
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_ASH_GATHER_COUNT",
+   "value": 8000
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_GLASS_WORKSHOP_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_GLASS_WORKSHOP_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_GLASS_WORKSHOP_STATE",
+   "value": 10
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_GLASS_WORKSHOP_STATE",
+   "value": 11
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_GLASS_WORKSHOP_STATE",
+   "value": 12
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_GLASS_WORKSHOP_STATE",
+   "value": 13
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_GLASS_WORKSHOP_STATE",
+   "value": 14
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_GLASS_WORKSHOP_STATE",
+   "value": 15
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_GLASS_WORKSHOP_STATE",
+   "value": 16
+  }
+ ],
+ "Route114": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DAILY_RECEIVED_BERRY_ROUTE114"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_TM05"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "Route114_FossilManiacsHouse": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_TM28"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "Route114_FossilManiacsTunnel": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_FOSSIL_MON"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "Route114_LanettesHouse": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_DOLL_LANETTE"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "Route115": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "Route116": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_RECOVERED_DEVON_GOODS"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECOVERED_DEVON_GOODS"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEVON_GOODS_STOLEN"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_MET_DEVON_EMPLOYEE"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 4
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_ROUTE116_STATE",
+   "value": 2
+  }
+ ],
+ "Route116_TunnelersRestHouse": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RUSTURF_TUNNEL_OPENED"
+  }
+ ],
+ "Route117": [
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_PENDING_DAYCARE_EGG"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "Route118": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_GOOD_ROD"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_ROUTE118_STATE",
+   "value": 1
+  }
+ ],
+ "Route119": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_SYS_CTRL_OBJ_DELETE"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_WEATHER_INSTITUTE_STATE",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_WEATHER_INSTITUTE_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_ROUTE119_STATE",
+   "value": 1
+  }
+ ],
+ "Route119_WeatherInstitute_1F": [
+  {
+   "kind": "compare",
+   "var": "VAR_WEATHER_INSTITUTE_STATE",
+   "value": 0
+  }
+ ],
+ "Route119_WeatherInstitute_2F": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_CASTFORM"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_WEATHER_INSTITUTE_STATE",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_WEATHER_INSTITUTE_STATE",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 6
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_WEATHER_INSTITUTE_STATE",
+   "value": 1
+  }
+ ],
+ "Route120": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_SYS_CTRL_OBJ_DELETE"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_REGI_DOORS_OPENED"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_RECEIVED_DEVON_SCOPE"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_RECEIVED_DEVON_SCOPE"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DAILY_RECEIVED_BERRY_ROUTE120"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_NOT_READY_FOR_BATTLE_ROUTE120"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 14
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 60
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 61
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_0",
+   "value": 7
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_0",
+   "value": 19
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "Route121": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_ROUTE121_STATE",
+   "value": 1
+  }
+ ],
+ "Route121_SafariZoneEntrance": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 6
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_SAFARI_ZONE_STATE",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_SAFARI_ZONE_STATE",
+   "value": 2
+  }
+ ],
+ "Route123": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_TM19"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "Route123_BerryMastersHouse": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DAILY_RECEIVED_BERRY_FROM_BERRYMASTER"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DAILY_RECEIVED_BERRY_FROM_BERRYMASTER_WIFE"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_SPELON_BERRY"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_PAMTRE_BERRY"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_WATMEL_BERRY"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_DURIN_BERRY"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_BELUE_BERRY"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "Route124": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_SYS_WEATHER_CTRL"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "Route124_DivingTreasureHuntersHouse": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_MET_DIVING_TREASURE_HUNTER"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 0
+  }
+ ],
+ "Route125": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_SYS_WEATHER_CTRL"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "Route126": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_SYS_WEATHER_CTRL"
+  }
+ ],
+ "Route127": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_SYS_WEATHER_CTRL"
+  }
+ ],
+ "Route128": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_SYS_WEATHER_CTRL"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_ROUTE128_STATE",
+   "value": 2
+  }
+ ],
+ "Route130": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "Route131": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_SYS_GAME_CLEAR"
+  }
+ ],
+ "RustboroCity": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEVON_GOODS_STOLEN"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_BADGE01_GET"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_POKENAV"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECOVERED_DEVON_GOODS"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_MET_RIVAL_RUSTBORO"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 4
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_RUSTBORO_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_RUSTURF_TUNNEL_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_ROUTE116_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 4
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_RUSTBORO_STATE",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_RUSTBORO_STATE",
+   "value": 5
+  }
+ ],
+ "RustboroCity_CuttersHouse": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_HM01"
+  }
+ ],
+ "RustboroCity_DevonCorp_1F": [
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_RETURNED_DEVON_GOODS"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RETURNED_DEVON_GOODS"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEVON_GOODS_STOLEN"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECOVERED_DEVON_GOODS"
+  }
+ ],
+ "RustboroCity_DevonCorp_2F": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_MET_DEVON_EMPLOYEE"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_POKENAV"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FOSSIL_RESURRECTION_STATE",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FOSSIL_RESURRECTION_STATE",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_WHICH_FOSSIL_REVIVED",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_WHICH_FOSSIL_REVIVED",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 6
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_FOSSIL_RESURRECTION_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_FOSSIL_RESURRECTION_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_WHICH_FOSSIL_REVIVED",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_WHICH_FOSSIL_REVIVED",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_FOSSIL_RESURRECTION_STATE",
+   "value": 0
+  }
+ ],
+ "RustboroCity_DevonCorp_3F": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_EXP_SHARE"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DELIVERED_STEVEN_LETTER"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_REPEAT_BALL"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_DEVON_CORP_3F_STATE",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_BRINEY_LOCATION",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_DEVON_CORP_3F_STATE",
+   "value": 1
+  }
+ ],
+ "RustboroCity_Flat2_2F": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_PREMIER_BALL_RUSTBORO"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "RustboroCity_Gym": [
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_RECEIVED_TM_ROCK_TOMB"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEFEATED_RUSTBORO_GYM"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_BADGE01_GET"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_PETALBURG_GYM_STATE",
+   "value": 6
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_RUSTBORO_STATE",
+   "value": 1
+  }
+ ],
+ "RustboroCity_House1": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RUSTBORO_NPC_TRADE_COMPLETED"
+  }
+ ],
+ "RustboroCity_Mart": [
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_MET_DEVON_EMPLOYEE"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_MET_DEVON_EMPLOYEE"
+  }
+ ],
+ "RustboroCity_PokemonSchool": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_QUICK_CLAW"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 4
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "RusturfTunnel": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_TEMP_1"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RUSTURF_TUNNEL_STATE",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_RUSTURF_TUNNEL_STATE",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_RUSTBORO_STATE",
+   "value": 4
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_BRINEY_HOUSE_STATE",
+   "value": 1
+  }
+ ],
+ "SSTidalCorridor": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_RECEIVED_TM49"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEFEATED_SS_TIDAL_TRAINERS"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_PORTHOLE_STATE",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_PORTHOLE_STATE",
+   "value": 7
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_PORTHOLE_STATE",
+   "value": 4
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_PORTHOLE_STATE",
+   "value": 8
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_PORTHOLE_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_PORTHOLE_STATE",
+   "value": 6
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_PORTHOLE_STATE",
+   "value": 7
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_PORTHOLE_STATE",
+   "value": 4
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_PORTHOLE_STATE",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_PORTHOLE_STATE",
+   "value": 8
+  }
+ ],
+ "SSTidalRooms": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_TM49"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "SafariZone_Southeast": [
+  {
+   "kind": "compare",
+   "var": "VAR_SAFARI_ZONE_STATE",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_SAFARI_ZONE_STATE",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_SAFARI_ZONE_STATE",
+   "value": 1
+  }
+ ],
+ "SeafloorCavern_Room9": [
+  {
+   "kind": "setvar",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_ROUTE128_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_SOOTOPOLIS_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_STEVENS_HOUSE_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_SEAFLOOR_CAVERN_STATE",
+   "value": 1
+  }
+ ],
+ "SealedChamber_InnerRoom": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_REGI_DOORS_OPENED"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "SealedChamber_OuterRoom": [
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_SYS_BRAILLE_DIG"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_SYS_BRAILLE_DIG"
+  }
+ ],
+ "ShoalCave_LowTideEntranceRoom": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_SYS_SHOAL_TIDE"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_SYS_SHOAL_ITEM"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_RESULT",
+   "value": 2
+  }
+ ],
+ "ShoalCave_LowTideInnerRoom": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_SYS_SHOAL_TIDE"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_HIDE_TOOK_SHOAL_SALT_1"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_HIDE_TOOK_SHOAL_SALT_2"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_HIDE_TOOK_SHOAL_SHELL_1"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_HIDE_TOOK_SHOAL_SHELL_2"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_HIDE_TOOK_SHOAL_SHELL_3"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_HIDE_TOOK_SHOAL_SHELL_4"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "ShoalCave_LowTideLowerRoom": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_HIDE_TOOK_SHOAL_SALT_4"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_FOCUS_BAND"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "ShoalCave_LowTideStairsRoom": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_HIDE_TOOK_SHOAL_SALT_3"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "SkyPillar_Top": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_SYS_CTRL_OBJ_DELETE"
+  }
+ ],
+ "SlateportCity": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_SECRET_POWER"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DOCK_REJECTED_DEVON_GOODS"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_SYS_GAME_CLEAR"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_BADGE07_GET"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_RECEIVED_SECRET_POWER"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_SLATEPORT_STATE",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_SLATEPORT_MUSEUM_1F_STATE",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LINK_CONTEST_ROOM_STATE",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_SLATEPORT_STATE",
+   "value": 2
+  }
+ ],
+ "SlateportCity_ContestHall": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_TM41"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "SlateportCity_ContestLobby": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_POKEBLOCK_CASE"
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_CONTEST_RANK",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_CONTEST_LOCATION",
+   "value": 3
+  }
+ ],
+ "SlateportCity_Harbor": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_SYS_GAME_CLEAR"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_SYS_GAME_CLEAR"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_BADGE07_GET"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_EVIL_TEAM_ESCAPED_STERN_SPOKE"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_EVIL_TEAM_ESCAPED_IN_SUBMARINE"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_SLATEPORT_HARBOR_STATE",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 4
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_SLATEPORT_HARBOR_STATE",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_SLATEPORT_HARBOR_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_PORTHOLE_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  }
+ ],
+ "SlateportCity_House1": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "SlateportCity_House2": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "SlateportCity_OceanicMuseum_1F": [
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_DELIVERED_DEVON_GOODS"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_SLATEPORT_MUSEUM_1F_STATE",
+   "value": 1
+  }
+ ],
+ "SlateportCity_OceanicMuseum_2F": [
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 4
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_FACING",
+   "value": 3
+  }
+ ],
+ "SlateportCity_PokemonFanClub": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_RECEIVED_YELLOW_SCARF"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_RECEIVED_GREEN_SCARF"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_RECEIVED_PINK_SCARF"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_RECEIVED_BLUE_SCARF"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_RECEIVED_RED_SCARF"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_RECEIVED_YELLOW_SCARF"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_RECEIVED_GREEN_SCARF"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_RECEIVED_PINK_SCARF"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_RECEIVED_BLUE_SCARF"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_RECEIVED_RED_SCARF"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_SOOTHE_BELL"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_TEMP_2",
+   "value": 5
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_SLATEPORT_FAN_CLUB_STATE",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 4
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_SLATEPORT_FAN_CLUB_STATE",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_2",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_SLATEPORT_FAN_CLUB_STATE",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 2
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 3
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 4
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_TEMP_1",
+   "value": 5
+  }
+ ],
+ "SlateportCity_SternsShipyard_1F": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_SYS_GAME_CLEAR"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_BADGE07_GET"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DELIVERED_DEVON_GOODS"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DOCK_REJECTED_DEVON_GOODS"
+  }
+ ],
+ "SootopolisCity": [
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_LEGEND_ESCAPED_SEAFLOOR_CAVERN"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_LEGEND_ESCAPED_SEAFLOOR_CAVERN"
+  },
+  {
+   "kind": "call_if_unset",
+   "flag": "FLAG_LEGENDARY_BATTLE_COMPLETED"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_LEGENDARY_BATTLE_COMPLETED"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_SYS_WEATHER_CTRL"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_LEGENDARY_BATTLE_COMPLETED"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DAILY_RECEIVED_BERRY_SOOTOPOLIS"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEFEATED_SOOTOPOLIS_GYM"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_SOOTOPOLIS_STATE",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_SOOTOPOLIS_STATE",
+   "value": 2
+  }
+ ],
+ "SootopolisCity_Gym_1F": [
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_RECEIVED_TM_WATER_PULSE"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_BADGE06_GET"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEFEATED_SOOTOPOLIS_GYM"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_BADGE08_GET"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_ICE_STEP_COUNT",
+   "value": 8
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_ICE_STEP_COUNT",
+   "value": 28
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_ICE_STEP_COUNT",
+   "value": 69
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_ICE_STEP_COUNT",
+   "value": 1
+  }
+ ],
+ "SootopolisCity_House1": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_TM31"
+  }
+ ],
+ "SootopolisCity_House6": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_WAILMER_DOLL"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "SootopolisCity_House8": [
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 255
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 2
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 3
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  }
+ ],
+ "SootopolisCity_Mart": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_LEGENDARY_BATTLE_COMPLETED"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_LEGEND_ESCAPED_SEAFLOOR_CAVERN"
+  }
+ ],
+ "SootopolisCity_PokemonCenter_1F": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_LEGENDARY_BATTLE_COMPLETED"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_LEGEND_ESCAPED_SEAFLOOR_CAVERN"
+  }
+ ],
+ "SouthernIsland_Interior": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_SYS_CTRL_OBJ_DELETE"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_ENCOUNTERED_LATIAS_OR_LATIOS"
+  },
+  {
+   "kind": "goto_if_unset",
+   "flag": "FLAG_SYS_HAS_EON_TICKET"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  }
+ ],
+ "Underwater_SeafloorCavern": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_LEGEND_ESCAPED_SEAFLOOR_CAVERN"
+  },
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_LEGEND_ESCAPED_SEAFLOOR_CAVERN"
+  }
+ ],
+ "VerdanturfTown": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RUSTURF_TUNNEL_OPENED"
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_LINK_CONTEST_ROOM_STATE",
+   "value": 0
+  }
+ ],
+ "VerdanturfTown_ContestLobby": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RECEIVED_TM45"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_CONTEST_RANK",
+   "value": 0
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_CONTEST_LOCATION",
+   "value": 1
+  }
+ ],
+ "VerdanturfTown_WandasHouse": [
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_WALLY_SPEECH"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEFEATED_WALLY_VICTORY_ROAD"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEFEATED_LAVARIDGE_GYM"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_DEFEATED_WALLY_MAUVILLE"
+  },
+  {
+   "kind": "goto_if_set",
+   "flag": "FLAG_RUSTURF_TUNNEL_OPENED"
+  }
+ ],
+ "VictoryRoad_1F": [
+  {
+   "kind": "call_if_set",
+   "flag": "FLAG_DEFEATED_WALLY_VICTORY_ROAD"
+  },
+  {
+   "kind": "compare",
+   "var": "VAR_RESULT",
+   "value": 1
+  },
+  {
+   "kind": "setvar",
+   "var": "VAR_VICTORY_ROAD_1F_STATE",
+   "value": 1
+  }
+ ]
+}

@@ -1,0 +1,373 @@
+dex 77/178 (43.3%), 101 to go; 16 out of reach (version-exclusivex7, trade-evolutionx6, event-onlyx3)
+
+=== wild: 52 ===
+  Seaking      Safari Zone (NW/mach bike area), Safari Zone (SW)
+  Graveler     Victory Road (B1F)
+  Nosepass     Granite Cave (B2F)
+  Skitty       Fortree City, Route 116
+  Tentacruel   Abandoned Ship
+  Medicham     Victory Road (B2F), Victory Road (B1F)
+  Minun        Route 110
+  Magnemite    New Mauville (entrance), New Mauville
+  Magneton     New Mauville
+  Voltorb      New Mauville, New Mauville (entrance)
+  Electrode    Team Aqua Hideout, Team Magma Hideout, New Mauville
+  Illumise     Route 117
+  Dodrio       Safari Zone (NW/mach bike area)
+  Wailord      Route 129
+  Slugma       Fiery Path
+  Koffing      Fiery Path
+  Spoink       Jagged Pass
+  Skarmory     Route 113
+  Trapinch     Route 111
+  Cacnea       Route 111
+  Altaria      Sky Pillar (5F)
+  Baltoy       Route 111
+  Claydol      Sky Pillar (1F), Sky Pillar (3F), Sky Pillar (5F)
+  Feebas       Route 119
+  Castform     Weather Institute (Road 119)
+  Staryu       Lilycove City
+  Banette      Sky Pillar (1F), Sky Pillar (3F), Sky Pillar (5F)
+  Duskull      Mount Pyre (summit), Mount Pyre (4F), Mount Pyre (5F), Mount Pyre (6F)
+  Tropius      Route 119
+  Chimecho     Mount Pyre (summit)
+  Absol        Route 120
+  Vulpix       Mount Pyre (outside)
+  Pikachu      Hoenn Pokecenter, Safari Zone (SE), Safari Zone (SW)
+  Psyduck      Safari Zone (SW), Safari Zone (NW/mach bike area)
+  Golduck      Safari Zone (NW/mach bike area)
+  Wynaut       Lavaridge Town, Mirage Island, Route 130
+  Xatu         Safari Zone (NE/acro bike area)
+  Phanpy       Safari Zone (NE/acro bike area)
+  Pinsir       Safari Zone (NW/mach bike area)
+  Heracross    Safari Zone (NE/acro bike area)
+  Rhyhorn      Safari Zone (NW/mach bike area)
+  Snorunt      Shoal Cave
+  Spheal       Shoal Cave
+  Relicanth    Route 124 (underwater), Route 126 (underwater)
+  Corsola      Pacifidlog Town, Ever Grande City, Route 128
+  Beldum       Mossdeep City (Steven's house)
+  Regirock     Desert Ruins
+  Regice       Island Cave
+  Registeel    Ancient Tomb
+  Latias       Roaming Hoenn
+  Kyogre       Cave of Origin (B4F)
+  Rayquaza     Sky Pillar Apex
+
+=== evolve-level: 38 ===
+  Beautifly    Evolve Silcoon at Lv 10; Evolve Wurmple / Silcoon / Cascoon
+  Dustox       Evolve Cascoon at Lv 10; Evolve Wurmple / Silcoon / Cascoon
+  Kirlia       Evolve Ralts at Lv 20; Evolve Ralts
+  Gardevoir    Evolve Kirlia at Lv 30; Evolve Ralts / Kirlia
+  Masquerain   Evolve Surskit at Lv 22; Evolve Surskit
+  Breloom      Evolve Shroomish at Lv 23; Evolve Shroomish
+  Vigoroth     Evolve Slakoth at Lv 18; Evolve Slakoth
+  Slaking      Evolve Vigoroth at Lv 36; Evolve Slakoth / Vigoroth
+  Kadabra      Evolve Abra at Lv 16; Evolve Abra
+  Shedinja     Evolve Nincada
+  Exploud      Evolve Loudred at Lv 40; Evolve Whismur / Loudred
+  Azumarill    Evolve Marill at Lv 18; Evolve Marill / Azurill
+  Crobat       Evolve Golbat (with high friendship); Evolve Zubat / Golbat
+  Machoke      Evolve Machop at Lv 28; Evolve Machop
+  Swalot       Evolve Gulpin at Lv 26; Evolve Gulpin
+  Camerupt     Evolve Numel at Lv 33; Evolve Numel
+  Magcargo     Evolve Slugma at Lv 38; Evolve Slugma
+  Muk          Evolve Grimer at Lv 38; Evolve Grimer
+  Weezing      Evolve Koffing at Lv 35; Evolve Koffing
+  Grumpig      Evolve Spoink at Lv 32; Evolve Spoink
+  Vibrava      Evolve Trapinch at Lv 35; Evolve Trapinch
+  Flygon       Evolve Vibrava at Lv 45; Evolve Trapinch / Vibrava
+  Cacturne     Evolve Cacnea at Lv 32; Evolve Cacnea
+  Crawdaunt    Evolve Corphish at Lv 30; Evolve Corphish
+  Armaldo      Evolve Anorith at Lv 40; Evolve Anorith
+  Milotic      Evolve Feebas (with high beauty); Trade Feebas holding a Prism scale; Evol
+  Dusclops     Evolve Duskull at Lv 37; Evolve Duskull
+  Donphan      Evolve Phanpy at Lv 25; Evolve Phanpy
+  Rhydon       Evolve Rhyhorn at Lv 42; Evolve Rhyhorn
+  Glalie       Evolve Snorunt at Lv 42; Evolve Snorunt
+  Sealeo       Evolve Spheal at Lv 32; Evolve Spheal
+  Walrein      Evolve Sealeo at Lv 44; Evolve Spheal / Sealeo
+  Lanturn      Evolve Chinchou at Lv 27; Evolve Chinchou
+  Seadra       Evolve Horsea at Lv 32; Evolve Horsea
+  Shelgon      Evolve Bagon at Lv 30; Evolve Bagon
+  Salamence    Evolve Shelgon at Lv 50; Evolve Bagon / Shelgon
+  Metang       Evolve Beldum at Lv 20; Evolve Beldum
+  Metagross    Evolve Metang at Lv 45; Evolve Beldum / Metang
+
+=== evolve-stone: 8 ===
+  Ludicolo     Evolve Lombre with a Water stone; Evolve Lotad / Lombre
+  Delcatty     Evolve Skitty with a Moon stone; Evolve Skitty
+  Bellossom    Evolve Gloom with a Sun stone; Evolve Oddish / Gloom
+  Sandslash    Evolve Sandshrew at Lv 22; Evolve Sandshrew with a Ice stone; Evolve Sands
+  Wigglytuff   Evolve Jigglypuff with a Moon stone; Evolve Jigglypuff / Igglybuff
+  Starmie      Evolve Staryu with a Water stone; Evolve Staryu
+  Ninetales    Evolve Vulpix with a Ice stone; Evolve Vulpix with a Fire stone; Evolve Vu
+  Raichu       Evolve Pikachu with a Thunder stone; Evolve Pikachu / Pichu
+
+=== gift: 3 ===
+  Azurill      Breed to obtain — egg group: No eggs.; Breed Marill / Azumarill
+  Igglybuff    Breed to obtain — egg group: No eggs.; Breed Jigglypuff / Wigglytuff
+  Pichu        Breed to obtain — egg group: No eggs.; Breed Pikachu / Raichu
+
+wrote /tmp/dexgap.json
+
+================================================================
+BLOCKERS (measured, not guessed) -- 2026-09-04
+================================================================
+
+1. PC BOXES ABOVE 0 ARE UNREACHABLE.
+   `Storage.withdraw(box, slot)` fails with
+     [storage] box stuck on 0 trying to reach 2
+   for every box > 0. Box 0 withdraws fine (NATU, GOLDEEN, ODDISH all came
+   out of it). `current_box()` reads `gPokemonStorage.currentBox` and the
+   press-and-verify loop is the right shape, but R never moves the value.
+   TRIED AND REVERTED: hopping the cursor UP to the box header first, on the
+   theory L/R only pages from there. currentBox still never moved -> theory
+   wrong, presses unjustified, reverted.
+   NEXT: read the box-view input handler in
+   pret/src/pokemon_storage_system_*.c instead of guessing.
+   COST: nearly every evolution target and every boxed fighter above L40
+   lives in boxes 1-2, so the party cannot be composed properly.
+
+2. THE PARTY SCREEN IS NOT A LIST.
+   RSE draws slot 0 as a tall box on the left with slots 1-5 in a two-column
+   grid beside it, so `_pick_party_member(n)` lands NEXT to the mon asked
+   for: asking for NATU (index 1) equipped GOLDEEN (index 2), twice, with the
+   item genuinely held while `give_to_mon` reported failure.
+   WORKAROUND IN USE: `give_share_to_anyone` reads the OUTCOME off
+   `held_item` rather than trusting the input. Correct fix needs the party
+   menu's own layout table.
+
+3. `elite_four.py` MISREPORTS BEATEN ROOMS.
+   It logs "already beaten -- walking out" and leaves the building while all
+   four FLAG_DEFEATED_ELITE_4_* read FALSE with VAR_ELITE_4_STATE=1 -- i.e.
+   sealed in with the member alive. A shut north door at (6,2) means the
+   member is standing at (6,5), not that routing failed. `evolve_chain`
+   now engages them itself; elite_four's own check is still wrong.
+
+WHAT IS PROVEN WORKING
+  * EXP. SHARE on a BENCHED mon earns real experience and still triggers
+    evolution: GOLDEEN L22 -> L28 without ever being sent out.
+  * The gauntlet walks the full room chain and beats members (Sidney,
+    Phoebe, Glacia in one pass) once `sync_grid` pushes the runtime
+    metatile changes into nav.
+  * Party composition matters: one fighter plus three L25 passengers beat
+    three members then whited out on Drake's Altaria. Keep 5 fighters and
+    exactly ONE target -- only one mon can hold the share.
+
+4. NEW MAUVILLE IS BEHIND AN ASYMMETRIC SURF MOUNT.
+   The Basement Key is HELD and VAR_NEW_MAUVILLE_STATE is 0, so the door has
+   never been opened. Its coord_event is NewMauville_Entrance (4,2) -- asks
+   YES/NO after `checkitem ITEM_BASEMENT_KEY`, then opens the door with
+   `setmetatile` at RUNTIME (scripts.inc:24-40), so nav needs `sync_grid`
+   afterwards. The THUNDER STONE is inside at (39,4)
+   (item_ball_scripts.inc:325-326) and four species live there
+   (MAGNEMITE, MAGNETON, VOLTORB, ELECTRODE).
+   THE BLOCKER IS GETTING TO THE DOOR. Route110's own warp cell is (35,24)
+   (NOT (4,6) -- that is the inside half of the pair, and using it asked nav
+   to approach a cell on the wrong map). (35,24) is passable and its only
+   walkable neighbour is (35,25); every other neighbour is collision=1.
+   Measured on Route110 with the player at (12,1):
+     surfing=False  from (35,25):   12 cells
+     surfing=True   from (35,25):  275 cells
+     player component 1611, door component 275, OVERLAP 108
+   So they ARE connected while surfing, but `reachable` from the PLAYER never
+   includes (35,25): reachability is ASYMMETRIC because mounting SURF is only
+   legal from a shoreline at SHORE_ELEVATION 3 (`nav._surf_seam`) while
+   dismounting is unrestricted. nav therefore finds no legal mount on the
+   player's side of the channel.
+   REFINED after two more probes -- the "mount in the overlap" idea is DEAD:
+     * water cells inside the 108-cell overlap: ZERO. The shared cells are
+       all LAND, so there is no mount point to aim at in there.
+     * approached from the SOUTH (flew to Slateport, travelled to Route110,
+       arrived (15,98)) the reachable set is the SAME 1611 cells and (35,25)
+       is still absent. North and south are one component; the door pocket
+       is outside it from either side.
+   So the connection between the door pocket and the rest of Route 110 is
+   ONE-WAY OUTWARD -- consistent with Route 110's ledges, which you jump
+   down and cannot climb. (35,25)'s own component is 12 cells on foot
+   (x 33..35, y 24..28) and 275 with surfing, i.e. it is a small shelf that
+   touches WATER. The real route is therefore: get onto the correct body of
+   water and DISMOUNT onto (35,25).
+   Why nav will not do it: mounting SURF is legal only from a shoreline at
+   SHORE_ELEVATION 3 (`nav._surf_seam`), and no such shore in the player's
+   1611-cell component touches the water that reaches the door shelf.
+   NEXT (unproven, do not trust without measuring): find the water cells
+   adjacent to (35,25), walk the player to whichever land cell touches THAT
+   body of water, and check `_surf_seam` against it directly -- if the shore
+   there is not elevation 3, the seam rule itself is what needs widening,
+   and that is a nav change with real blast radius, not an errand fix.
+
+5. DEPOSITS FAIL WHILE AN EGG SITS MID-PARTY.
+   With the party ['SEA BIRD','NINJA','LOTTAD','EMBER',<egg>,'A'] every
+   deposit returned False with "deposit of X did not land: party was ...,
+   now ..." -- identical before and after -- for indices 1, 2, 3 and 5.
+   Deposits worked earlier in the same session when the EGG was the LAST
+   slot (CASTFORM at index 5 deposited fine). The only change is the egg
+   moving to index 4 after a withdraw appended to the end.
+   LIKELY the party-grid cursor arithmetic in `Storage._move_to`: an egg
+   occupies a slot but is not a selectable target the same way, so the
+   cursor lands somewhere the confirm does nothing. Same family as the
+   two-column party-screen bug in blocker 2.
+   WORKAROUND IN USE: let the egg hatch first (it is a pending dex entry
+   anyway -- ~2816 steps, daycare.c:721-733/:758-775) and do box work with
+   no egg aboard.
+
+6. RETRACTED IN PART -- THE DAY CARE WAS NOT THE PROBLEM, AN UNANSWERED
+   NICKNAME PROMPT WAS. And the naming wedge IS RECOVERABLE, which an
+   earlier note in this session got wrong.
+   The canonical save sat at Route117_PokemonDayCare (1,8) with
+   `scene_active() == True`, tasks
+   ['Task_HandleInput','Task_80B64D4','Task_NamingScreenMain'] and the
+   message "Would you like to nickname the newly hatched WYNAUT?".
+   `hatch.py` walked the egg out but never answered the prompt, so every
+   later input was eaten -- which is why `take_warp` hung for 17 minutes,
+   why `Storage.deposit` burned 144 chunks, and why the wild sweeper sat in
+   the building doing nothing while the dex stopped moving. None of those
+   were Day Care bugs; they were one open menu (gotcha 7).
+   WHAT DID NOT WORK: 14x B, `close_menus()`, `resolve_choice("NO")`.
+   WHAT DID: COMPLETE the keyboard. `NamingScreen.accept()` (pokeagent/
+   naming.py:259) confirmed the typed name and handed control back --
+   scene True -> False, normal overworld tasks, save banked clean, dex 87
+   intact. `hatch.py` now answers the prompt itself and REFUSES to bank a
+   state whose scene is still active.
+   Still true and worth keeping:
+   * `Storage.pc_cells()` reports a PC at (10,1) in that building. There is
+     no PC in the Day Care -- it is a metatile misdetection -- and `deposit`
+     then burned 144 walk chunks trying to reach the cell below it:
+     "could not reach the cell below the PC at (10, 1): walked 144 chunks
+     without arriving at (10, 2) (now (1, 8))".
+   * `take_warp` on the room's real exits ((2,8) and (3,8),
+     Route117_PokemonDayCare/map.json:29-42) HANGS -- a supervised run sat
+     17 minutes with no output past its first log line and had to be killed.
+     The state was untouched, so nothing was lost.
+   WORKAROUND: `hatch.py` should leave via `travel("Route117")` rather than
+   `take_warp`, and any PC work must assert the map name ends in
+   `PokemonCenter_1F` instead of trusting `pc_cells()`.
+   The wild sweeper routes out of the building without trouble, so the
+   cheapest fix for now is to let it move the save before doing box work.
+
+7. DEPOSIT IS DEAD ON THIS SAVE, AND IT LOOKS LIKE BLOCKER 2 AGAIN.
+   Blocker 5 ("deposits fail while an egg sits mid-party") is WITHDRAWN --
+   the egg has hatched and deposits still fail, so the egg was never the
+   cause.
+   Measured at MauvilleCity_PokemonCenter_1F, party
+   ['SEA BIRD','NINJA','LOTTAD','EMBER','A'(WYNAUT),'A'(WIGGLYTUFF)]:
+     * deposit(5), deposit(2), deposit(1) all return False with the party
+       list IDENTICAL before and after -- a real no-op, not a misreport.
+     * box_counts() = [30,30,29,8,0,...]; current_box()=2; first_free_box()=2
+       -- so the picker needs ZERO presses and box 2 has a free slot. Box
+       fullness is NOT the blocker.
+     * Deposits DID work earlier the same session (CASTFORM, MARILL,
+       VILEPLUME, NINJA) when boxes 0-1 still had room and nicknames were
+       distinct.
+   BEST REMAINING HYPOTHESIS, and it is blocker 2 wearing a different hat:
+   `_move_to(index)` steers the PARTY column of the deposit screen, and the
+   party screen is NOT a list -- RSE draws slot 0 as a tall box with slots
+   1-5 in a two-column grid beside it. If the cursor lands beside the wanted
+   slot, the per-mon menu opens on the wrong mon (or not at all) and the two
+   blind A presses that follow do nothing. That would explain why it fails
+   for EVERY index rather than a particular one.
+   FIXED ALONG THE WAY (real bug, not the cause): the deposit verification
+   used `name not in after`, which reports failure whenever a namesake stays
+   behind -- and every mon caught through the naming prompt this run is
+   called "A". It now compares COUNTS.
+   TRIED AND IT DID NOT FIX IT (though the fix itself is ROM-correct and is
+   kept): `_move_to` used RIGHT/LEFT to step the PARTY column, and
+   `sub_809C664` (pokemon_storage_system_4.c:1958-2016) shows those do not
+   step there at all -- RIGHT below the first slot sets `cursorArea = 0` and
+   LEAVES for the box grid, LEFT jumps to position 0. Only UP/DOWN step, and
+   they wrap over 7 positions. Corrected; deposit STILL returns False with
+   the party identical before and after.
+   SO THAT IS THREE WRONG THEORIES from me on this one bug: the egg, box
+   fullness, and the party-column geometry. What is actually established:
+     * every index fails, identically, at a real Centre
+     * a box with room exists and the picker needs zero presses
+     * it worked earlier tonight on the same save file
+   INSTRUMENTED, and the answer is NOT `_move_to`. At
+   MauvilleCity_PokemonCenter_1F:
+     pc_cells [(10, 1)]
+     open  -> True   cur=(1,3) area=1 msg='POKeMON Storage System opened.'
+     enter -> True   cur=(1,0) area=1 msg='POKeMON Storage System opened.'
+     move_to(5) -> True  cur=(1,5) area=1
+     A#1 / A#2 / A#3    cur=(1,5) area=1  msg UNCHANGED throughout
+   Every step REPORTS success and the cursor even reads the right slot, but
+   the three A presses change NOTHING -- no per-mon menu, no "X is
+   selected.", no box picker, no cursor movement.
+   That means `_enter(MENU_DEPOSIT)` is the failing step, not the cursor
+   walk, and its `True` is worthless. Note also that `_enter` returned True
+   on a FieryPath fork where nothing was open at all and the tasks were
+   plain overworld ones -- so it does not verify anything.
+   AND the cursor bytes are the known stale-EWRAM trap this project already
+   recorded: `sBoxCursorArea`/`sBoxCursorPosition` persist from a previous
+   session, so (1,5) is not evidence that a party view is up. `cursor()`
+   must never be used as an "is it open" signal.
+   `_enter` IS NOT THE LIAR EITHER -- that was my FOURTH wrong theory.
+   There IS a real mode flag: `task_intro_29(whichMenu)` stores it at
+   `gPokemonStorageSystemPtr->unk_0005` (pokemon_storage_system_2.c:152-156)
+   and `sub_809AA24` branches sBoxCursorArea off it
+   (pokemon_storage_system_4.c:882-889). Measured live at Mauville:
+     storage ptr = 0x02000000
+     mode before open : 46   (garbage -- the struct is not initialised yet)
+     after open       : 46
+     after _enter(1)  : 1    <- DEPOSIT mode genuinely set
+   So every precondition the ROM checks is CORRECT:
+     * unk_0005 == 1 (DEPOSIT)
+     * sBoxCursorArea == 1 (party column)
+     * sBoxCursorPosition == 5, and gPlayerParty[5] is WIGGLYTUFF
+   The A handler gate is `sub_809CAB0()` (:2263-2306), which for mode 1
+   returns 0 only when `sub_809AB8C()` is falsy -- and that function
+   (:948-959) is just
+       GetMonData(gPlayerParty + sBoxCursorPosition, MON_DATA_SPECIES)
+   for area 1, which is a valid species here. The gate should PASS.
+   WHAT IS LEFT: the A press itself is not registering in this UI. Every
+   value the game tests reads correct, and `A:8 .:240` + settle(1200)
+   changes nothing -- no menu, no message, no cursor move. `JOY_NEW` needs a
+   clean press EDGE, so the next thing to test is the input shape, not more
+   state: vary hold length, insert idle frames before the press, and watch
+   `gMain.newKeys`/`heldKeys` to confirm the edge actually lands inside the
+   task's polling window. DO NOT theorise about storage state again -- it is
+   all verified correct.
+
+================================================================
+DEPOSIT: FIXED -- 2026-09-04, and it was ONE cause behind FOUR
+                  of the blockers written above
+================================================================
+
+FIXED. `Storage.deposit(index)` now works:
+  BEFORE ['SEA BIRD','NINJA','LOTTAD','EMBER','A','A'] boxes [30,30,29,8]
+  [storage] deposited A (party 6 -> 5)
+  AFTER  ['SEA BIRD','NINJA','LOTTAD','EMBER','A']     boxes [30,30,30,8]
+
+THE CAUSE, seen in a screenshot after every other observable lied:
+
+  frame 1  party view, WIGGLYTUFF selected
+  frame 2  per-mon menu open, "A is selected."
+  frame 3  box picker: "BOX1  30/30"   "Deposit in which BOX?"
+  frame 4  "The BOX is full."
+
+Every A press ALWAYS WORKED. The box picker does not open on
+`gPokemonStorage.currentBox` -- with currentBox == 2 it still came up on
+BOX1 (index 0). The old code paged `(first_free - current_box) % 14`,
+which evaluated to ZERO presses, confirmed the full BOX1, and swallowed
+"The BOX is full." That is the whole bug: `pokeagent/storage.py` now
+confirms-and-pages until `party_names()` actually shrinks.
+
+RETRACTED, all four caused by this one thing:
+  - blocker 2 ("box stuck on 0 trying to reach 2") -- the box switcher was
+    never broken; the PICKER start index was wrong.
+  - blocker 5 ("deposits fail while an egg sits mid-party") -- withdrawn
+    already, correctly.
+  - blocker 7 ("party screen cursor lands beside its target") -- the party
+    cursor was right all along; `cursor()` read (1,5) and the screenshot
+    confirms WIGGLYTUFF really was selected.
+  - "`_enter` returns a worthless True" -- it does set mode 1 = DEPOSIT,
+    measured live off `gPokemonStorageSystemPtr->unk_0005`.
+
+THE LESSON, and it is the one I kept failing all session:
+`message()`, `cursor()` and `tasks()` are ALL blind inside the storage UI
+(tasks() is literally empty there -- the PSS runs on main callbacks, not
+tasks). I built four theories on those readings and every one was wrong.
+ONE screenshot, which this repo's own gotcha 11 already names as the only
+surface that shows what a player sees, answered it in a single look.
+Screenshot the UI before theorising about it.

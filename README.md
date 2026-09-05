@@ -117,3 +117,25 @@ Gotcha worth knowing: WRAM symbols in banks ≥1 (most game state) must be
 read with explicit bank addressing (`memory[bank, addr]`) — the game switches
 `SVBK` during battles, and reads through the currently-mapped bank silently
 return the wrong bank's bytes.
+
+## Other generations
+
+This repository is no longer Crystal-only. Each generation is a separate lane
+that does not import the others; they meet only at `pokeagent/adapters/`.
+
+| Lane | Game | Emulator | Code | Docs |
+|---|---|---|---|---|
+| Gen 2 | Crystal | PyBoy | `crystalagent/` | this file |
+| Gen 3 | Sapphire | mGBA | `pokeagent/` | `docs/gen3/` |
+
+Nothing above this line changed. The Gen-3 lane adds its own driver
+(`pokeagent/trek.py`), its own tests (`tests/gen3/`, 776 unit) and an Omarchy
+desktop widget (`widget/poke.run/`) that reads a published feed and so works
+with whichever lane is running.
+
+Start with `docs/gen3/AGENTS.md`, and `docs/gen3/MERGING.md` for how the two
+code bases relate — including the Gen-2 modules this repository ports and the
+drift between them, measured file by file.
+
+The emulators are **not** installed together; `pyproject.toml` exposes them as
+`.[gen2]` and `.[gen3]` extras because they require different Python versions.

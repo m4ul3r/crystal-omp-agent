@@ -58,7 +58,19 @@ def _milestone_digests():
 def milestone_guard():
     """Assert NO claude_saves milestone (.state or .meta) changed during
     the whole integration run. Checked once more at session teardown so a
-    mutated milestone fails the run even if the offending test passed."""
+    mutated milestone fails the run even if the offending test passed.
+
+    A checkout with no milestone directory at all SKIPS, by name. This
+    fixture used to let `iterdir` raise FileNotFoundError, so every scenario
+    ERRORed -- which is precisely how the lane got read as "cannot run here"
+    for sixteen sessions (journal #53); the sibling gen3 conftest already
+    skips, and the two must agree.
+    """
+    if not SAVES.is_dir():
+        pytest.skip(
+            f"no Crystal milestone directory ({SAVES}); point CRYSTAL_MILESTONES "
+            "at one, e.g. a checkout's claude_saves/ or backup/claude_saves/"
+        )
     before = _milestone_digests()
     yield
     after = _milestone_digests()

@@ -1,0 +1,2 @@
+55e6c650867d4da003709eb221e101eb40323b5e
+git@gitlab.example.invalid:your-group/regional-dex-buddy.git
