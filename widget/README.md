@@ -5,10 +5,14 @@ drives any Gen 1–3 game, so this widget names none of them: which cartridge is
 booted, and every number derived from it, comes from the feed.
 
 The bar slot shows the Torchic mark and the lead Pokemon's HP. Clicking it opens
-a popup with the objective the agent is pursuing, the console framebuffer it is
-actually running, the party with an HP bar on the lead, Pokedex and team
-progress, where the player is standing, the opponent when a battle is on, run
-totals, session counters, and the agent's own log lines as narration.
+a popup laid out as a cockpit, nothing to scroll for: the console framebuffer
+dead centre in a bezel, drawn at a whole number of device pixels per source
+pixel so sprites stay crisp on any display scale, with the matchup under it
+during a battle (lead and foe facing off across two HP bars); the six party
+slots stacked on the left, lead on top; the place, money, play time, frame,
+the eight-slot badge case, the objective and the progress ladder on the right;
+and a footer strip of team shape, session counters, pace and the agent's own
+log lines, in as many columns as have something to say.
 
 Nothing here drives the emulator. The widget only ever reads three files that
 `pokeagent.live.LiveFeed` writes; the driving process is the sole writer.
@@ -40,6 +44,10 @@ the new widget is enabled first, placed where the old one sat, and only then is
 the old one disabled (which is what removes its `shell.json` bar entry) and its
 folder moved to a dot-prefixed backup the shell's plugin scan ignores. Both
 halves are conditional, so a second run does nothing.
+
+The shell hot-reloads plugin files on save, but a reinstall that swaps the
+whole directory can leave the running shell on its cached copy of the old
+popup; `omarchy restart shell` picks up the new one.
 
 Options:
 
