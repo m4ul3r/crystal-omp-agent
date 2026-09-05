@@ -150,11 +150,16 @@ def gym_margin(risk=None) -> int:
     return int(round(4 - 4 * r))
 
 
+def mood(risk=None) -> str:
+    """One word for the risk setting, the way the widget and the log name it."""
+    r = load()["risk"] if risk is None else risk
+    return "cautious" if r < 0.34 else ("balanced" if r < 0.67 else "reckless")
+
+
 def describe(risk=None) -> str:
     r = load()["risk"] if risk is None else risk
-    mood = "cautious" if r < 0.34 else ("balanced" if r < 0.67 else "reckless")
     return (
-        f"risk {r:.2f} ({mood}): heal below {heal_below(r):.0%}, "
+        f"risk {r:.2f} ({mood(r)}): heal below {heal_below(r):.0%}, "
         f"train a laggard above {lead_min_hp(r):.0%}, "
         f"enter a gym {gym_margin(r)} levels up"
     )

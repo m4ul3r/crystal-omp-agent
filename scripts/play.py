@@ -112,6 +112,8 @@ class Session:
     def __init__(self, state, minutes, game="sapphire", use_brain=True,
                  feed_name="default", session="play"):
         self.brain = Brain() if use_brain else None
+        self.session = session
+        self.state_path = str(state)
         self.d = Driver(state, game=game, brain=self.brain)
         self.objective = ObjectiveEngine(self.d)
         self.quest = Quest(self.d)
@@ -153,14 +155,19 @@ class Session:
         self._grind_picked = 0.0
         self._restock_fails = 0
         # REUSE the Driver's feed when it already made one. Publishing became
-        # the Driver's default (any save under saves/ attaches one), so this
-        # explicit attach became a SECOND observer on the same emulator and the
-        # loop refused to start at all:
+        # the Driver's default (any save under saves/ attaches one, named after
+        # the state's stem), so an unconditional attach here was a SECOND
+        # observer on the same emulator and the loop refused to start at all:
         #   "already has tick observer <LiveFeed default ...>; detach it first"
-        # One publisher per emulator; the Driver's is as good as this one, and
-        # it is already publishing to the name the widget watches.
+        # One publisher per emulator -- but the name must be the one the widget
+        # watches: `--feed default` on saves/sapphire.state used to publish to
+        # live/sapphire.* and the bar widget pinned to `default` saw nothing.
         existing = getattr(self.d, "feed", None)
+        if existing is not None and existing.name != feed_name:
+            existing.detach()
+            self.d.feed = existing = None
         self.feed = existing or LiveFeed(feed_name).attach(self.d)
+        self.feed.extra["agent"] = self.agent_card()
         #: minutes <= 0 means run until stopped. The user's framing for this
         #: project is an idle game -- something that keeps going in the
         #: background -- and a fixed budget silently ends the run and leaves a
@@ -1414,7 +1421,8 @@ class Session:
     PROJECTION_EVERY = 60.0
 
     def publish_projection(self):
-        """Put the "how long will this take" numbers in the feed.
+        """Put the "how long will this take" numbers in the feed, and refresh
+        the agent card beside them.
 
         The point of the run is partly the claim it can support -- "N hours of
         idle time to beat the game" -- and a number nobody can see is a number
@@ -1429,8 +1437,38 @@ class Session:
         try:
             self.feed.extra["projection"] = self.metrics.projection()
             self.feed.extra["totals"] = self.metrics.summary()
+            self.feed.extra["agent"] = self.agent_card()
         except Exception as exc:  # noqa: BLE001 - a metric must never stop play
             log.debug("projection failed: %s", exc)
+
+    def agent_card(self) -> dict:
+        """What is driving this run, for the widget: the session, the risk it
+        runs at, and the local model it consults -- with whether that model
+        is actually answering, because "gemma4:e4b" on a card means nothing
+        if every decision has been falling back to the maths for an hour.
+
+        The feed adds the process identity (script, pid, host, uptime) itself.
+        ``Brain.state()`` does no I/O: it reads the breaker, the last decision
+        and the last probe. The one probe is the note at the top of ``run()``;
+        asking ``available()`` here stalled the loop 20s a minute against a
+        dead host, because a failed probe is cached for only 30s.
+        """
+        card = {
+            "session": self.session,
+            "state": self.state_path,
+            "risk": self.settings["risk"],
+            "risk_label": usersettings.mood(self.settings["risk"]),
+        }
+        if self.brain is None:
+            card["model_state"] = "off"
+            return card
+        card["model"] = self.brain.model
+        card["model_host"] = self.brain.host
+        card["model_state"] = self.brain.state()
+        card["model_reason"] = self.brain.last_reason
+        stats = self.brain.stats()
+        card["decisions"] = {k: stats.get(k, 0) for k in ("hits", "fallbacks", "timeouts")}
+        return card
 
     def blocker_hint(self, dest_map=None, warp=None) -> str:
         """Why a road is shut, named from the map data.

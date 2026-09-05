@@ -1,7 +1,10 @@
 #!/bin/sh
-# Launcher for the Sapphire agent CLI. Uses the tool's own venv and, when the
-# system libmgba is absent, the vendored copy under ./vendor.
+# Launcher for the Sapphire agent CLI. Uses the Gen-3 venv (.venv-gen3: Python
+# 3.11 + mgba; .venv is the Gen-2/PyBoy lane and the two cannot share an
+# interpreter) and, when the system libmgba is absent, the vendored copy under
+# ./vendor.
 DIR="$(cd "$(dirname "$0")" && pwd)"
+VENV="$DIR/.venv-gen3"; [ -x "$VENV/bin/python" ] || VENV="$DIR/.venv"
 PYTHONPATH="$DIR" PYTHONWARNINGS=ignore \
 LD_LIBRARY_PATH="$DIR/vendor/lib:$LD_LIBRARY_PATH" \
-exec "$DIR/.venv/bin/python" -m pokeagent.cli "$@"
+exec "$VENV/bin/python" -m pokeagent.cli "$@"

@@ -5,10 +5,17 @@ drives any Gen 1–3 game, so this widget names none of them: which cartridge is
 booted, and every number derived from it, comes from the feed.
 
 The bar slot shows the Torchic mark and the lead Pokemon's HP. Clicking it opens
-a popup with the objective the agent is pursuing, the console framebuffer it is
-actually running, the party with an HP bar on the lead, Pokedex and team
-progress, where the player is standing, the opponent when a battle is on, run
-totals, session counters, and the agent's own log lines as narration.
+a popup laid out as a cockpit, nothing to scroll for: the console framebuffer
+dead centre in a bezel, drawn at a whole number of device pixels per source
+pixel so sprites stay crisp on any display scale, with the matchup under it
+during a battle (lead and foe facing off across two HP bars); the six party
+slots stacked on the left, lead on top; the place, money, play time, frame,
+the eight-slot badge case, the objective and the progress ladder on the right;
+and a footer strip of team shape, session counters, pace and the agent's own
+log lines, in as many columns as have something to say. The header names the
+game on the left and **who is driving it** on the right: the script and its
+session, how long it has been at it, the local model it consults and whether
+that model is answering, and the risk it runs at.
 
 Nothing here drives the emulator. The widget only ever reads three files that
 `pokeagent.live.LiveFeed` writes; the driving process is the sole writer.
@@ -40,6 +47,10 @@ the new widget is enabled first, placed where the old one sat, and only then is
 the old one disabled (which is what removes its `shell.json` bar entry) and its
 folder moved to a dot-prefixed backup the shell's plugin scan ignores. Both
 halves are conditional, so a second run does nothing.
+
+The shell hot-reloads plugin files on save, but a reinstall that swaps the
+whole directory can leave the running shell on its cached copy of the old
+popup; `omarchy restart shell` picks up the new one.
 
 Options:
 
@@ -94,15 +105,18 @@ claim the run is at 0%.
 | Key | Shown as |
 |---|---|
 | `t`, `live`, `frame`, `status`, `error` | staleness, the bar tooltip, the error banner |
-| `party[]`, `in_battle`, `message` | party rows with an HP bar on the lead; the urgent colour in the bar |
-| `map`, `pos {x, y, facing}` | header fallback, and the `MAP` / `POS` / `FACING` cells |
-| `badges`, `money`, `play_time` | the `RUN` grid |
+| `party[]`, `in_battle` | the six party slots, with an HP bar per mon; the urgent colour in the bar |
+| `map`, `pos {x, y, facing}` | header fallback, and the place line over the HUD |
+| `badges`, `money`, `play_time` | the badge pips and the HUD cells |
 | `game {id, name, generation, region}` | the popup header: **which of Gen 1–3 is running** |
-| `objective {name, detail, percent}` | the `OBJECTIVE` block, with a progress bar |
-| `dex {caught, achievable, percent}` | the `POKEDEX` bar; `percent` is derived from the counts if absent |
-| `team {min_level, max_level, spread, coverage_gaps[]}` | the `TEAM` block; an empty `coverage_gaps` reads as "none" |
-| `enemy {species, level, hp, max_hp}` | the `OPPONENT` block, with the foe's HP bar |
+| `agent {name, session, pid, host, started, model, model_state, risk, risk_label}` | the header's far edge: **who is driving**. The feed fills `name`/`pid`/`host`/`started` from the process itself; `scripts/play.py` adds the rest (`model_state` is `ready`, `unreachable`, `unknown` or `off`; the bar tooltip also names `model_host`) |
+| `objective {name, detail, percent}` | the `OBJECTIVE` block under the screen, with a progress bar |
+| `dex {caught, achievable, percent}` | the first `PROGRESS` row; `percent` is derived from the counts if absent |
+| `stages[] {name, percent, current, done}` | the rest of `PROGRESS`; only the current stage draws a track |
+| `team {min_level, max_level, spread, coverage_gaps[]}` | the `TEAM` block under the party; an empty `coverage_gaps` reads as "none" |
+| `enemy {species, level, hp, max_hp}` | the matchup under the screen, with the foe's HP bar |
 | `counters {battles_won, caught, faints, saves, steps, frames}` | the `COUNTERS` grid |
+| `projection` | the `PACE` column, with its basis |
 
 `percent` is 0–100 and clamped. Anything non-numeric counts as not reported.
 

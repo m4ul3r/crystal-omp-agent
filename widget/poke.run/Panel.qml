@@ -61,45 +61,39 @@ Panel {
   // little more of the slot than a glyph does in order to read at all.
   readonly property int markBarSize: Math.round(Style.bar.iconCanvas * 1.25)
 
-  // ONE caption column for every bar in the panel.
-  //
-  // A RunBar's track used to stop at whatever caption that particular row
-  // happened to carry, so a ladder of stages drew a ladder of DIFFERENT
-  // lengths -- "CHAMPION  done" left a long track, "VICTORY ROAD  62%" a
-  // short one -- and no two bars in the group lined up with each other.
-  //
-  // Measured from the widest caption each bar can EVER show, not the one it
-  // is showing right now, so a rung ticking 9% -> 10% cannot re-length every
-  // bar on screen. Same doctrine as reserveCaption on the bar itself:
-  // geometry must not be a function of content that moves.
-  FontMetrics {
-    id: captionColumnMetrics
-    font.family: root.fontFamily
-    font.pixelSize: Style.font.caption
+  // The framebuffer is drawn at a WHOLE number of device pixels per source
+  // pixel (see screenBox), and the popup is sized around it: the glass is
+  // the frame's exact size (at 2x a 240px GBA frame wants 720 device pixels,
+  // a 360-logical glass), the bezel wraps it, and the two instrument columns
+  // sit either side. The next multiple UP is taken whenever the glass it
+  // needs is at most a quarter wider than the design glass (a 3x frame beats
+  // a 2x frame swimming in margins); past that the frame is centred at the
+  // multiple below.
+  readonly property real dpr: Screen.devicePixelRatio > 0 ? Screen.devicePixelRatio : 1
+  readonly property int designGlass: Style.space(360)
+  //: The screen's bezel, each side.
+  readonly property int bezelInset: Style.space(8)
+  //: Gap between the cockpit's columns, and between the footer's.
+  readonly property int columnGap: Style.space(14)
+  readonly property int partyWidth: Style.space(128)
+  readonly property int instrumentWidth: Style.space(200)
+
+  readonly property int glassWidth: {
+    var exact = designGlass * dpr / screenBox.srcW
+    var k = Math.ceil(exact)
+    if (Math.ceil(k * screenBox.srcW / dpr) > designGlass * 1.25)
+      k = Math.max(1, Math.floor(exact))
+    return Math.max(designGlass, Math.ceil(k * screenBox.srcW / dpr))
   }
+  readonly property int bezelWidth: glassWidth + 2 * bezelInset
 
-  readonly property real captionReserve: {
-    // "100%" is the widest a percentage gets and "done" is what a finished
-    // rung shows instead, so both are measured for every label -- the column
-    // has to fit whichever ending a given bar reaches.
-    var widest = Math.max(captionColumnMetrics.advanceWidth("100%"),
-                          captionColumnMetrics.advanceWidth("done"))
-
-    var dex = Model.dexLabel(Model.dex(feed.state))
-    if (dex !== "")
-      widest = Math.max(widest,
-                        captionColumnMetrics.advanceWidth(dex + "  100%"))
-
-    var rows = Model.stages(feed.state)
-    for (var i = 0; i < rows.length; i++) {
-      if (!rows[i] || !rows[i].name) continue
-      widest = Math.max(
-        widest,
-        captionColumnMetrics.advanceWidth(rows[i].name + "  100%"),
-        captionColumnMetrics.advanceWidth(rows[i].name + "  done"))
-    }
-    return Math.ceil(widest)
-  }
+  // What the card keeps for itself: its padding and its border
+  // (Ui/KeyboardPanel.qml sizes the card to `contentWidth` and lays the
+  // content out inside both).
+  readonly property int cardInset: 2 * panel.padding
+    + Border.left(panel.borderSpec) + Border.right(panel.borderSpec)
+  readonly property int cockpitWidth:
+    partyWidth + bezelWidth + instrumentWidth + 2 * columnGap + cardInset
 
   function refresh() {
     feed.refresh()
@@ -244,7 +238,7 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(360))
+    contentWidth: panel.fittedContentWidth(root.cockpitWidth)
     // The popup is a dashboard now -- objective, screen, opponent, party, dex,
     // team, totals, counters, narration -- so it is allowed to be tall enough
     // for the narration to stay above the fold on a full-height screen. The cap
@@ -303,7 +297,7 @@ Panel {
             PanelHero {
               width: parent.width
               title: Model.gameTitle(feed.state)
-              meta: Model.headerMeta(feed.state, feed.running, feed.present)
+              meta: Model.headerMeta(feed.state, feed.running, feed.present, feed.age)
               detail: feed.running && feed.inBattle ? "BATTLE" : ""
               foreground: root.foreground
               fontFamily: root.fontFamily
@@ -316,6 +310,16 @@ Panel {
                   size: Style.font.display
                   animate: feed.running
                   tint: root.foreground
+                }
+              }
+              // Who is driving, on the header's far edge: the game on the
+              // left, the agent on the right. Reserved through the slot above
+              // like the rest of the hero, so a card that appears with the
+              // first snapshot cannot move the frame.
+              trailingControl: Component {
+                AgentCard {
+                  agent: Model.agent(feed.state)
+                  visible: agent !== null
                 }
               }
             }
@@ -374,681 +378,586 @@ Panel {
             }
           }
 
-          // FADED, NEVER UNMOUNTED. `feed.running` is recomputed from elapsed
-          // time on every tick, so near the staleness threshold this line
-          // appeared and vanished repeatedly -- and it sits ABOVE the
-          // framebuffer, so each toggle shifted the screen down and back. Same
-          // disease the narration line below the screen already had.
-          Text {
-            id: staleLine
-            opacity: (feed.present && !feed.running) ? 1 : 0
-            width: parent.width
-            height: Math.ceil(smallMetrics.height)
-            text: feed.state && feed.state.live === false
-              ? "Run ended; last frame " + Math.round(feed.age) + "s ago."
-              : "Feed stale: last frame " + Math.round(feed.age) + "s ago."
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            maximumLineCount: 1
-            elide: Text.ElideRight
-          }
-
-          //: One shared metric for every space-reserving line above the
-          //: screen. Ids resolve component-wide, so the earlier siblings can
-          //: use it too.
-          FontMetrics {
-            id: smallMetrics
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-          }
-          FontMetrics {
-            id: bodyMetrics
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-          }
-
-          // ---- what the agent is trying to do -----------------------------
+          // ---- the cockpit -------------------------------------------------
           //
-          // Top of the panel, above even the screen: the one thing a watcher
-          // cannot work out by looking at the game.
+          // Screen dead centre, instruments either side, nothing to scroll
+          // for. Everything above this row is reserved space, so the frame
+          // cannot move within a session; the columns beside and below it
+          // may reflow at the rate their content changes.
 
-          PanelSeparator {
-            visible: objectiveColumn.visible
-            foreground: root.foreground
-          }
-
-          Column {
-            id: objectiveColumn
-            // STICKY. A single state write without an objective would
-            // otherwise unmount this whole column -- header, two lines and the
-            // bar -- and slam the framebuffer upward for one frame. Keep the
-            // last one that existed; it is stale for a tick at worst.
-            readonly property var incoming: Model.objective(feed.state)
-            property var objective: null
-            onIncomingChanged: if (incoming !== null) objective = incoming
-
-            visible: objective !== null
+          Row {
+            id: cockpit
             width: parent.width
-            spacing: Style.space(4)
+            spacing: root.columnGap
 
-            PanelSectionHeader {
-              text: "OBJECTIVE"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
+            // ---- left instrument: the party, lead on top ------------------
 
-            // FIXED HEIGHT, both of them. The objective text is rewritten
-            // whenever the loop retargets -- "go to MossdeepCity_Gym for badge
-            // 7 [at AquaHideout_B2F...]" -- and wrapping between one, two and
-            // three lines moved every pixel below it, the framebuffer
-            // included. Reserve the tallest case and let short text sit in it.
-            Text {
-              opacity: text !== "" ? 1 : 0
-              width: parent.width
-              height: Math.ceil(bodyMetrics.height * 2)
-              text: objectiveColumn.objective ? objectiveColumn.objective.name : ""
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-              font.bold: true
-              wrapMode: Text.WordWrap
-              maximumLineCount: 2
-              elide: Text.ElideRight
-              verticalAlignment: Text.AlignTop
-            }
+            Column {
+              id: partyColumn
+              //: Six entries, empty ones null, so the Repeater's model never
+              //: changes length.
+              readonly property var slots: Model.partySlots(feed.state)
 
-            Text {
-              opacity: text !== "" ? 1 : 0
-              width: parent.width
-              height: Math.ceil(smallMetrics.height * 3)
-              text: objectiveColumn.objective ? objectiveColumn.objective.detail : ""
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              wrapMode: Text.WordWrap
-              maximumLineCount: 3
-              elide: Text.ElideRight
-              verticalAlignment: Text.AlignTop
-            }
+              width: root.partyWidth
+              spacing: Style.space(4)
 
-            RunBar {
-              // Faded rather than unmounted: percent goes null between
-              // objectives, and dropping the bar out of the column moved the
-              // screen every time it did.
-              opacity: (objectiveColumn.objective
-                && objectiveColumn.objective.percent !== null) ? 1 : 0
-              width: parent.width
-              fraction: objectiveColumn.objective
-                ? Model.fraction(objectiveColumn.objective.percent) : 0
-              // The percentage goes null between objectives, and the caption is
-              // what gives this bar its height -- so the bar has to reserve a
-              // caption line whether or not it has one to show, or the whole
-              // objective column (and the framebuffer under it) resizes on
-              // every retarget.
-              reserveCaption: true
-              caption: objectiveColumn.objective
-                ? Model.percentLabel(objectiveColumn.objective.percent) : ""
-              captionReserve: root.captionReserve
-            }
-          }
+              PanelSectionHeader {
+                text: "PARTY"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+              }
 
-          // ---- the framebuffer the agent is actually running --------------
+              // COUNT MODEL, not the array. A Repeater bound to a JS array
+              // destroys and recreates EVERY delegate whenever that array's
+              // CONTENT changes -- and `feed.state` is a fresh object on each
+              // of the publisher's four writes a second, so the lead's HP
+              // ticking rebuilt every slot, sprite and bar four times a
+              // second. Binding on the length keeps the delegates alive and
+              // lets the bindings inside them update in place.
+              Repeater {
+                model: partyColumn.slots.length
 
-          Rectangle {
-            id: screenBox
-            // NOT gated on the image's status. The published URL carries a
-            // cache-busting frame number, so it changes on every poll and the
-            // Image drops to Loading each time. Hiding the box while that
-            // happened unmounted it from the Column, so the whole panel
-            // collapsed and snapped back several times a second.
-            visible: root.showFrame
-            width: parent.width
+                PartySlot {
+                  required property int index
+                  width: partyColumn.width
+                  mon: partyColumn.slots[index]
+                  isLead: index === 0
+                }
+              }
 
-            // The published PNG is the authority on the screen's shape: a GBA
-            // frame is 240x160 and a Game Boy / Color frame is 160x144, so
-            // reading it off the image renders Gen 1-3 without stretching and
-            // without a table of consoles. REMEMBERED rather than read live,
-            // because sourceSize is zero while a reload is in flight and
-            // feeding that into the height is the other half of the jump.
-            property real aspect: 240 / 160
-            height: Math.round(width / aspect)
-            color: Qt.rgba(0, 0, 0, 0.35)
-            radius: Style.cornerRadius
-            clip: true
+              // The team's shape belongs with the party it describes, and
+              // it fills the column under six slots instead of a footer cell.
+              PanelSeparator {
+                visible: teamColumn.visible
+                foreground: root.foreground
+              }
 
-            // Which buffer is on screen. The other one loads the incoming
-            // frame invisibly and they swap only once it is READY, so a fully
-            // drawn frame is always showing. One Image cannot do this: Qt
-            // clears it the moment its source changes.
-            property bool frontIsA: true
-            property bool everLoaded: false
+              Column {
+                id: teamColumn
+                readonly property var team: Model.team(feed.state)
+                readonly property string coverage: Model.coverageLabel(team)
 
-            function present(img) {
-              if (img.sourceSize.height > 0)
-                aspect = img.sourceSize.width / img.sourceSize.height
-              everLoaded = true
-              frontIsA = (img === imageA)
-            }
+                visible: team !== null
+                width: parent.width
+                spacing: Style.space(6)
 
-            // Hand each new URL to whichever buffer is currently hidden.
-            readonly property string incoming: feed.screenUrl
-            onIncomingChanged: load()
+                PanelSectionHeader {
+                  text: "TEAM"
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                }
 
-            //: Bumped to force a reload of a URL that has not changed.
-            property int nonce: 0
+                StatGrid {
+                  width: parent.width
+                  columns: 2
+                  cells: Model.teamCells(feed.state)
+                }
 
-            function load() {
-              if (incoming === "") return
-              var back = frontIsA ? imageB : imageA
-              back.source = incoming + "&n=" + nonce
-            }
-
-            // SELF-HEAL. The URL only changes when the frame counter does, and
-            // the emulator does not tick while the driver spends a minute
-            // planning a route -- so a panel that opens during one of those
-            // pauses gets a source assignment it has already seen, no load
-            // fires, and the box sits blank until the game moves again. It
-            // came back on its own, which is exactly the tell.
-            //
-            // Also covers a failed decode: a load error leaves the buffer
-            // empty and nothing else would ever retry it.
-            Timer {
-              interval: 1500
-              repeat: true
-              running: screenBox.visible && feed.screenUrl !== ""
-              onTriggered: {
-                var front = screenBox.frontIsA ? imageA : imageB
-                var back = screenBox.frontIsA ? imageB : imageA
-                if (screenBox.everLoaded
-                    && front.status === Image.Ready
-                    && back.status !== Image.Error) return
-                screenBox.nonce++
-                screenBox.load()
+                // Full width: the list is as long as the number of types the
+                // team cannot answer, and eliding it would throw away the
+                // only part of it that matters.
+                Stat {
+                  visible: teamColumn.coverage !== ""
+                  width: parent.width
+                  label: "GAPS"
+                  value: teamColumn.coverage
+                  wrap: true
+                }
               }
             }
 
-            Text {
-              anchors.centerIn: parent
-              // Only before the first frame ever arrives. After that a buffer
-              // always holds something, and "Loading..." over a live screen
-              // would be a lie.
-              visible: !screenBox.everLoaded
-              text: "Loading\u2026"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-            }
+            // ---- centre: the screen in its bezel, the matchup under it ------
 
-            // SWAPPED BY OPACITY, NOT BY `visible`.
-            //
-            // `visible: false` lets the scene graph drop the render node, so
-            // the buffer coming to the front has to re-upload its texture --
-            // and with `asynchronous: true` that lands a frame late. For one
-            // compositor frame NEITHER image painted and the box's own
-            // `Qt.rgba(0,0,0,0.35)` backing showed through: a dark flash on
-            // the game screen, at the publisher's frame rate, which is
-            // exactly what kept getting reported after the feed itself
-            // measured clean (0 black frames, 0 backward counters, 10.2 Hz,
-            // max gap 0.48s).
-            //
-            // An opacity-0 Image keeps its node and its texture, so the swap
-            // is a pure compositor operation with nothing to re-upload. Both
-            // stay `visible`, and `z` keeps the live one on top so a
-            // mid-load back buffer can never be seen even for a frame.
-            Image {
-              id: imageA
-              anchors.fill: parent
-              cache: false
-              asynchronous: true
-              fillMode: Image.PreserveAspectFit
-              // A console framebuffer blown up: nearest-neighbour keeps it
-              // looking like the hardware rather than a smeared photograph.
-              smooth: false
-              mipmap: false
-              visible: screenBox.everLoaded
-              opacity: screenBox.frontIsA ? 1 : 0
-              z: screenBox.frontIsA ? 1 : 0
-              onStatusChanged: if (status === Image.Ready) screenBox.present(imageA)
-            }
-
-            Image {
-              id: imageB
-              anchors.fill: parent
-              cache: false
-              asynchronous: true
-              fillMode: Image.PreserveAspectFit
-              smooth: false
-              mipmap: false
-              visible: screenBox.everLoaded
-              opacity: screenBox.frontIsA ? 0 : 1
-              z: screenBox.frontIsA ? 0 : 1
-              onStatusChanged: if (status === Image.Ready) screenBox.present(imageB)
-            }
-
-            Component.onCompleted: load()
-          }
-
-          // The narration line, and the other half of the "everything below
-          // the screen jumps" report. It sits directly under the framebuffer
-          // and its content is the game's own message buffer, so it appeared,
-          // vanished and changed between one and two lines AT GAME SPEED --
-          // relaying out the whole column under the screen several times a
-          // second, in lockstep with the frame updating just above it. That
-          // is what read as the image flashing.
-          //
-          // Reserve the space instead: always exactly two lines tall, faded
-          // rather than unmounted. Nothing below it can move.
-          Text {
-            id: messageLine
-            opacity: (feed.running && Model.messageLine(feed.state) !== "")
-              ? 1 : 0
-            width: parent.width
-            height: Math.ceil(fontMetrics.height * 2)
-            text: Model.messageLine(feed.state)
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            wrapMode: Text.WordWrap
-            maximumLineCount: 2
-            elide: Text.ElideRight
-            verticalAlignment: Text.AlignTop
-            FontMetrics {
-              id: fontMetrics
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-            }
-          }
-
-          // ---- what is on the other side of the battle --------------------
-          // Wrapped in a ReservedSlot: this section only exists during a
-          // battle, and letting it collapse moved every section below it
-          // twice per encounter.
-
-          ReservedSlot {
-          width: parent.width
-          Column {
-          width: parent.width
-          spacing: Style.space(4)
-
-          PanelSeparator {
-            visible: opponentColumn.visible
-            foreground: root.foreground
-          }
-
-          Column {
-            id: opponentColumn
-            readonly property var foe: Model.enemy(feed.state)
-
-            visible: foe !== null
-            width: parent.width
-            spacing: Style.space(4)
-
-            PanelSectionHeader {
-              text: "OPPONENT"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
-
-            Row {
-              id: foeRow
-              width: parent.width
+            Column {
+              id: centre
+              width: root.bezelWidth
               spacing: Style.space(8)
 
-              Text {
-                width: Math.max(0, foeRow.width - foeHp.implicitWidth - foeRow.spacing)
-                text: Model.enemyLine(opponentColumn.foe)
-                color: root.urgent
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-                font.bold: true
-                elide: Text.ElideRight
-              }
+              Rectangle {
+                id: bezel
+                visible: root.showFrame
+                width: parent.width
+                height: 2 * inset + screenBox.height
+                color: Qt.rgba(0, 0, 0, 0.35)
+                radius: Style.cornerRadius
 
-              Text {
-                id: foeHp
-                text: Model.enemyHp(opponentColumn.foe)
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-              }
-            }
+                //: The dark margin between the glass and the panel.
+                readonly property int inset: root.bezelInset
 
-            RunBar {
-              visible: opponentColumn.foe && opponentColumn.foe.maxHp > 0
-              width: parent.width
-              fraction: Model.enemyFraction(opponentColumn.foe)
-              fill: Model.hpColor(Model.enemyFraction(opponentColumn.foe))
-            }
-          }
+                Item {
+                  id: screenBox
+                  x: bezel.inset
+                  y: bezel.inset
+                  width: parent.width - 2 * bezel.inset
 
-          // ---- party ------------------------------------------------------
+                  // INTEGER SCALE, counted in DEVICE pixels. A 240px frame
+                  // stretched across a 332-logical column on a 2x display is
+                  // 2.77 source pixels per pixel, and nearest-neighbour then
+                  // draws alternating two- and three-pixel columns: every
+                  // sprite looked chewed. The frame is drawn at the largest
+                  // whole multiple that fits and centred; `root.frameFitWidth`
+                  // picks the popup width so that multiple spans the glass.
+                  //
+                  // The published PNG is the authority on the frame's shape
+                  // (a GBA frame is 240x160, a Game Boy / Color frame
+                  // 160x144), so Gen 1-3 render without stretching and
+                  // without a table of consoles. REMEMBERED from the last
+                  // decoded frame rather than read live, because sourceSize
+                  // is zero while a reload is in flight and feeding that into
+                  // the height is the other half of the jump.
+                  property int srcW: 240
+                  property int srcH: 160
+                  readonly property int pixelScale: Math.max(1, Math.floor(width * root.dpr / srcW))
+                  readonly property real frameW: pixelScale * srcW / root.dpr
+                  readonly property real frameH: pixelScale * srcH / root.dpr
+                  // Centred on a whole device pixel: a half-pixel offset
+                  // would put the nearest-neighbour sampling off the grid.
+                  readonly property real frameX: Math.round((width - frameW) / 2 * root.dpr) / root.dpr
 
-          }
-          }
+                  height: Math.ceil(frameH)
 
-          PanelSeparator {
-            visible: partyColumn.visible
-            foreground: root.foreground
-          }
+                  // Which buffer is on screen. The other one loads the
+                  // incoming frame invisibly and they swap only once it is
+                  // READY, so a fully drawn frame is always showing. One
+                  // Image cannot do this: Qt clears it the moment its source
+                  // changes.
+                  property bool frontIsA: true
+                  property bool everLoaded: false
 
-          Column {
-            id: partyColumn
-            //: One evaluation of the party per snapshot, and a length the
-            //: Repeater below can bind to.
-            readonly property var rows: Model.party(feed.state)
-            visible: rows.length > 0
-            width: parent.width
-            spacing: Style.space(8)
+                  function present(img) {
+                    if (img.sourceSize.width > 0 && img.sourceSize.height > 0) {
+                      srcW = img.sourceSize.width
+                      srcH = img.sourceSize.height
+                    }
+                    everLoaded = true
+                    frontIsA = (img === imageA)
+                  }
 
-            PanelSectionHeader {
-              text: "PARTY"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
+                  // Hand each new URL to whichever buffer is currently hidden.
+                  readonly property string incoming: feed.screenUrl
+                  onIncomingChanged: load()
 
-            // COUNT MODEL, not the array. A Repeater bound to a JS array
-            // destroys and recreates EVERY delegate whenever that array's
-            // CONTENT changes -- and `feed.state` is a fresh object on each of
-            // the publisher's four writes a second, so the lead's HP ticking
-            // rebuilt all six rows, their sprites and their HP bars four times
-            // a second. Every rebuilt row is momentarily unsized, which is the
-            // pop-in.
-            //
-            // Measured with qml6: twenty content changes over an array model
-            // created 63 delegates; the same twenty over a length model created
-            // 3. Binding on the length keeps the delegates alive and lets the
-            // bindings inside them update in place.
-            Repeater {
-              model: partyColumn.rows.length
+                  //: Bumped to force a reload of a URL that has not changed.
+                  property int nonce: 0
 
-              MonRow {
-                required property int index
+                  function load() {
+                    if (incoming === "") return
+                    var back = frontIsA ? imageB : imageA
+                    back.source = incoming + "&n=" + nonce
+                  }
 
-                width: partyColumn.width
-                mon: partyColumn.rows[index]
-                isLead: index === 0
-              }
-            }
-          }
+                  // SELF-HEAL. The URL only changes when the frame counter
+                  // does, and the emulator does not tick while the driver
+                  // spends a minute planning a route -- so a panel that opens
+                  // during one of those pauses gets a source assignment it
+                  // has already seen, no load fires, and the box sits blank
+                  // until the game moves again. Also covers a failed decode.
+                  Timer {
+                    interval: 1500
+                    repeat: true
+                    running: bezel.visible && feed.screenUrl !== ""
+                    onTriggered: {
+                      var front = screenBox.frontIsA ? imageA : imageB
+                      var back = screenBox.frontIsA ? imageB : imageA
+                      if (screenBox.everLoaded
+                          && front.status === Image.Ready
+                          && back.status !== Image.Error) return
+                      screenBox.nonce++
+                      screenBox.load()
+                    }
+                  }
 
-          // ---- dex progress -----------------------------------------------
+                  Text {
+                    anchors.centerIn: parent
+                    // Only before the first frame ever arrives. After that a
+                    // buffer always holds something, and "Loading..." over a
+                    // live screen would be a lie.
+                    visible: !screenBox.everLoaded
+                    text: "Loading\u2026"
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                  }
 
-          PanelSeparator {
-            visible: dexColumn.visible
-            foreground: root.foreground
-          }
+                  // SWAPPED BY OPACITY, NOT BY `visible`. `visible: false`
+                  // lets the scene graph drop the render node, so the buffer
+                  // coming to the front has to re-upload its texture -- and
+                  // with `asynchronous: true` that lands a frame late: for
+                  // one compositor frame neither image painted and the bezel
+                  // showed through as a dark flash at the publisher's frame
+                  // rate. An opacity-0 Image keeps its node and its texture,
+                  // so the swap is a pure compositor operation; `z` keeps the
+                  // live one on top so a mid-load back buffer can never be
+                  // seen even for a frame.
+                  Image {
+                    id: imageA
+                    x: screenBox.frameX
+                    y: 0
+                    width: screenBox.frameW
+                    height: screenBox.frameH
+                    cache: false
+                    asynchronous: true
+                    fillMode: Image.Stretch
+                    // A console framebuffer blown up: nearest-neighbour keeps
+                    // it looking like the hardware, not a smeared photograph.
+                    smooth: false
+                    mipmap: false
+                    visible: screenBox.everLoaded
+                    opacity: screenBox.frontIsA ? 1 : 0
+                    z: screenBox.frontIsA ? 1 : 0
+                    onStatusChanged: if (status === Image.Ready) screenBox.present(imageA)
+                  }
 
-          Column {
-            id: dexColumn
-            readonly property var dex: Model.dex(feed.state)
+                  Image {
+                    id: imageB
+                    x: screenBox.frameX
+                    y: 0
+                    width: screenBox.frameW
+                    height: screenBox.frameH
+                    cache: false
+                    asynchronous: true
+                    fillMode: Image.Stretch
+                    smooth: false
+                    mipmap: false
+                    visible: screenBox.everLoaded
+                    opacity: screenBox.frontIsA ? 0 : 1
+                    z: screenBox.frontIsA ? 0 : 1
+                    onStatusChanged: if (status === Image.Ready) screenBox.present(imageB)
+                  }
 
-            visible: dex !== null
-            width: parent.width
-            spacing: Style.space(4)
-
-            PanelSectionHeader {
-              text: "POKEDEX"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
-
-            RunBar {
-              visible: dexColumn.dex && dexColumn.dex.percent !== null
-              width: parent.width
-              fraction: dexColumn.dex ? Model.fraction(dexColumn.dex.percent) : 0
-              caption: Model.dexCaption(dexColumn.dex)
-              captionReserve: root.captionReserve
-            }
-
-            // A count with no denominator has no bar to draw: an empty track
-            // beside "42" would claim the run is at 0%.
-            Text {
-              visible: dexColumn.dex && dexColumn.dex.percent === null
-              width: parent.width
-              text: Model.dexCaption(dexColumn.dex) + " caught"
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-            }
-          }
-
-          // ---- the goal ladder ---------------------------------------------
-          // Also battle-scoped, also reserved, for the same reason.
-
-          ReservedSlot {
-          width: parent.width
-          Column {
-          width: parent.width
-          spacing: Style.space(4)
-
-          PanelSeparator {
-            visible: stagesColumn.visible
-            foreground: root.foreground
-          }
-
-          Column {
-            id: stagesColumn
-            readonly property var rows: Model.stages(feed.state)
-
-            visible: rows.length > 0
-            width: parent.width
-            spacing: Style.space(4)
-
-            PanelSectionHeader {
-              text: "STAGES"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
-
-            // Length model, for the reason spelled out over the party Repeater:
-            // stage percentages move as the run progresses, and an array model
-            // rebuilds the whole ladder every time one does.
-            Repeater {
-              model: stagesColumn.rows.length
-
-              // Stages the run has not reached still draw their track, so the
-              // ladder reads as a plan instead of appearing one rung at a time.
-              // The stage being worked on is the only one at full strength.
-              RunBar {
-                required property int index
-                readonly property var row: stagesColumn.rows[index]
-
-                width: stagesColumn.width
-                fraction: row ? Model.fraction(row.percent) : 0
-                caption: row ? Model.stageCaption(row) : ""
-                captionReserve: root.captionReserve
-                fill: row && row.current ? root.foreground : root.dim
-              }
-            }
-          }
-
-          }
-          }
-
-          // ---- team shape -------------------------------------------------
-
-          PanelSeparator {
-            visible: teamColumn.visible
-            foreground: root.foreground
-          }
-
-          Column {
-            id: teamColumn
-            readonly property var team: Model.team(feed.state)
-            readonly property string coverage: Model.coverageLabel(team)
-
-            visible: team !== null
-            width: parent.width
-            spacing: Style.spacing.labelGap
-
-            PanelSectionHeader {
-              text: "TEAM"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
-
-            StatGrid {
-              width: parent.width
-              cells: Model.teamCells(feed.state)
-            }
-
-            // Full width, not a grid cell: the list is as long as the number of
-            // types the team cannot answer, and eliding it would throw away the
-            // only part of it that matters.
-            WideRow {
-              width: parent.width
-              label: "GAPS"
-              value: teamColumn.coverage
-            }
-          }
-
-          // ---- where and how far ------------------------------------------
-
-          PanelSeparator {
-            visible: runColumn.visible
-            foreground: root.foreground
-          }
-
-          Column {
-            id: runColumn
-            readonly property string where: Model.mapLabel(feed.state)
-
-            visible: runGrid.cells.length > 0 || where !== ""
-            width: parent.width
-            spacing: Style.spacing.labelGap
-
-            PanelSectionHeader {
-              text: "RUN"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
-
-            WideRow {
-              width: parent.width
-              label: "MAP"
-              value: runColumn.where
-            }
-
-            StatGrid {
-              id: runGrid
-              width: parent.width
-              cells: Model.runCells(feed.state)
-            }
-          }
-
-          // ---- session counters -------------------------------------------
-
-          PanelSeparator {
-            visible: counterGrid.cells.length > 0
-            foreground: root.foreground
-          }
-
-          Column {
-            visible: counterGrid.cells.length > 0
-            width: parent.width
-            spacing: Style.spacing.labelGap
-
-            PanelSectionHeader {
-              text: "COUNTERS"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
-
-            StatGrid {
-              id: counterGrid
-              width: parent.width
-              cells: Model.counterCells(feed.state)
-            }
-          }
-
-          // ---- narration ---------------------------------------------------
-
-          PanelSeparator {
-            visible: feed.notes.length > 0
-            foreground: root.foreground
-          }
-
-          Column {
-            visible: feed.notes.length > 0
-            width: parent.width
-            spacing: Style.space(4)
-
-            PanelSectionHeader {
-              text: "PACE"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
-
-            // Length model: the estimates are re-derived on every snapshot.
-            Repeater {
-              id: paceRepeater
-              readonly property var rows: Model.paceLines(feed.state)
-              model: rows.length
-
-              Row {
-                id: paceRow
-                required property int index
-                readonly property var row: paceRepeater.rows[index]
-
-                width: column.width
-                spacing: Style.space(8)
-
-                Text {
-                  text: paceRow.row ? paceRow.row.label : ""
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
+                  Component.onCompleted: load()
                 }
+              }
+
+              // The matchup: the lead against the foe, the way the game's own
+              // battle HUD faces them off -- two HP bars pointing at each
+              // other. Wrapped in a ReservedSlot: it only exists during a
+              // battle, and letting it collapse moved the footer twice per
+              // encounter.
+              ReservedSlot {
+                width: parent.width
+
+                Row {
+                  id: matchup
+                  readonly property var foe: Model.enemy(feed.state)
+                  readonly property var mine: Model.lead(feed.state)
+
+                  visible: foe !== null
+                  width: parent.width
+                  spacing: Style.space(10)
+
+                  Combatant {
+                    width: (matchup.width - vsMark.width - 2 * matchup.spacing) / 2
+                    mon: matchup.mine
+                    name: Model.monName(matchup.mine)
+                    level: Model.monLevel(matchup.mine)
+                    hp: Model.monHp(matchup.mine)
+                    fraction: Model.hpFraction(matchup.mine)
+                    nameColor: root.foreground
+                  }
+
+                  Text {
+                    id: vsMark
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "vs"
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    font.bold: true
+                  }
+
+                  Combatant {
+                    width: (matchup.width - vsMark.width - 2 * matchup.spacing) / 2
+                    mirrored: true
+                    mon: matchup.foe ? { species: matchup.foe.species } : null
+                    name: matchup.foe ? matchup.foe.species : ""
+                    level: matchup.foe && matchup.foe.level !== null ? "L" + matchup.foe.level : ""
+                    hp: Model.enemyHp(matchup.foe)
+                    fraction: Model.enemyFraction(matchup.foe)
+                    nameColor: root.urgent
+                  }
+                }
+              }
+
+              // What the agent is trying to do: the one thing a watcher
+              // cannot work out by looking at the game, so it captions the
+              // screen. Glass width, so a retarget's longer wording still
+              // fits on two lines.
+              PanelSeparator {
+                visible: objectiveColumn.visible
+                foreground: root.foreground
+              }
+
+              Column {
+                id: objectiveColumn
+                // STICKY. A single state write without an objective would
+                // otherwise unmount this whole column for one frame. Keep the
+                // last one that existed; it is stale for a tick at worst.
+                readonly property var incoming: Model.objective(feed.state)
+                property var objective: null
+                onIncomingChanged: if (incoming !== null) objective = incoming
+
+                visible: objective !== null
+                width: parent.width
+                spacing: Style.space(4)
+
+                PanelSectionHeader {
+                  text: "OBJECTIVE"
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                }
+
+                ProgressRow {
+                  width: parent.width
+                  title: objectiveColumn.objective ? objectiveColumn.objective.name : ""
+                  detail: objectiveColumn.objective ? objectiveColumn.objective.detail : ""
+                  value: objectiveColumn.objective
+                    ? Model.percentLabel(objectiveColumn.objective.percent) : ""
+                  titleSize: Style.font.body
+                  bold: true
+                  // Faded rather than unmounted: percent goes null between
+                  // objectives, and a track that comes and goes moves the
+                  // rows under it on every retarget.
+                  trackOpacity: (objectiveColumn.objective
+                    && objectiveColumn.objective.percent !== null) ? 1 : 0
+                  fraction: objectiveColumn.objective
+                    ? Model.fraction(objectiveColumn.objective.percent) : 0
+                }
+              }
+            }
+
+            // ---- right instrument: where, the trainer card, the goal --------
+
+            Column {
+              id: instruments
+              readonly property string where: Model.mapLabel(feed.state)
+              readonly property var hudCells: Model.hudCells(feed.state)
+              readonly property var badges: Model.badgeCount(feed.state)
+
+              width: root.instrumentWidth
+              spacing: Style.space(10)
+
+              Column {
+                width: parent.width
+                spacing: Style.space(2)
+                visible: instruments.where !== ""
+
                 Text {
-                  text: paceRow.row ? paceRow.row.value : ""
+                  width: parent.width
+                  text: instruments.where
                   color: root.foreground
                   font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
+                  font.pixelSize: Style.font.body
                   font.bold: true
+                  wrapMode: Text.WordWrap
+                  maximumLineCount: 2
+                  elide: Text.ElideRight
+                }
+
+                Text {
+                  visible: text !== ""
+                  width: parent.width
+                  text: Model.whereLabel(feed.state)
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideRight
+                }
+              }
+
+              StatGrid {
+                width: parent.width
+                columns: 2
+                cells: instruments.hudCells
+              }
+
+              Stat {
+                visible: instruments.badges !== null
+                width: parent.width
+                label: "BADGES " + (instruments.badges !== null ? instruments.badges : 0) + "/" + Model.BADGE_SLOTS
+                valueComponent: Component {
+                  BadgePips { count: instruments.badges !== null ? instruments.badges : 0 }
+                }
+              }
+
+              PanelSeparator {
+                visible: progressColumn.visible
+                foreground: root.foreground
+              }
+
+              Column {
+                id: progressColumn
+                readonly property var dex: Model.dex(feed.state)
+                readonly property var stages: Model.stages(feed.state)
+
+                visible: dex !== null || stages.length > 0
+                width: parent.width
+                spacing: Style.space(3)
+
+                PanelSectionHeader {
+                  text: "PROGRESS"
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                }
+
+                ProgressRow {
+                  visible: progressColumn.dex !== null
+                  width: parent.width
+                  title: "Pok\u00e9dex " + Model.dexLabel(progressColumn.dex)
+                  value: Model.percentLabel(progressColumn.dex ? progressColumn.dex.percent : null)
+                  // A count with no denominator has no bar to draw: an empty
+                  // track beside "42" would claim the run is at 0%.
+                  showTrack: progressColumn.dex !== null && progressColumn.dex.percent !== null
+                  fraction: progressColumn.dex ? Model.fraction(progressColumn.dex.percent) : 0
+                }
+
+                // The ladder reads as a plan: every rung listed, in rank
+                // order, with how far along it is. Only the rung being worked
+                // on carries a track -- five empty tracks stacked under each
+                // other were a wall of nothing for the first day of every
+                // run. Length model, for the reason over the party Repeater.
+                Repeater {
+                  model: progressColumn.stages.length
+
+                  ProgressRow {
+                    required property int index
+                    readonly property var row: progressColumn.stages[index]
+
+                    width: progressColumn.width
+                    title: row ? row.name : ""
+                    value: Model.stageValue(row)
+                    titleColor: row && row.current ? root.foreground : root.dim
+                    bold: row ? row.current : false
+                    showTrack: row ? row.current : false
+                    fraction: row ? Model.fraction(row.percent) : 0
+                  }
+                }
+              }
+
+              PanelSeparator {
+                visible: counterColumn.visible
+                foreground: root.foreground
+              }
+
+              Column {
+                id: counterColumn
+                readonly property var cells: Model.counterCells(feed.state)
+
+                visible: cells.length > 0
+                width: parent.width
+                spacing: Style.space(6)
+
+                PanelSectionHeader {
+                  text: "COUNTERS"
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                }
+
+                StatGrid {
+                  width: parent.width
+                  columns: 2
+                  cells: counterColumn.cells
                 }
               }
             }
+          }
 
-            // The basis travels with the numbers. Publishing a fourfold
-            // extrapolation without saying so is how a demo becomes a lie.
-            Text {
-              visible: text !== ""
-              width: column.width
-              text: Model.paceBasis(feed.state)
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.WordWrap
-            }
+          // ---- footer strip: what the agent says -----------------------------
+          // The pace estimate and the narration log, the two things that are
+          // prose. Narration gets the width: a log line that fits on one
+          // line is read; one that wraps is skimmed.
 
-            PanelSeparator {}
+          PanelSeparator {
+            visible: paceColumn.visible || notesColumn.visible
+            foreground: root.foreground
+          }
 
-            PanelSectionHeader {
-              text: "NARRATION"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
+          Row {
+            id: footer
+            width: parent.width
+            spacing: root.columnGap
 
-            // Length model: Feed.qml re-parses the tail of the narration log on
-            // every read, so the array is new each time even when the last five
-            // lines are the same five lines.
-            Repeater {
-              model: feed.notes.length
+            // The pace column is the party column's width, so the narration
+            // starts on the same line the screen does: one grid, top to
+            // bottom.
+            readonly property real paceWidth: root.partyWidth
+            readonly property real notesWidth:
+              paceColumn.visible ? width - paceWidth - spacing : width
 
+            Column {
+              id: paceColumn
+              readonly property var rows: Model.paceLines(feed.state)
+
+              visible: rows.length > 0
+              width: footer.paceWidth
+              spacing: Style.space(4)
+
+              PanelSectionHeader {
+                text: "PACE"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+              }
+
+              // Length model: the estimates are re-derived on every snapshot.
+              Repeater {
+                model: paceColumn.rows.length
+
+                Stat {
+                  required property int index
+                  readonly property var row: paceColumn.rows[index]
+                  width: paceColumn.width
+                  label: row ? String(row.label).toUpperCase() : ""
+                  value: row ? row.value : ""
+                  wrap: true
+                }
+              }
+
+              // The basis travels with the numbers. Publishing a fourfold
+              // extrapolation without saying so is how a demo becomes a lie.
               Text {
-                required property int index
-                readonly property var note: feed.notes[index]
-
-                width: column.width
-                // The newest line is the one being read; the rest are context.
-                text: note ? note.t + "  " + note.msg : ""
-                color: index === feed.notes.length - 1 ? root.foreground : root.dim
+                visible: text !== ""
+                width: parent.width
+                text: Model.paceBasis(feed.state)
+                color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 wrapMode: Text.WordWrap
-                maximumLineCount: 2
-                elide: Text.ElideRight
+              }
+            }
+
+            Column {
+              id: notesColumn
+              visible: feed.notes.length > 0
+              width: footer.notesWidth
+              spacing: Style.space(4)
+
+              PanelSectionHeader {
+                text: "NARRATION"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+              }
+
+              // Length model: Feed.qml re-parses the tail of the narration
+              // log on every read, so the array is new each time even when
+              // the last five lines are the same five lines.
+              Repeater {
+                model: feed.notes.length
+
+                Text {
+                  required property int index
+                  readonly property var note: feed.notes[index]
+
+                  width: notesColumn.width
+                  // The newest line is the one being read; the rest are
+                  // context.
+                  text: note ? note.t + "  " + note.msg : ""
+                  color: index === feed.notes.length - 1 ? root.foreground : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.WordWrap
+                  maximumLineCount: 2
+                  elide: Text.ElideRight
+                }
               }
             }
           }
@@ -1117,90 +1026,164 @@ Panel {
     }
   }
 
-  // A progress track with an optional caption on its right. Deliberately the
-  // same shape and weight as the HP bar, so a glance reads them as the same
-  // kind of fact. The caller owns the width.
-  // Named RunBar, not ProgressBar: QtQuick.Controls (imported above for its
-  // own widgets) exports a ProgressBar too, and an inline component that
-  // shadows an imported type is a coin-flip for any reader and for tooling --
-  // qmllint resolved the imported one and reported every `fraction:` and
-  // `caption:` here as a missing property. The bars were fine at runtime; the
-  // name was not.
-  component RunBar: Item {
-    id: progress
+  // The bare progress track. One shape and weight for every bar in the panel
+  // -- HP, objective, dex, the current stage -- so a glance reads them as the
+  // same kind of fact. The track colour is the shell's own slider track
+  // (Ui/PanelSlider.qml), so it sits in the panel like a native control.
+  // Named Track, not ProgressBar: QtQuick.Controls (imported above for its own
+  // widgets) exports a ProgressBar too, and an inline component that shadows
+  // an imported type is a coin-flip for any reader and for tooling.
+  component Track: Rectangle {
+    id: track
 
     property real fraction: 0
-    property string caption: ""
     property color fill: root.foreground
-    // Reserve a caption line's height even with no caption to put in it. For
-    // the bars whose caption comes and goes -- the objective's percentage is
-    // null between objectives -- so the bar's height, and the position of
-    // everything the column puts after it, cannot change.
-    property bool reserveCaption: false
-    // Width set aside for the caption, shared by every bar that wants to line
-    // up with its neighbours. Zero means "size to my own caption", which is
-    // right for a lone bar and was wrong for every group of them.
-    property real captionReserve: 0
+    //: Anchor the fill to the right edge instead, so a draining bar recedes
+    //: towards the left (the foe's side of the matchup).
+    property bool mirrored: false
 
     readonly property real clamped: Math.max(0, Math.min(1, fraction))
 
-    // An invisible Text still reports a full line of implicit height, so the
-    // caption only gets to set the height when it is actually shown -- else
-    // every bare bar would be as tall as a line of text. The reserved case
-    // measures the FONT rather than the Text, so a caption that changes its
-    // wording cannot change the bar's height either.
-    implicitHeight: Math.max(track.height,
-      (reserveCaption || captionText.visible) ? captionMetrics.height : 0)
-
-    FontMetrics {
-      id: captionMetrics
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
-    }
-
-    Text {
-      id: captionText
-      anchors.right: parent.right
-      anchors.verticalCenter: parent.verticalCenter
-      // Right-aligned inside the reserved column, so the captions line up
-      // with each other as well as the tracks do.
-      width: progress.captionReserve > 0 ? progress.captionReserve
-                                         : implicitWidth
-      horizontalAlignment: Text.AlignRight
-      visible: progress.caption !== ""
-      text: progress.caption
-      color: root.dim
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
-      elide: Text.ElideRight
-    }
+    implicitHeight: Style.space(4)
+    height: implicitHeight
+    radius: height / 2
+    color: Style.selectedFillFor(root.foreground, Color.accent)
 
     Rectangle {
-      id: track
-      anchors.left: parent.left
-      // Always the parent's edge less the caption column. Anchoring to
-      // captionText.left made every track's length a function of its own
-      // row's text. A reserved column also keeps a caption-LESS bar in a
-      // group the same length as its captioned neighbours.
-      anchors.right: parent.right
-      anchors.rightMargin: progress.captionReserve > 0
-        ? progress.captionReserve + Style.space(8)
-        : (captionText.visible ? captionText.implicitWidth + Style.space(8) : 0)
-      anchors.verticalCenter: parent.verticalCenter
-      height: Style.space(4)
-      radius: height / 2
-      color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
+      width: Math.round(parent.width * track.clamped)
+      x: track.mirrored ? parent.width - width : 0
+      height: parent.height
+      radius: parent.radius
+      color: track.fill
 
-      Rectangle {
-        width: Math.round(parent.width * progress.clamped)
-        height: parent.height
-        radius: parent.radius
-        color: progress.fill
+      // Progress moves in steps (a badge, a catch, a tick of HP); the fill
+      // easing turns each step into a motion the eye can follow instead of a
+      // jump it has to notice. Same duration as the shell's sliders.
+      Behavior on width {
+        NumberAnimation { duration: 140; easing.type: Easing.OutCubic }
       }
     }
   }
 
-  // Label/value cells, two to a row. The model is a list rather than a fixed
+  // A labelled progress line: the title at the left, its number at the right,
+  // and the track under both, full width. Every bar in the panel used to keep
+  // its caption in a column BESIDE the track, sized to the widest caption any
+  // bar could ever show -- so every track stopped at half the panel with a
+  // lone "0%" floating far to its right. Stacking the label over the track
+  // gives the row a stable height without measuring anything, lets each
+  // track run the full column, and lines every row's number up on one edge.
+  component ProgressRow: Column {
+    id: progressRow
+
+    property string title: ""
+    property string detail: ""
+    property string value: ""
+    property real fraction: 0
+    property color fill: root.foreground
+    property color titleColor: root.foreground
+    property real titleSize: Style.font.bodySmall
+    property real valueSize: Style.font.caption
+    property bool bold: false
+    property bool showTrack: true
+    property real trackOpacity: 1
+
+    spacing: Style.space(4)
+
+    Row {
+      id: labelRow
+      width: parent.width
+      spacing: Style.space(8)
+
+      Text {
+        id: titleText
+        width: Math.max(0, labelRow.width - valueText.width
+                           - (valueText.visible ? labelRow.spacing : 0))
+        text: progressRow.title
+        color: progressRow.titleColor
+        font.family: root.fontFamily
+        font.pixelSize: progressRow.titleSize
+        font.bold: progressRow.bold
+        elide: Text.ElideRight
+      }
+
+      // The number is the smaller face, so it is centred against the title
+      // rather than hung from the row's top edge.
+      Text {
+        id: valueText
+        visible: text !== ""
+        text: progressRow.value
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: progressRow.valueSize
+        anchors.verticalCenter: titleText.verticalCenter
+      }
+    }
+
+    Text {
+      visible: text !== ""
+      width: parent.width
+      text: progressRow.detail
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+      wrapMode: Text.WordWrap
+      maximumLineCount: 3
+      elide: Text.ElideRight
+    }
+
+    Track {
+      visible: progressRow.showTrack
+      opacity: progressRow.trackOpacity
+      width: parent.width
+      fraction: progressRow.fraction
+      fill: progressRow.fill
+    }
+  }
+
+  // A small fact: micro-label over value, the way the shell's own weather
+  // panel lays out FEELS / WIND / HUMID. One shape for the HUD, the team
+  // strip and the counters. `valueComponent` swaps the value text for
+  // something drawn (the badge pips). The caller owns the width.
+  component Stat: Column {
+    id: stat
+
+    property string label: ""
+    property string value: ""
+    property bool wrap: false
+    property color valueColor: root.foreground
+    property Component valueComponent: null
+
+    spacing: Style.space(2)
+
+    Text {
+      width: parent.width
+      text: stat.label
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      font.bold: true
+      elide: Text.ElideRight
+    }
+
+    Text {
+      visible: stat.valueComponent === null
+      width: parent.width
+      text: stat.value
+      color: stat.valueColor
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+      wrapMode: stat.wrap ? Text.WordWrap : Text.NoWrap
+      elide: stat.wrap ? Text.ElideNone : Text.ElideRight
+    }
+
+    Loader {
+      active: stat.valueComponent !== null
+      visible: active
+      sourceComponent: stat.valueComponent
+    }
+  }
+
+  // Small facts in equal columns. The model is a list rather than a fixed
   // set of properties precisely so an unreported key produces no cell at all
   // instead of a label with a blank beside it. The caller owns the width.
   component StatGrid: Grid {
@@ -1208,160 +1191,291 @@ Panel {
 
     property var cells: []
 
-    columns: 2
+    columns: 4
     columnSpacing: Style.space(12)
-    rowSpacing: Style.spacing.labelGap
+    rowSpacing: Style.space(6)
 
-    // Length model. RUN and COUNTERS both carry a frame counter, so their
-    // cells' content changes on every single snapshot -- an array model
-    // rebuilt every cell in the grid four times a second.
+    // Length model. The counters carry a frame count, so their content
+    // changes on every single snapshot -- an array model rebuilt every cell
+    // in the grid four times a second.
     Repeater {
       model: statGrid.cells.length
 
-      Pair {
+      Stat {
         required property int index
         readonly property var cell: statGrid.cells[index]
 
-        cellWidth: (statGrid.width - statGrid.columnSpacing) / 2
+        width: (statGrid.width - (statGrid.columns - 1) * statGrid.columnSpacing)
+          / statGrid.columns
         label: cell ? cell.label : ""
         value: cell ? cell.value : ""
       }
     }
   }
 
-  // One party member. Only the lead carries an HP bar: six bars is a status
-  // readout, one bar is something you can glance at.
-  component MonRow: Item {
-    id: monRow
+  // Who is driving: the script and its session, how long it has been at it,
+  // the model it consults and whether that model is answering, the risk it
+  // runs at. Small facts in the same micro-label vocabulary as the HUD, on
+  // the hero's far edge. A brain that is not answering is the one thing
+  // here worth colouring: the run is then on the maths alone, which the log
+  // calls "policy declined" a hundred times an hour.
+  component AgentCard: Row {
+    id: card
+
+    property var agent: null
+
+    readonly property string driver: Model.agentDriver(agent)
+    readonly property string uptime: Model.uptimeLabel(feed.state, agent)
+    readonly property string model: Model.agentModel(agent)
+    readonly property string risk: Model.agentRisk(agent)
+    readonly property bool modelDown: agent !== null && agent.modelState === "unreachable"
+
+    spacing: Style.space(14)
+
+    Stat {
+      visible: card.driver !== ""
+      width: Style.space(144)
+      label: "DRIVER"
+      value: card.driver
+    }
+
+    Stat {
+      visible: card.uptime !== ""
+      width: Style.space(64)
+      label: "UP"
+      value: card.uptime
+    }
+
+    Stat {
+      visible: card.model !== ""
+      width: Style.space(124)
+      label: Model.agentModelLabel(card.agent)
+      value: card.model
+      valueColor: card.modelDown ? root.urgent : root.foreground
+    }
+
+    Stat {
+      visible: card.risk !== ""
+      width: Style.space(92)
+      label: "RISK"
+      value: card.risk
+    }
+  }
+
+  // The badge case: eight slots, the earned ones lit. Read at a glance the
+  // way the trainer card reads it, instead of as "3/8" in a grid cell.
+  component BadgePips: Row {
+    id: pips
+
+    property int count: 0
+
+    spacing: Style.space(3)
+    // Rides the value line's height so the Stat above it keeps the same
+    // rhythm as its text-valued neighbours.
+    height: Math.ceil(pipMetrics.height)
+
+    FontMetrics {
+      id: pipMetrics
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+    }
+
+    Repeater {
+      model: Model.BADGE_SLOTS
+
+      Rectangle {
+        required property int index
+        anchors.verticalCenter: parent.verticalCenter
+        width: Style.space(8)
+        height: width
+        radius: Math.min(2, Style.cornerRadius)
+        color: index < pips.count
+          ? root.foreground
+          : Style.selectedFillFor(root.foreground, Color.accent)
+      }
+    }
+  }
+
+  // One of the six party slots, as a row: the sprite beside the name, level
+  // and a thin HP bar, the way the game's own party screen lists them. An
+  // empty slot is drawn faintly rather than left out, so a party of two
+  // reads as two of six. The lead is the only one outlined: it is the one
+  // the bar and the matchup are about.
+  component PartySlot: Rectangle {
+    id: partySlot
 
     property var mon: null
     property bool isLead: false
 
+    readonly property bool filled: mon !== null && mon !== undefined
+    readonly property bool fainted: filled && mon.fainted === true
     readonly property real fraction: Model.hpFraction(mon)
-    readonly property bool barVisible: isLead && mon && mon.max_hp > 0
+    readonly property int pad: Style.space(5)
 
-    implicitHeight: nameRow.implicitHeight
-      + (barVisible ? hpBar.implicitHeight + Style.space(4) : 0)
+    implicitHeight: slotRow.implicitHeight + 2 * pad
+    height: implicitHeight
+    radius: Style.cornerRadius
+    color: filled ? Style.normalFill : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.03)
+    border.width: isLead && filled ? Style.selectedBorderWidth || 1 : 0
+    border.color: Style.selectedBorderFor(root.foreground, Color.accent)
 
     Row {
-      id: nameRow
-      width: parent.width
-      spacing: Style.space(8)
-      // The sprite is the tallest thing in the row, so the text sits centred
-      // against it rather than the row growing a ragged baseline.
-      Image {
-        id: monSprite
-        // Derived art from the decomp, keyed on palette index 0 and emitted
-        // by widget/make_sprites.py. An egg or an unknown species simply has
-        // no file, and the row falls back to text alone.
-        source: Model.spriteFor(monRow.mon)
-        // Geometry from the SOURCE, painting from the status. Sizing the slot
-        // on `status === Image.Ready` meant the row's text width changed when
-        // the sprite finished decoding, so every row shuffled its own contents
-        // as it appeared. A species with no sprite file still collapses the
-        // slot to nothing and falls back to text alone.
-        visible: status === Image.Ready
-        sourceSize.width: spriteSize
-        sourceSize.height: spriteSize
-        width: source !== "" ? spriteSize : 0
-        height: source !== "" ? spriteSize : 0
-        fillMode: Image.PreserveAspectFit
-        smooth: false          // pixel art: never interpolate
+      id: slotRow
+      x: partySlot.pad
+      y: partySlot.pad
+      width: parent.width - 2 * partySlot.pad
+      spacing: Style.space(6)
+
+      // Geometry from the SLOT, painting from the status: the sprite's box is
+      // the same size whether the sprite has decoded, is missing (an egg, an
+      // unknown species) or the slot is empty, so a row never reshuffles.
+      Item {
+        width: Style.space(28)
+        height: Style.space(28)
         anchors.verticalCenter: parent.verticalCenter
-        readonly property int spriteSize: monRow.isLead ? 28 : 20
+
+        Image {
+          anchors.fill: parent
+          source: Model.spriteFor(partySlot.mon)
+          visible: status === Image.Ready
+          sourceSize.width: width
+          sourceSize.height: height
+          fillMode: Image.PreserveAspectFit
+          smooth: false          // pixel art: never interpolate
+          opacity: partySlot.fainted ? 0.4 : 1
+        }
+
+        // An egg has no sprite the player is allowed to see.
+        Text {
+          anchors.centerIn: parent
+          visible: partySlot.filled && partySlot.mon.egg === true
+          text: "EGG"
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          font.bold: true
+        }
       }
 
-      Text {
-        width: Math.max(0, nameRow.width - hpText.implicitWidth
-                           - monSprite.width - nameRow.spacing * 2)
-        text: Model.monLine(monRow.mon)
-        color: monRow.mon && monRow.mon.fainted ? root.urgent : root.foreground
-        font.family: root.fontFamily
-        font.pixelSize: monRow.isLead ? Style.font.body : Style.font.bodySmall
-        font.bold: monRow.isLead
-        elide: Text.ElideRight
+      Column {
+        width: parent.width - Style.space(28) - parent.spacing
         anchors.verticalCenter: parent.verticalCenter
-      }
+        spacing: Style.space(3)
 
-      Text {
-        id: hpText
-        text: Model.monHp(monRow.mon)
-        color: root.dim
-        font.family: root.fontFamily
-        font.pixelSize: monRow.isLead ? Style.font.body : Style.font.bodySmall
-      }
-    }
+        Row {
+          width: parent.width
+          spacing: Style.space(4)
 
-    RunBar {
-      id: hpBar
-      visible: monRow.barVisible
-      anchors.top: nameRow.bottom
-      anchors.topMargin: Style.space(4)
-      width: parent.width
-      fraction: monRow.fraction
-      fill: Model.hpColor(monRow.fraction)
+          Text {
+            id: slotName
+            width: Math.max(0, parent.width - slotLevel.width
+                               - (slotLevel.visible ? parent.spacing : 0))
+            text: partySlot.filled ? Model.monName(partySlot.mon) : ""
+            color: partySlot.fainted ? root.urgent : root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: partySlot.isLead
+            elide: Text.ElideRight
+          }
+
+          Text {
+            id: slotLevel
+            visible: text !== ""
+            text: Model.monLevel(partySlot.mon)
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            anchors.verticalCenter: slotName.verticalCenter
+          }
+        }
+
+        Track {
+          width: parent.width
+          implicitHeight: Style.space(3)
+          // Faded, not unmounted: an egg or an empty slot keeps the row's
+          // height so the column never changes shape.
+          opacity: partySlot.filled && partySlot.mon.max_hp > 0 ? 1 : 0
+          fraction: partySlot.fraction
+          fill: Model.hpColor(partySlot.fraction)
+        }
+      }
     }
   }
 
-  // Label/value cell for the stat grids.
-  component Pair: Row {
-    id: pair
+  // One side of the matchup: sprite, name and level, HP and its bar. The
+  // foe's side is mirrored so the two bars point at each other across the
+  // "vs", the way the game's own battle HUD faces them off.
+  component Combatant: Column {
+    id: side
 
-    property real cellWidth: 0
-    property string label: ""
-    property string value: ""
+    property var mon: null
+    property string name: ""
+    property string level: ""
+    property string hp: ""
+    property real fraction: 0
+    property color nameColor: root.foreground
+    property bool mirrored: false
 
-    width: cellWidth
-    spacing: Style.space(6)
+    spacing: Style.space(4)
 
-    Text {
-      width: Style.space(52)
-      text: pair.label
-      color: root.dim
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
-      font.bold: true
+    Row {
+      width: parent.width
+      spacing: Style.space(6)
+      layoutDirection: side.mirrored ? Qt.RightToLeft : Qt.LeftToRight
+
+      Item {
+        width: Style.space(28)
+        height: Style.space(28)
+        anchors.verticalCenter: parent.verticalCenter
+
+        Image {
+          anchors.fill: parent
+          source: Model.spriteFor(side.mon)
+          visible: status === Image.Ready
+          sourceSize.width: width
+          sourceSize.height: height
+          fillMode: Image.PreserveAspectFit
+          smooth: false
+          // The player's mon is seen from behind in the game; here both
+          // sprites are the front view, so the near side is flipped to face
+          // the foe.
+          mirror: !side.mirrored
+        }
+      }
+
+      Column {
+        width: parent.width - Style.space(28) - parent.spacing
+        anchors.verticalCenter: parent.verticalCenter
+        spacing: Style.space(1)
+
+        Text {
+          width: parent.width
+          text: side.level !== "" ? side.name + "  " + side.level : side.name
+          color: side.nameColor
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          font.bold: true
+          elide: Text.ElideRight
+          horizontalAlignment: side.mirrored ? Text.AlignRight : Text.AlignLeft
+        }
+
+        Text {
+          width: parent.width
+          text: side.hp
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          horizontalAlignment: side.mirrored ? Text.AlignRight : Text.AlignLeft
+        }
+      }
     }
 
-    Text {
-      width: Math.max(0, pair.width - Style.space(52) - pair.spacing)
-      text: pair.value
-      color: root.foreground
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.bodySmall
-      elide: Text.ElideRight
-    }
-  }
-
-  // A label/value row that gets the whole panel width and wraps instead of
-  // eliding. For values that are a phrase rather than a number -- an interior
-  // map name, a list of type gaps -- where half a grid row would cut off
-  // exactly the part worth reading. The caller owns the width.
-  component WideRow: Row {
-    id: wide
-
-    property string label: ""
-    property string value: ""
-
-    visible: value !== ""
-    spacing: Style.space(6)
-
-    Text {
-      width: Style.space(52)
-      text: wide.label
-      color: root.dim
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
-      font.bold: true
-    }
-
-    Text {
-      width: Math.max(0, wide.width - Style.space(52) - wide.spacing)
-      text: wide.value
-      color: root.foreground
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.bodySmall
-      wrapMode: Text.WordWrap
+    Track {
+      width: parent.width
+      fraction: side.fraction
+      fill: Model.hpColor(side.fraction)
+      // The foe's bar drains from the left, towards the "vs".
+      mirrored: side.mirrored
     }
   }
 }

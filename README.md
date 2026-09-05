@@ -23,12 +23,26 @@ from the hardware divider, which the savestate captures).
 ## Setup
 
 ```sh
-# 1. Build the ROM + sym (needs rgbds 1.0.3, see ../INSTALL.md)
-cd .. && PATH=~/.local/opt/rgbds-1.0.3:$PATH make -j
+# 1. rgbds (system package preferred; scripts/vendor_toolchain.sh unpacks the
+#    Arch package into ./vendor without root)
+sudo pacman -S --needed rgbds
 
-# 2. Python env
-python3 -m venv .venv && .venv/bin/pip install pyboy pillow
+# 2. Clone + build pokecrystal into decomp/pokecrystal (ROM + .sym)
+scripts/build_gen2.sh crystal
+
+# 3. Python env (PyBoy needs >= 3.12; the pin is exact, savestates are
+#    version-coupled)
+uv venv --python 3.13 .venv && uv pip install -e '.[gen2]' pytest pydantic
+
+# 4. Power on, then a fresh game to the bedroom
+./crystal boot
+.venv/bin/python scripts/newgame_bedroom.py --state saves/newgame.state --name OMP --speed 0
 ```
+
+`crystalagent/paths.py` finds the checkout via `CRYSTAL_REPO`, else the
+parent directory (harness nested inside pokecrystal), else
+`decomp/pokecrystal`. `CRYSTAL_ROM`/`CRYSTAL_SYM` relocate the build
+artifacts individually.
 
 ## Commands
 

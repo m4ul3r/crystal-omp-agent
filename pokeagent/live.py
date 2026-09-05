@@ -43,6 +43,8 @@ import json
 import logging
 import itertools
 import os
+import socket
+import sys
 import time
 from pathlib import Path
 
@@ -148,6 +150,18 @@ def _atomic_write(path: Path, data: bytes) -> None:
         raise
 
 
+def _process_name() -> str:
+    """What is driving, as the process itself can tell: the script's own
+    name (``play.py``, ``serve.py``, ``newgame.py``). A ``python -c`` or a
+    bare interpreter has none, and a REPL kernel launches through a file the
+    user never typed, so those get the honest generic word."""
+    argv0 = sys.argv[0] if sys.argv else ""
+    base = os.path.basename(argv0)
+    if not base or base.startswith("-") or "kernel" in base.lower():
+        return "python"
+    return base
+
+
 class _Narrator(logging.Handler):
     """Bridges the harness's existing log records into the feed's narration
     file.  Deliberately swallows its own failures: a broken feed must never
@@ -210,6 +224,8 @@ class LiveFeed:
         #: log on disk, not from the cartridge, so nothing here could derive
         #: it. Merged last, and only over keys it owns.
         self.extra = {}
+        #: When the feed attached: the run's uptime as the widget shows it.
+        self.started = None
 
         self.driver = None
         self.frames_published = 0
@@ -314,6 +330,7 @@ class LiveFeed:
             )
         self._claim()
         self.driver = driver
+        self.started = time.time()
         driver.emu.observer = self
         driver.feed = self
 
@@ -624,13 +641,34 @@ class LiveFeed:
             # The widget needs to distinguish "no game running" from "the feed
             # is lying to you", so say which read failed.
             out["error"] = f"{type(err).__name__}: {err}"
+        # Who is driving. The process can always say this much about itself;
+        # the play loop adds what only it knows (its session, the model it
+        # consults, the risk it runs at) through ``extra["agent"]``, which is
+        # MERGED over these defaults rather than replacing them.
+        out["agent"] = self.agent_identity()
         # Loop-supplied extras last: they are computed from the event log on
         # disk rather than from the cartridge, so nothing above can produce
         # them. Copied, not aliased -- a published dict must not keep mutating
         # after it is written.
         for key, value in (self.extra or {}).items():
-            out[key] = value
+            if key == "agent" and isinstance(value, dict):
+                out["agent"].update(value)
+            else:
+                out[key] = value
         return out
+
+    def agent_identity(self) -> dict:
+        """The driving process, as the feed itself can name it.
+
+        Enough for the widget to say WHAT is running the game even when the
+        publisher is a bare kernel that never says anything about itself.
+        """
+        return {
+            "name": _process_name(),
+            "pid": os.getpid(),
+            "host": socket.gethostname(),
+            "started": self.started,
+        }
 
     def _extras_fingerprint(self, driver, in_battle) -> tuple:
         """What the rich blocks actually depend on, read cheaply.

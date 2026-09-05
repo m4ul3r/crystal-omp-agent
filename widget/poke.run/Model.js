@@ -241,12 +241,29 @@ function gameTag(state) {
 
 // The header's second line. The game identity is what belongs there, but the
 // header must never be blank, so where the player is standing is the fallback
-// -- and it is all an older feed can offer.
-function headerMeta(state, running, present) {
+// -- and it is all an older feed can offer. A run that has stopped says how
+// long ago, in the same line: it used to be a second line of its own above
+// the frame, reserving its height for the whole session.
+function headerMeta(state, running, present, ageSec) {
   if (!present) return "No feed"
-  if (!running) return state && state.live === false ? "Run ended" : "Feed stale"
+  if (!running) {
+    var what = state && state.live === false ? "Run ended" : "Feed stale"
+    return ageSec === undefined || !isFinite(ageSec) ? what : what + " \u00b7 " + agoLabel(ageSec)
+  }
   var tag = gameTag(state)
   return tag !== "" ? tag : positionLabel(state)
+}
+
+// "12s ago", "4 min ago", "2 h ago": the resolution a watcher glancing at a
+// dead feed actually wants, not a five-digit second count.
+function agoLabel(sec) {
+  var s = Math.max(0, Math.round(sec))
+  if (s < 60) return s + "s ago"
+  var m = Math.round(s / 60)
+  if (m < 60) return m + " min ago"
+  var h = Math.round(m / 60)
+  if (h < 48) return h + " h ago"
+  return Math.round(h / 24) + " d ago"
 }
 
 // ------------------------------------------------------------- the objective
@@ -254,9 +271,17 @@ function headerMeta(state, running, present) {
 function objective(state) {
   var o = group(state, "objective")
   if (!o) return null
-  var out = { name: str(o.name), detail: str(o.detail), percent: percent(o.percent) }
+  var out = { name: objectiveTitle(o.name), detail: str(o.detail), percent: percent(o.percent) }
   if (out.name === "" && out.detail === "" && out.percent === null) return null
   return out
+}
+
+// The publisher names objectives by their rank in the ladder -- "1. Complete
+// the game" -- and the ladder is drawn in full a few sections down, so the
+// number says nothing here the STAGES list does not say better. The heading
+// carries its own weight.
+function objectiveTitle(name) {
+  return str(name).replace(/^\d+\.\s+/, "")
 }
 
 // --------------------------------------------------------------------- dex
@@ -322,13 +347,12 @@ function stages(state) {
   return out
 }
 
-function stageCaption(s) {
+// What sits at the right edge of a stage row. A finished stage says so; a
+// percentage on a completed rung reads as if there were something left in it.
+function stageValue(s) {
   if (!s) return ""
-  var pct = percentLabel(s.percent)
-  // A finished stage says so; a percentage on a completed rung reads as if
-  // there were something left in it.
-  if (s.complete) return s.name + "  done"
-  return pct === "" ? s.name : s.name + "  " + pct
+  if (s.complete) return "done"
+  return percentLabel(s.percent)
 }
 
 // ------------------------------------------------------------------ sprites
@@ -384,6 +408,12 @@ function team(state) {
   }
   if (out.minLevel === null && out.maxLevel === null && out.spread === null
       && !out.gapsReported)
+    return null
+  // A publisher with no party to measure still reports an empty gaps array,
+  // and "GAPS none" under an empty team claims a coverage it does not have.
+  // No mons, no numbers: nothing to say yet.
+  if (out.minLevel === null && out.maxLevel === null && out.spread === null
+      && party(state).length === 0)
     return null
   return out
 }
@@ -509,41 +539,60 @@ function facingLabel(state) {
   return word ? word : f.toLowerCase()
 }
 
-// The label/value cells for the run grid, built as a list so an absent key
-// leaves no hole: a Grid over a fixed set of cells would show "POS" with
-// nothing beside it the moment the publisher stopped reporting the position.
-//
-// The map name is not here. Interior maps run long -- "Oldale Town Pokemon
-// Center 2F" -- and a half-width cell elides exactly the part that says which
-// building you are in, so the panel gives it a full-width row of its own.
-function runCells(state) {
-  var out = []
-  if (!state) return out
-
-  if (state.pos) {
+// "(2,2) · facing down": where on the map, as one short phrase for the HUD's
+// right edge. Either half is optional.
+function whereLabel(state) {
+  var bits = []
+  if (state && state.pos) {
     var x = num(state.pos.x)
     var y = num(state.pos.y)
-    if (x !== null && y !== null) out.push({ label: "POS", value: x + "," + y })
+    if (x !== null && y !== null) bits.push("(" + x + "," + y + ")")
   }
-
   var facing = facingLabel(state)
-  if (facing !== "") out.push({ label: "FACING", value: facing })
+  if (facing !== "") bits.push("facing " + facing)
+  return bits.join(" \u00b7 ")
+}
 
-  // Every Gen 1-3 game ships exactly eight gyms, so the denominator is a fact
-  // about the medium rather than per-game data to be read out of a ROM.
-  var badges = num(state.badges)
-  if (badges !== null) out.push({ label: "BADGES", value: badges + "/8" })
+// Every Gen 1-3 game ships exactly eight gyms, so the denominator is a fact
+// about the medium rather than per-game data to be read out of a ROM. Null
+// when the publisher does not report badges at all.
+var BADGE_SLOTS = 8
 
+function badgeCount(state) {
+  return num(state && state.badges)
+}
+
+// The HUD's small facts, as label/value cells in a fixed order. Built as a
+// list so an absent key leaves no hole rather than a label with nothing
+// beside it.
+function hudCells(state) {
+  var out = []
+  if (!state) return out
   var cash = money(state)
   if (cash !== "") out.push({ label: "MONEY", value: cash })
-
   var play = str(state.play_time)
   if (play !== "") out.push({ label: "PLAY", value: play })
-
   var frame = num(state.frame)
   if (frame !== null) out.push({ label: "FRAME", value: grouped(frame) })
-
   return out
+}
+
+// Six party slots, in order, empty ones as null: the tiles draw every slot
+// so the party reads as the game's own six-slot screen, and a run with two
+// mons shows four open places rather than a shorter row.
+var PARTY_SLOTS = 6
+
+function partySlots(state) {
+  var list = party(state)
+  var out = []
+  for (var i = 0; i < PARTY_SLOTS; i++) out.push(i < list.length ? list[i] : null)
+  return out
+}
+
+function monLevel(mon) {
+  if (!mon || mon.egg) return ""
+  var lvl = num(mon.level)
+  return lvl === null ? "" : "L" + lvl
 }
 
 // Session counters, in a fixed order so the grid does not reshuffle itself
@@ -645,11 +694,110 @@ function tooltip(state, running, configured, feedName) {
   if (play) progress.push(play.split(":")[0] + "h")
   if (progress.length) lines.push(progress.join("  \u00b7  "))
 
+  // Line 5: who is driving. A game can be driven by the play loop, a
+  // serve.py client or a bare kernel, and which one matters when the run
+  // does something odd.
+  var driver = agentLine(state)
+  if (driver !== "") lines.push(driver)
+
   // Only say something is wrong when it is.
   if (!running)
     lines.push(state.live === false ? "\u2014 run ended" : "\u2014 feed stale")
 
   return lines.join("\n")
+}
+
+// ------------------------------------------------------------------- agent
+//
+// Who is running the game. The feed always names the process (script, pid,
+// host, when it attached); the play loop adds its session name, the risk it
+// runs at and the local model it consults -- with whether that model is
+// actually answering, since a model name on a card means nothing if every
+// decision has been falling back to the maths.
+
+function agent(state) {
+  var a = group(state, "agent")
+  if (!a) return null
+  var out = {
+    name: str(a.name),
+    session: str(a.session),
+    pid: num(a.pid),
+    host: str(a.host),
+    started: num(a.started),
+    model: str(a.model),
+    modelHost: str(a.model_host),
+    modelState: str(a.model_state),
+    modelReason: str(a.model_reason),
+    risk: num(a.risk),
+    riskLabel: str(a.risk_label),
+    decisions: (a.decisions && typeof a.decisions === "object") ? a.decisions : null
+  }
+  if (out.name === "" && out.session === "" && out.model === "" && out.risk === null)
+    return null
+  return out
+}
+
+// "4 h 05 m" of run, measured against the publisher's OWN clock (`t`), so a
+// run that has ended stops counting instead of ageing forever.
+function uptimeLabel(state, a) {
+  if (!a || a.started === null || !state || typeof state.t !== "number") return ""
+  var s = Math.max(0, Math.round(state.t - a.started))
+  var h = Math.floor(s / 3600)
+  var m = Math.floor((s % 3600) / 60)
+  if (h > 0) return h + " h " + (m < 10 ? "0" : "") + m + " m"
+  if (m > 0) return m + " min"
+  return s + " s"
+}
+
+// "play.py · live": the script and its session. Uptime is its own cell.
+function agentDriver(a) {
+  if (!a) return ""
+  var bits = []
+  if (a.name !== "") bits.push(a.name)
+  if (a.session !== "") bits.push(a.session)
+  return bits.join(" \u00b7 ")
+}
+
+// The brain cell's label carries the STATE -- "BRAIN · UNREACHABLE" -- and
+// its value the model name. The state is the part worth reading: it says
+// whether the model is in the loop right now, and a label can say it in the
+// same small caps the rest of the card uses without crowding the name.
+function agentModelLabel(a) {
+  if (!a || a.modelState === "") return "BRAIN"
+  return "BRAIN \u00b7 " + a.modelState.toUpperCase()
+}
+
+function agentModel(a) {
+  if (!a) return ""
+  if (a.model !== "") return a.model
+  return a.modelState === "off" ? "none" : ""
+}
+
+// "0.35 balanced"
+function agentRisk(a) {
+  if (!a || a.risk === null) return ""
+  var n = Math.round(a.risk * 100) / 100
+  return a.riskLabel !== "" ? n + " " + a.riskLabel : String(n)
+}
+
+// One sentence for the tooltip: "Driven by play.py (live), gemma4:e4b
+// unreachable, risk 0.35 balanced".
+function agentLine(state) {
+  var a = agent(state)
+  if (!a) return ""
+  var bits = []
+  if (a.name !== "")
+    bits.push("Driven by " + a.name + (a.session !== "" ? " (" + a.session + ")" : ""))
+  if (a.model !== "") {
+    // The host rides along: a run quietly asking a box the user does not
+    // recognise should say so where the user actually looks.
+    var model = a.modelState !== "" ? a.model + " " + a.modelState : a.model
+    if (a.modelHost !== "") model += " at " + a.modelHost
+    bits.push(model)
+  }
+  var risk = agentRisk(a)
+  if (risk !== "") bits.push("risk " + risk)
+  return bits.join(", ")
 }
 
 // "Route111" and "MauvilleCity_Gym_1F" are map CONSTANTS, not English. Split

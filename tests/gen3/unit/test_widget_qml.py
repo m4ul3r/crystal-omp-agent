@@ -70,9 +70,17 @@ def test_the_panel_still_renders_every_section_the_feed_publishes():
     which would silently drop status the user asked for.
     """
     text = (WIDGET / "Panel.qml").read_text()
-    for section in ("OBJECTIVE", "STAGES", "POKEDEX", "TEAM", "OPPONENT",
-                    "PARTY", "COUNTERS", "NARRATION"):
+    for section in ("OBJECTIVE", "PROGRESS", "TEAM", "PARTY", "COUNTERS",
+                    "NARRATION"):
         assert f'"{section}"' in text, f"the {section} section is gone"
+    # The battle has no header: it is the matchup strip under the screen.
+    assert "id: matchup" in text and "Model.enemy(feed.state)" in text, \
+        "the opponent is no longer drawn"
+    assert "BadgePips" in text and "Model.badgeCount(feed.state)" in text, \
+        "the badge case is gone"
+    # Who is driving lives on the hero's trailing edge, not in a section.
+    assert "AgentCard" in text and "Model.agent(feed.state)" in text, \
+        "the agent card is gone"
 
 
 def test_the_stage_helpers_the_panel_calls_exist_in_the_model():
@@ -80,7 +88,7 @@ def test_the_stage_helpers_the_panel_calls_exist_in_the_model():
     fails silently at runtime, in a widget nobody can unit-test."""
     panel = (WIDGET / "Panel.qml").read_text()
     model = (WIDGET / "Model.js").read_text()
-    for fn in ("stages", "stageCaption", "fraction"):
+    for fn in ("stages", "stageValue", "fraction"):
         assert f"Model.{fn}(" in panel, f"Panel.qml no longer calls {fn}"
         assert f"function {fn}(" in model, f"Model.js no longer defines {fn}"
 
@@ -122,13 +130,15 @@ def test_the_screen_box_is_not_hidden_while_a_frame_loads():
     assert "frameImage.status === Image.Ready" not in panel
 
 
-def test_the_screen_keeps_its_height_while_reloading():
-    """`sourceSize` is zero while a reload is in flight, so reading the aspect
-    live was the other half of the jump. It is remembered and only updated on
-    a successful load."""
+def test_the_screen_keeps_its_shape_while_reloading():
+    """`sourceSize` is zero while a reload is in flight, so reading the frame's
+    shape live was the other half of the jump. It is remembered and only
+    updated on a successful load."""
     panel = (WIDGET / "Panel.qml").read_text()
-    assert "property real aspect: 240 / 160" in panel, \
-        "aspect must be a remembered property, not a live binding"
+    assert "property int srcW: 240" in panel and "property int srcH: 160" in panel, \
+        "the frame's shape must be a remembered property, not a live binding"
+    assert "srcW = img.sourceSize.width" in panel, \
+        "the shape is taken from a frame that has decoded"
 
 
 def test_two_buffers_so_a_drawn_frame_is_always_on_screen():
@@ -213,28 +223,6 @@ def test_genuine_absence_is_still_representable():
     assert "property int missedReads" in feed
 
 
-def test_the_message_line_reserves_its_space():
-    """The other half of the flash, and the half that actually moved things.
-
-    The narration Text sits directly below the framebuffer and its content is
-    the game's own message buffer. Bound to `visible`, it appeared and vanished
-    at game speed and swung between one and two lines, relaying out everything
-    under the screen several times a second -- in lockstep with the frame
-    updating just above it, which is why it read as the image flashing.
-
-    Reserved space means a fixed height and a faded, never unmounted, Text.
-    """
-    panel = (WIDGET / "Panel.qml").read_text()
-    block = panel[panel.index("id: messageLine"):]
-    block = block[:block.index("\n          }")]
-    assert "opacity:" in block, "message line must fade, not unmount"
-    assert "visible:" not in block, (
-        "binding the narration line's `visible` is the layout jump: it "
-        "unmounts and remounts at game speed directly under the screen"
-    )
-    assert "height:" in block, "its height must be reserved, not derived"
-
-
 def test_no_repeater_binds_to_a_javascript_array():
     """The pop-in, measured.
 
@@ -251,8 +239,10 @@ def test_no_repeater_binds_to_a_javascript_array():
     models = re.findall(r"^\s*model: (.+)$", panel, re.MULTILINE)
     assert models, "the popup has Repeaters; the pattern must have changed"
     for m in models:
-        assert m.strip().endswith(".length"), (
-            f"Repeater model `{m.strip()}` is a JS array: bind it to a length "
+        m = m.strip()
+        # A fixed slot count (the eight badge pips) is a number, not an array.
+        assert m.endswith(".length") or m.endswith("_SLOTS"), (
+            f"Repeater model `{m}` is a JS array: bind it to a length "
             "and index into the array, or every delegate is rebuilt per poll"
         )
 
@@ -272,20 +262,6 @@ def test_the_bar_label_slot_is_never_unmounted():
     )
     assert "visible: feed.present" in panel, \
         "the label's space is claimed once, when a feed is first seen"
-
-
-def test_the_objective_bar_reserves_its_caption():
-    """`percent` goes null between objectives and the caption is what gives a
-    RunBar its height, so the objective bar -- which sits directly above the
-    framebuffer -- collapsed on every retarget and took the picture with it.
-    Verified live: `objBar.height` stayed 13.1875 across battle, no-battle,
-    percent and no-percent states.
-    """
-    panel = (WIDGET / "Panel.qml").read_text()
-    assert "property bool reserveCaption: false" in panel, \
-        "RunBar needs an opt-in reservation for captions that come and go"
-    assert "reserveCaption: true" in panel, \
-        "the objective's bar is the one above the frame; it must reserve"
 
 
 def test_everything_above_the_framebuffer_reserves_its_space():
@@ -315,10 +291,11 @@ def test_everything_above_the_framebuffer_reserves_its_space():
 
 
 def test_the_party_sprite_slot_does_not_wait_for_a_decode():
-    """Sizing the sprite on `status === Image.Ready` meant the row's text width
-    changed when the sprite finished decoding, so every row shuffled its own
-    contents as it appeared. Geometry comes from the source, painting from the
-    status."""
+    """Sizing the sprite on `status === Image.Ready` meant the tile changed
+    shape when the sprite finished decoding. The slot is a fixed-size Item
+    and only the painting is gated on the status."""
     panel = (WIDGET / "Panel.qml").read_text()
-    assert "width: source !== \"\" ? spriteSize : 0" in panel
-    assert "width: visible ? spriteSize : 0" not in panel
+    tile = panel[panel.index("component PartySlot"):panel.index("component Combatant")]
+    assert "visible: status === Image.Ready" in tile
+    assert "width: visible ? " not in tile and "height: visible ? " not in tile
+    assert "height: Style.space(28)" in tile, "the sprite slot must have a fixed height"

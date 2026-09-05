@@ -44,6 +44,24 @@ or with any process supervisor you like; the only requirements are
 The working state is re-saved on every autosave tick, so a restart RESUMES
 where it died instead of replaying from wherever the file was at launch.
 
+### The brain
+
+The loop computes everything it can compute exactly; a small local model
+(`pokeagent/brain.py`) only breaks ties the maths declares equal and picks
+nicknames. It talks to an Ollama server, by default the one on this machine:
+
+```sh
+POKEAGENT_OLLAMA_HOST=http://127.0.0.1:11434   # default: Ollama's own bind
+POKEAGENT_OLLAMA_MODEL=gemma4:e4b              # default
+```
+
+With no server there, every decision falls back to the maths and the widget's
+header shows `BRAIN · UNREACHABLE` in the urgent colour; the run plays on.
+`--no-brain` skips the model entirely (`BRAIN · OFF`). Point the host at
+another machine through the environment, never in the source: the bar
+tooltip names the host the run is asking, so a box you do not recognise is
+visible.
+
 
 ## Why a ROM build is part of the setup
 
@@ -105,8 +123,10 @@ ln -s ../root/usr/lib/x86_64-linux-gnu/libmgba.so.0.10 vendor/lib/libmgba.so.0.1
 configured pacman mirror and must not be used on Ubuntu.
 
 ```sh
-uv venv --python 3.11 .venv
-uv pip install --python .venv/bin/python -e '.[gen3]' --group dev
+# .venv is the Gen-2 (PyBoy, Python >= 3.12) lane; this one gets its own.
+# The `sapphire` launcher prefers .venv-gen3 and falls back to .venv.
+uv venv --python 3.11 .venv-gen3
+uv pip install --python .venv-gen3/bin/python -e '.[gen3]' --group dev
 
 # Optionally supply your matching cartridge dump before building:
 # cp /path/to/your/dump.gba pokesapphire.gba
@@ -115,11 +135,13 @@ uv pip install --python .venv/bin/python -e '.[gen3]' --group dev
 # ln -s pret/pokesapphire_rev2.gba pokesapphire.gba
 sha1sum pokesapphire.gba
 
-.venv/bin/python -m pytest tests
+LD_LIBRARY_PATH=vendor/lib .venv-gen3/bin/python -m pytest tests
 ```
 
-Use a separate Python >=3.12 environment with `.[gen2]` for PyBoy. Both
-packages install from this checkout, but the two pinned emulator wheels
+`LD_LIBRARY_PATH=vendor/lib` is only needed when libmgba is vendored rather
+than installed system-wide; the `sapphire` launcher sets it for you. Every
+`.venv/bin/python` below means `.venv-gen3/bin/python` under this layout.
+Both packages install from this checkout, but the two pinned emulator wheels
 require different Python minors. Tests requiring an unavailable backend or
 game artifacts are skipped; pure logic tests do not require both emulators.
 
