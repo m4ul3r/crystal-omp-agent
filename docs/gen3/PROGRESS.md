@@ -3874,10 +3874,11 @@ do anything hard. In order:
 
 ## session lead — dex 99 -> 111, eight parallel hunters (Sep 5 2026)
 
-**Canonical: `saves/line3.state` = dex 113/178 (63.5%), Route121_SafariZoneEntrance (9,4),**
+**Canonical: `saves/line3.state` = dex 115/178 (64.6%), LilycoveCity_PokemonCenter_1F (7,4), healed.**
 clean field state.** Milestones this session, each a NEW filename:
 `milestone-dex105.state`, `milestone-dex107.state`, `milestone-dex108.state`,
-`milestone-dex111.state`, `milestone-dex113.state`. Fork from the newest;
+`milestone-dex111.state`, `milestone-dex113.state`, `milestone-dex115.state`.
+Fork from the newest;
 never drive `line3.state`
 directly (`pyre_shoal.py` refuses it on purpose).
 
@@ -3893,6 +3894,7 @@ directly (`pyre_shoal.py` refuses it on purpose).
 | CRAWDAUNT | evolved itself at L30 walking off the pillar | free |
 | VULPIX, DUSKULL, CHIMECHO | `pyre_shoal.py --legs pyre` | 13 min |
 | RHYHORN, PINSIR | `safari_hunt.py --area nw` | 9 min |
+| HERACROSS, PHANPY | `safari_hunt.py --area ne` | 10 min |
 
 ### Harness bugs fixed (all were mine, all found by playing)
 1. **`naming.py accept()` was TYPING the letter "A".** It sent `START` then
@@ -3937,11 +3939,24 @@ directly (`pyre_shoal.py` refuses it on purpose).
   run finishing after a promotion wrote the *old* line over `line3.state` and
   silently reverted dex 107 -> 105. Milestones are what saved it.
 
+### The Safari Zone is DONE -- check before you hunt
+All four quadrants owe dex-115 **nothing**. I learned that the expensive way:
+two full Southwest trips (~35 min, 1000 steps, 1000 money) chasing SEAKING on
+the strength of a peer's "SEAKING and GOLDUCK did NOT land". That was true of
+THEIR fork and false of this line, where both were already registered.
+`safari_hunt.py` now refuses a quadrant that owes the loaded save nothing.
+
+**The general rule this cost me:** a fork-relative claim about what is
+missing is not evidence about the canonical state. Eight agents on eight
+timelines each report "X is still missing" truthfully about themselves and
+wrongly about you. One cheap read settles it:
+```python
+owed = {names.species(r.species) for r in target.wild.for_map(MAP)
+        if r.species in set(target.missing())}
+```
+
 ### Next
-65 to go, of which 16 are unreachable by design (7 version-exclusive,
-6 trade-evolution, 3 event-only), so 49 are achievable. Cheapest first:
-`safari_hunt --area ne` (HERACROSS, PHANPY — banked already on
-`saves/sb-ne-out.state`, ~4 min to reproduce), SEAKING (20% of the Safari
-super-rod table and a cast costs no steps),
+63 to go, of which 16 are unreachable by design (7 version-exclusive,
+6 trade-evolution, 3 event-only), so **47 are achievable**. Cheapest first:
 `pyre_shoal --legs shoal` (SPHEAL now, SNORUNT at low tide), `safari_hunt`
 (HERACROSS, PHANPY), `breed.py --baby azurill` once the incense equips.

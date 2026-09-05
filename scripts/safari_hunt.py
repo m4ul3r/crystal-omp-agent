@@ -113,6 +113,12 @@ RAIL_CLIMB = [
 AREAS = {
     "ne": ("SafariZone_Northeast", "ACRO BIKE"),
     "nw": ("SafariZone_Northwest", "MACH BIKE"),
+    # SOUTHWEST NEEDS NO BIKE. It is reachable on foot from the entrance, and
+    # it carries the same 20% SEAKING slot on the SUPER ROD table as Northwest
+    # (docs/gen3/guide/encounters.json). A rod cast costs NO step, only balls,
+    # so this is the cheapest quadrant in the zone -- the mach-bike trip that
+    # was being planned for SEAKING was pure waste.
+    "sw": ("SafariZone_Southwest", None),
 }
 
 
@@ -621,11 +627,16 @@ def hunt(c, area: str, deadline) -> int:
     d = c.d
     got = 0
     terrains = ["grass"]
-    if area == "nw":
-        # GOLDUCK is 5% of Northwest's SURF table and appears on no other
-        # reachable water; SEAKING is 20% of its SUPER ROD table -- and a cast
-        # costs no steps at all, so fishing is the cheapest slot in the trip.
-        terrains += ["rod", "water"]
+    # WHICH TERRAIN IS WORTH SPENDING THE TRIP ON, per quadrant, from the
+    # encounter tables rather than habit:
+    #   nw  GOLDUCK is 5% of its SURF table and appears on no other reachable
+    #       water, and SEAKING is 20% of its SUPER ROD table.
+    #   sw  the same 20% SEAKING rod slot, but its SURF table is 100%
+    #       PSYDUCK -- so surfing here is pure step cost for a species we
+    #       already hold. Rod only.
+    # A cast costs NO step (only balls), which makes "rod" the cheapest
+    # terrain in the zone wherever it is offered.
+    terrains += {"nw": ["rod", "water"], "sw": ["rod"]}.get(area, [])
     # A ROUND THAT SPENDS NO STEPS IS A WEDGE, NOT BAD LUCK. Measured: a
     # Northwest trip pinned at (6,30) and every `goto` came back "journey
     # budget spent at (6, 30) heading for (24, 14)", so `pace_map` burned six
@@ -667,6 +678,27 @@ def hunt(c, area: str, deadline) -> int:
     return got
 
 
+def to_area(d, target_map: str, tries: int = 6) -> bool:
+    """Walk into an adjoining Safari quadrant on foot.
+
+    The four sub-maps are joined by MAP CONNECTIONS, not warps -- only
+    Southeast has a warp_event at all -- so there is no door to take: you
+    cross the seam by stepping over it. `travel` knows how to do that; it just
+    needs to be allowed to try more than once, because a wild encounter
+    interrupts the crossing and leaves the player mid-seam.
+    """
+    for _ in range(tries):
+        if d.map_name() == target_map:
+            return True
+        try:
+            d.travel(target_map)
+        except Exception as exc:            # noqa: BLE001
+            log.info("  to_area: %s", str(exc)[:80])
+        if d.in_battle():
+            d.fight()
+    return d.map_name() == target_map
+
+
 def trip(d, c, area: str, minutes: float) -> int:
     """One Safari entry: 30 balls and 500 steps, start to eject."""
     target_map, _bike = AREAS[area]
@@ -684,10 +716,17 @@ def trip(d, c, area: str, minutes: float) -> int:
             return 0
     log.info("INSIDE: %s %s | %s", d.map_name(), d.pos(), counters(d))
 
-    climb = climb_to_ne if area == "ne" else climb_to_nw
-    if not climb(d):
-        log.info("could not reach %s | %s", target_map, counters(d))
-        return 0
+    if area == "sw":
+        # No rail, no slope, no bike: the southwest quadrant is ordinary
+        # ground from the entrance, so walking there IS the climb.
+        if d.map_name() != target_map and not to_area(d, target_map):
+            log.info("could not walk to %s | %s", target_map, counters(d))
+            return 0
+    else:
+        climb = climb_to_ne if area == "ne" else climb_to_nw
+        if not climb(d):
+            log.info("could not reach %s | %s", target_map, counters(d))
+            return 0
     log.info("in %s with %s", d.map_name(), counters(d))
 
     deadline = time.time() + minutes * 60.0
@@ -728,11 +767,31 @@ def main(argv=None) -> int:
     target = dexmod.DexTarget(d.emu, d.names, d.consts, d.nav, spec=d.spec)
     before, _ = target.dex_flags(d.state)
     log.info("dex %d caught", len(before))
-
     _map, bike = AREAS[a.area]
-    if not swap_bike(d, bike):
+    # ASK WHAT THIS QUADRANT STILL OWES *THIS SAVE* BEFORE SPENDING ANYTHING.
+    # A trip is 500 money, 500 steps and up to 20 minutes of wall clock, and
+    # I spent two of them on Southwest before checking: a peer had reported
+    # SEAKING and GOLDUCK as "did not land", which was true of THEIR fork and
+    # false of the canonical line, where both were already registered. The
+    # hunt loop was right to catch nothing; the run should never have started.
+    # A fork-relative claim about what is missing is not evidence about this
+    # state -- the dex flags in THIS save are.
+    owed = {d.names.species(r.species)
+            for r in target.wild.for_map(_map)
+            if r.species in set(target.missing())}
+    if not owed:
+        log.info("SKIP: %s (%s) owes this save NOTHING -- not paying 500 money "
+                 "and 500 steps to confirm it", a.area, _map)
+        return 1
+    log.info("%s owes %s", a.area, sorted(owed))
+    # A quadrant with no bike requirement must not be forced through Rydel's:
+    # the exchange is a real errand (fly to Mauville, walk in, swap, come
+    # back) and swap_bike(None) would have read as "want no bike" and failed.
+    if bike and not swap_bike(d, bike):
         log.info("FAIL: %s needs the %s", a.area, bike)
         return 1
+    if not bike:
+        log.info("%s needs no bike (holding %s)", a.area, held_bike(d) or "none")
 
     c = SafariCollector(d, per_map=a.minutes * 60.0,
                         feed_name=a.feed or Path(a.state).stem)

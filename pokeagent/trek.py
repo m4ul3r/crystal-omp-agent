@@ -632,6 +632,25 @@ class Driver:
                 spent += 20
                 continue
             free = 0
+            # A BATTLE IS NOT A CUTSCENE, and it is the most expensive thing
+            # this loop can walk into. A wild encounter mid-goto sets the same
+            # scene lock as a story beat, so the stall-press used to land on
+            # the battle menu: in a normal battle A picks FIGHT and opens the
+            # move picker (which then parks forever if the cursor's move has
+            # no PP -- that is the 20 minutes lost on Sky Pillar), and in a
+            # SAFARI battle the action cursor is zeroed at setup
+            # (pret/src/battle_controllers.c:92) so cursor 0 emits the ball
+            # THROW (battle_controller_safari.c:207-228). Measured by a peer
+            # driving one goto across the Safari Zone's grass: 25 A presses,
+            # six Safari Balls gone on mons the catch policy was never asked
+            # about, and one of them caught and left sitting on the naming
+            # keyboard. Same rule as every other prompt below -- hand it back.
+            if self.in_battle():
+                self.last_scene_reason = (
+                    "battle is up; play it with fight() rather than pressing A"
+                )
+                if on_prompt == "stop":
+                    return False
             # A scene that asks a QUESTION must never be answered blindly.
             # Mashing A through the Birch lab sequence nicknames your starter
             # "AAAAAAAAAA", which is the predecessor's stray-A naming bug
@@ -931,6 +950,19 @@ class Driver:
                 # replan-cap. Clear the scene and try again; only a genuine
                 # refusal marks the cell.
                 if "scene-owns-input" in (self.last_step_reason or ""):
+                    # An ENCOUNTER is the common case of this in grass, and it
+                    # is a decision, not a stall: advance_scene now refuses a
+                    # live battle rather than pressing A into it, so route it
+                    # to fight() which consults battle_policy/encounter_policy
+                    # (and says so in the log when nothing is steering it).
+                    if self.in_battle():
+                        try:
+                            self.fight()
+                        except Exception as exc:      # noqa: BLE001
+                            log.info("goto: battle failed: %s", exc)
+                            return False
+                        self.settle(200)
+                        continue
                     self.advance_scene(40000)
                     self.settle(200)
                     continue
