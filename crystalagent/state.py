@@ -137,34 +137,45 @@ def game_state(emu, names, include_screen=False):
     }
 
     stride = sym.offset("wPartyMon2", "wPartyMon1")
-    off = lambda f: sym.offset("wPartyMon1" + f, "wPartyMon1")
+    off = {field: sym.offset("wPartyMon1" + field, "wPartyMon1")
+           for field in (
+               "Species", "DVs", "Level", "HP", "MaxHP", "Status", "Item",
+               "Moves", "PP",
+           )}
     party_bank, party_base = sym["wPartyMon1"]
     nick_bank, nick_base = sym["wPartyMonNicknames"]
     count = min(emu.read_u8("wPartyCount"), 6)
     slots = emu.read("wPartySpecies", count) if count else b""
+    party_buf = memoryview(
+        emu.read((party_bank, party_base), stride * count)
+    ) if count else memoryview(b"")
+    nick_buf = memoryview(
+        emu.read((nick_bank, nick_base), MON_NAME_LENGTH * count)
+    ) if count else memoryview(b"")
     party = []
     for i in range(count):
-        base = party_base + i * stride
-        rd = lambda f, n=1: emu.read((party_bank, base + off(f)), n)
+        member = party_buf[i * stride:(i + 1) * stride]
+        rd = lambda field, n=1: member[off[field]:off[field] + n]
         species = rd("Species")[0]
         dvb = rd("DVs", 2)
+        dvs = _dvs(dvb)
         party.append({
             "species": species,
             "name": names.species.get(species, "?"),
             "egg": slots[i] == EGG,
-            "dvs": _dvs(dvb),
-            "shiny": _shiny(_dvs(dvb)),
+            "dvs": dvs,
+            "shiny": _shiny(dvs),
             "form": _unown_letter(dvb) if species == 201 else None,
             "nickname": emu.charmap.decode(
-                emu.read((nick_bank, nick_base + i * MON_NAME_LENGTH), MON_NAME_LENGTH)),
+                nick_buf[i * MON_NAME_LENGTH:(i + 1) * MON_NAME_LENGTH]),
             "level": rd("Level")[0],
             "hp": int.from_bytes(rd("HP", 2), "big"),
             "max_hp": int.from_bytes(rd("MaxHP", 2), "big"),
             "status": _status(rd("Status")[0]),
             "item": names.items.get(rd("Item")[0]),
             "moves": [
-                {"name": names.moves.get(m, "?"), "pp": pp}
-                for m, pp in zip(rd("Moves", 4), rd("PP", 4)) if m
+                {"name": names.moves.get(move, "?"), "pp": pp}
+                for move, pp in zip(rd("Moves", 4), rd("PP", 4)) if move
             ],
         })
     s["party"] = party
@@ -213,17 +224,22 @@ def box_mons(emu, names):
     mon_bank, mon_base = sym["sBoxMon1Species"]
     nick_bank, nick_base = sym["sBoxMonNicknames"]
     count = min(emu.read_u8("sBoxCount"), MONS_PER_BOX)
+    mon_buf = memoryview(
+        emu.read((mon_bank, mon_base), stride * count)
+    ) if count else memoryview(b"")
+    nick_buf = memoryview(
+        emu.read((nick_bank, nick_base), MON_NAME_LENGTH * count)
+    ) if count else memoryview(b"")
     mons = []
     for i in range(count):
-        base = mon_base + i * stride
-        species = emu.read((mon_bank, base), 1)[0]
+        member = mon_buf[i * stride:(i + 1) * stride]
+        species = member[0]
         mons.append({
             "species": species,
             "name": names.species.get(species, "?"),
             "nickname": emu.charmap.decode(
-                emu.read((nick_bank, nick_base + i * MON_NAME_LENGTH),
-                         MON_NAME_LENGTH)),
-            "level": emu.read((mon_bank, base + level_off), 1)[0],
+                nick_buf[i * MON_NAME_LENGTH:(i + 1) * MON_NAME_LENGTH]),
+            "level": member[level_off],
         })
     return mons
 

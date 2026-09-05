@@ -16,8 +16,9 @@ clock, not an outcome: re-entering play() resumes the same battle.
 """
 import pytest
 
-import trek
-from trek import Driver
+import crystalagent.driver.battle as battle_driver
+import crystalagent.driver.inventory as inventory_driver
+from crystalagent.driver import Driver
 
 pytestmark = pytest.mark.unit
 
@@ -117,7 +118,7 @@ def buying_driver(monkeypatch, stock=6):
     d.select_menu_row = lambda label, **kw: (
         d.state.__setitem__("screen", "list")
         or d.emu.__setattr__("rows", BUY_LIST) or True)
-    monkeypatch.setattr(trek, "bag_item_index", lambda *a, **k: 0)
+    monkeypatch.setattr(inventory_driver, "bag_item_index", lambda *a, **k: 0)
     d.emu.sym = {"wItems": (1, 0xD892), "wBalls": (1, 0xD8D7)}
     d.emu.u8["wNumItems"] = 1
     # wItems is [item id, quantity] pairs; the quantity is the bag count
@@ -225,8 +226,8 @@ def fight_driver(monkeypatch, battle, live_after):
     d._resolve_nickname = lambda nick, species: None
     d._battle_text_handler = lambda rows: None
     d._fight_diag = lambda b, outcome: None
-    monkeypatch.setattr(trek, "Battle", lambda *a, **k: battle)
-    monkeypatch.setattr(trek, "game_state", lambda emu, names: {
+    monkeypatch.setattr(battle_driver, "Battle", lambda *a, **k: battle)
+    monkeypatch.setattr(battle_driver, "game_state", lambda emu, names: {
         "player": {"money": 100}, "party": []})
     return d
 

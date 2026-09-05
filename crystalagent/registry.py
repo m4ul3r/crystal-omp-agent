@@ -1,12 +1,12 @@
-"""One registry of driver actions: the single source of truth shared by
-trek's CLI, serve.py's `run`, and autopilot decisions.
+"""Driver actions shared by serve.py and autopilot.py.
 
 Each entry binds a verb to a Driver method, its keyword contract, and an
-optional precondition evaluated against live game state -- so a bad decision
-is rejected with a sentence instead of corrupting play.
+optional precondition evaluated against live game state, so invalid decisions
+fail before mutating play.
 """
 
 from dataclasses import dataclass
+from .driver import HealError
 
 
 @dataclass(frozen=True)
@@ -16,50 +16,48 @@ class Action:
     required: tuple = ()             # kwargs the caller must pass
     optional: tuple = ()             # extra kwargs accepted; others rejected
     need_battle: bool | None = None  # True: only in battle; False: only outside
+    expect_change: bool = True       # successful action should change digest
     fn: object | None = None         # non-Driver callable taking (d)
 
 
 def _heal(d, tries=None):
-    # lazy import: trek (repo root) imports siblings of this package
-    import trek
     kw = {} if tries is None else {"tries": tries}
     try:
-        return trek.heal_pokecenter(d, **kw)
-    except trek.HealError as e:
-        # recoverable planning failure, not a crash: report it structured
-        # so autopilot/serve keep the composite alive (wren pt4/pt5)
+        return d.heal(**kw)
+    except HealError as e:
         return {"ok": False, "reason": str(e), "map": e.map_name}
 
 
 ACTIONS = {
     a.name: a for a in (
         Action("goto", required=("x", "y"), optional=("label", "map_name"),
-               need_battle=False),
+               need_battle=False, expect_change=False),
         Action("walk", required=("path",), optional=("label",),
-               need_battle=False),
+               need_battle=False, expect_change=False),
         Action("fight", optional=("max_frames", "policy",
                                   "require_decision"), need_battle=True),
         Action("catch", optional=("ball", "max_balls", "nickname"),
                need_battle=True),
-        Action("heal", fn=_heal, optional=("tries",)),
+        Action("heal", fn=_heal, optional=("tries",), expect_change=False),
         Action("talk_to", required=("x", "y"), optional=("label", "facing"),
-               need_battle=False),
+               need_battle=False, expect_change=False),
         Action("mart_buy", required=("x", "y", "item_name"),
                optional=("qty", "label"), need_battle=False),
         Action("use_item", required=("item_name",),
                optional=("target_slot", "mon", "field"), need_battle=False),
         Action("heal_party", optional=("items", "max_items_per_mon"),
-               need_battle=False),
-        Action("settle", optional=("quiet", "spacing", "max_frames")),
-        Action("drain_scene", optional=("max_frames",)),
+               need_battle=False, expect_change=False),
+        Action("settle", optional=("quiet", "spacing", "max_frames"),
+               expect_change=False),
+        Action("drain_scene", optional=("max_frames",), expect_change=False),
         Action("catch_up", optional=("nickname", "ball", "max_balls",
                                      "max_encounters", "label"),
                need_battle=False),
-        Action("resolve_choice", optional=("choice",)),
-        Action("who_fights", need_battle=True),
-        Action("gym_scout", required=("map",)),
+        Action("resolve_choice", optional=("choice",), expect_change=False),
+        Action("who_fights", need_battle=True, expect_change=False),
+        Action("gym_scout", required=("map",), expect_change=False),
         Action("travel", required=("dest_map",), optional=("label",),
-               need_battle=False),
+               need_battle=False, expect_change=False),
         Action("name_prompt", required=("name",), need_battle=False),
         Action("step_dir", required=("mv",), optional=("max_frames",),
                need_battle=False),
@@ -68,7 +66,7 @@ ACTIONS = {
                optional=("label", "forget_move"), need_battle=False),
         Action("deposit", required=("mon",), need_battle=False),
         Action("withdraw", required=("mon",), need_battle=False),
-        Action("box_list", need_battle=False),
+        Action("box_list", need_battle=False, expect_change=False),
         Action("use_field_move", required=("move",), optional=("facing",),
                need_battle=False),
         Action("teach_tm", required=("tm", "mon"), optional=("forget",),
@@ -97,7 +95,7 @@ def check(d, name, kwargs):
     if missing:
         raise ValueError(f"{name}: missing required argument(s) {missing}")
     if act.need_battle is not None:
-        in_battle = bool((d.observe().get("ui") or {}).get("battle"))
+        in_battle = bool(d.battle())
         if in_battle != act.need_battle:
             want = "an active battle" if act.need_battle else "no active battle"
             raise ValueError(f"{name}: needs {want} (ui.battle={in_battle})")

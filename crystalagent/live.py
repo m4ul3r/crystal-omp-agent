@@ -66,9 +66,8 @@ def item_cells(emu, nav, map_const):
     """
     global _ITEMBALLS_BY_MAP, _EVENT_BITS
     if _ITEMBALLS_BY_MAP is None:
-        camel_to_const = {camel: const for const, camel in nav.camel.items()}
         sources = missables.parse_item_sources(
-            paths.REPO_ROOT, lambda stem: camel_to_const.get(stem, stem))
+            paths.REPO_ROOT, lambda stem: nav.resolve(stem) or stem)
         by_map = {}
         for src in sources:
             if src.kind == "itemball" and src.x is not None:

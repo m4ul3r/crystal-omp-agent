@@ -19,8 +19,9 @@ import logging
 
 import pytest
 
-import trek
-from trek import Driver, DecisionRequired
+import crystalagent.driver.battle as battle_owner
+import crystalagent.driver.world as world_owner
+from crystalagent.driver import Driver, DecisionRequired
 
 pytestmark = pytest.mark.unit
 
@@ -154,15 +155,18 @@ def battle_driver(monkeypatch, mode=1, turns=1, hook=None, catch_after=1,
 
     fake = FakeBattle(d.emu, turns=turns, catch_after=catch_after,
                       default=default)
-    monkeypatch.setattr(trek, "Battle", lambda *a, **k: fake)
-    monkeypatch.setattr(trek, "game_state", lambda *a: {
+    monkeypatch.setattr(battle_owner, "Battle", lambda *a, **k: fake)
+    state = {
         "player": {"money": 3000},
         "party": [{"species": "FERALIGATR", "hp": 90, "max_hp": 120,
-                   "egg": False}]})
-    monkeypatch.setattr(trek, "bag_item_index",
+                   "egg": False}],
+    }
+    monkeypatch.setattr(battle_owner, "game_state", lambda *a: state)
+    monkeypatch.setattr(world_owner, "game_state", lambda *a: state)
+    monkeypatch.setattr(battle_owner, "bag_item_index",
                         lambda emu, names, item, pocket="items":
                         0 if item in bag else None)
-    monkeypatch.setattr(trek, "_decide_frame",
+    monkeypatch.setattr(battle_owner, "battle_frame",
                         (lambda b: frame) if frame is not None else None)
     return d, fake
 
@@ -378,12 +382,6 @@ def test_two_switch_ins_stay_quiet(monkeypatch, caplog):
     assert d.encounter_events[-1]["free_hits"] == 2
 
 
-def test_turn_record_survives_without_the_decide_module(monkeypatch):
-    monkeypatch.setattr(trek, "_TurnLog", None)
-    d, fake = battle_driver(monkeypatch, mode=2, turns=2, frame=None)
-    d.fight(policy=lambda rows, me, enemy: ("attack", 0))
-    assert isinstance(d.last_battle, list)
-    assert [r["turn"] for r in d.last_battle] == [1, 2]
 
 
 # -- silent auto-play is over ----------------------------------------------
@@ -486,12 +484,15 @@ def test_encounter_hook_gets_the_real_decide_frame(monkeypatch):
     d, fake = battle_driver(monkeypatch, turns=1,
                             hook=lambda frame: seen.append(frame) or "flee",
                             frame=None)
-    monkeypatch.undo()          # restore the real trek._decide_frame
-    monkeypatch.setattr(trek, "Battle", lambda *a, **k: fake)
-    monkeypatch.setattr(trek, "game_state", lambda *a: {
+    monkeypatch.undo()          # restore the real battle_owner.battle_frame
+    monkeypatch.setattr(battle_owner, "Battle", lambda *a, **k: fake)
+    state = {
         "player": {"money": 3000},
         "party": [{"species": "FERALIGATR", "hp": 90, "max_hp": 120,
-                   "egg": False}]})
+                   "egg": False}],
+    }
+    monkeypatch.setattr(battle_owner, "game_state", lambda *a: state)
+    monkeypatch.setattr(world_owner, "game_state", lambda *a: state)
     # what decide.battle_frame reads beyond me()/enemy(): pockets, party
     # count, turn counter
     fake.names = d.names

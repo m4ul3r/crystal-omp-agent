@@ -16,7 +16,7 @@ import logging
 
 import pytest
 
-from trek import Driver
+from crystalagent.driver import Driver
 from crystalagent.battle import Battle
 from crystalagent.menus import Menus
 

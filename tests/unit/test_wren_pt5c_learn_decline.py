@@ -15,7 +15,7 @@ import logging
 
 import pytest
 
-from trek import Driver
+from crystalagent.driver import Driver
 
 pytestmark = pytest.mark.unit
 

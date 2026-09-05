@@ -9,7 +9,8 @@ wScriptMode/textbox/pos sequences against a frame-driven fake emu.
 """
 import pytest
 
-from trek import Driver, _tile_kind
+from crystalagent.driver import Driver
+from crystalagent.nav import _tile_kind
 
 pytestmark = pytest.mark.unit
 

@@ -16,10 +16,10 @@ import re
 
 import pytest
 
-import trek
+import crystalagent.nav as nav
 from crystalagent import paths
 from crystalagent.nav import MapData
-from trek import Driver
+from crystalagent.driver import Driver
 
 pytestmark = pytest.mark.unit
 
@@ -145,7 +145,7 @@ def test_tile_at_and_observe_use_the_same_classifier():
               "l": d.tile_at(x - 1, y), "r": d.tile_at(x + 1, y)}
     from crystalagent.nav import STEP
     for dd, (dx, dy) in STEP.items():
-        assert trek._tile_kind(GRID[y + dy][x + dx]) == expect[dd.lower()]
+        assert nav._tile_kind(GRID[y + dy][x + dx]) == expect[dd.lower()]
     assert d.tile_at(x, y) == "floor"
 
 

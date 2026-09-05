@@ -26,8 +26,10 @@ from the hardware divider, which the savestate captures).
 # 1. Build the ROM + sym (needs rgbds 1.0.3, see ../INSTALL.md)
 cd .. && PATH=~/.local/opt/rgbds-1.0.3:$PATH make -j
 
-# 2. Python env
-python3 -m venv .venv && .venv/bin/pip install pyboy pillow
+# 2. Python env + project (back in crystal-agent/)
+cd crystal-agent
+python3 -m venv .venv
+.venv/bin/pip install -e .
 ```
 
 ## Commands
@@ -51,13 +53,18 @@ Mutating commands print the decoded screen plus a status line
 (`frame= map= pos= lead= BATTLE…`), so one call = act **and** observe.
 `-q/--quiet` works before or after the subcommand.
 
-### trek.py (persistent-process driver)
+### Trek driver CLI
 
-For long sessions, run legs in one process instead of paying per-call load
-cost: `trek.py <leg> [<state>] [args...]` — omit `<state>` (or pass `''`)
-for `saves/default.state`. Legs: `walk PATH`, `goto X Y`,
-`grind [PACE] [LEVEL]`, `catch`, `fight`, `flush`, `heal`, plus scripted
-journey legs (`route29`, `to_violet`, `errand1..4`, `violet`). See AGENTS.md.
+For occasional one-shot legs, use
+`trek.py <leg> [<state>] [args...]`. Gameplay legs refuse an omitted state;
+pass your own fork, or deliberately set `CRYSTAL_ALLOW_DEFAULT=1` to use
+`saves/default.state`.
+
+The 22 commands are: `walk`, `goto`, `talk`, `route`, `travel`, `mart`,
+`verify`, `states`, `train`, `gc`, `map`, `catch`, `fight`, `flush`, `heal`,
+`route29`, `to_violet`, `errand1`, `errand2`, `errand3`, `errand4`, and
+`violet`. Run `trek.py --help` for arguments and arities. For an interactive
+long session, keep one `Driver` alive instead; see `HANDBOOK.md`.
 
 ### Input DSL
 
@@ -99,18 +106,22 @@ Useful patterns, learned the hard way:
 ```
 crystal          launcher (venv + PYTHONPATH)
 crystalagent/
+  driver/        Driver orchestration by owner: core/world/ui/battle/
+                 inventory/navigation; __init__.py is the concrete facade
+  registry.py    the 25 validated serve/autopilot action contracts
   symfile.py     .sym parser (name -> bank:addr)
   charmap.py     charmap.asm parser: text decode + 1-cell screen glyphs
   names.py       species/move/item names decoded from the ROM; map names
   emu.py         PyBoy wrapper: banked reads, input DSL, tilemap decode, states
   state.py       structured state (party/battle structs are sym-offset-driven)
   menus.py       menu navigation via the ▶/▷ cursor glyphs + scroll position
-  battle.py      battle play: type chart + move data from the repo, flee/
-                 ball/item/switch actions, policy-driven main loop
-  nav.py         walkability grids from maps/*.blk + tilecoll, BFS with ledges
-  cli.py         the CLI
-trek.py          persistent-process driver: walk/goto/grind/catch/fight/heal legs
-saves/           savestate files (+ .meta sidecar carrying the frame counter)
+  battle.py      low-level battle data, pack operations, and item normalization
+  nav.py         map truth: grids, terrain, scripts, reachability, route graph
+  cli.py         the `crystal` CLI
+trek.py          compatibility facade, scripted legs, and one-shot Trek CLI
+serve.py         long-lived Driver NDJSON command server
+autopilot.py     decision NDJSON loop with journal/checkpoint safety rails
+saves/           savestate files (+ .meta sidecar carrying provenance/frames)
 ```
 
 Gotcha worth knowing: WRAM symbols in banks ≥1 (most game state) must be

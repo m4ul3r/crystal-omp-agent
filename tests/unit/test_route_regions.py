@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from trek import Driver, TrekNav
+from crystalagent.driver import Driver
+from crystalagent.nav import TrekNav
 
 pytestmark = pytest.mark.unit
 

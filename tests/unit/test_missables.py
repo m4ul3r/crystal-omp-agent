@@ -14,9 +14,10 @@ lose an HM).
 """
 import pytest
 
-import trek
+import crystalagent.driver.world as world_driver
+from crystalagent.nav import _file_const
 from crystalagent import missables, paths
-from trek import Driver
+from crystalagent.driver import Driver
 
 pytestmark = pytest.mark.unit
 
@@ -25,7 +26,7 @@ REPO = paths.REPO_ROOT
 
 @pytest.fixture(scope="module")
 def sources():
-    return missables.parse_item_sources(REPO, trek._file_const)
+    return missables.parse_item_sources(REPO, _file_const)
 
 
 @pytest.fixture(scope="module")
@@ -161,7 +162,7 @@ def test_hm_item_constants_map_to_their_bag_tags():
 # -- the live query ----------------------------------------------------
 
 def rows_for(flags, bag=(), kind="key"):
-    srcs = missables.parse_item_sources(REPO, trek._file_const)
+    srcs = missables.parse_item_sources(REPO, _file_const)
     return missables.missing_items(
         srcs, have_event=lambda f: flags.get(f, False), bag=dict(bag),
         repo=REPO, kind=kind)
@@ -236,9 +237,12 @@ class FakeEmu:
 def driver_with_party(party, monkeypatch):
     d = Driver.__new__(Driver)
     d.emu = FakeEmu()
-    d.names = trek.Driver.names if False else _Names()
-    monkeypatch.setattr(trek, "game_state",
-                        lambda emu, names, **kw: {"party": party})
+    d.names = _Names()
+    d.game_state_calls = 0
+    def fake_state(emu, names, **kw):
+        d.game_state_calls += 1
+        return {"party": party}
+    monkeypatch.setattr(world_driver, "game_state", fake_state)
     return d
 
 
@@ -266,6 +270,7 @@ def test_field_moves_reports_the_knower_or_none(monkeypatch):
     assert moves["WATERFALL"] is None
     assert set(moves) == {"CUT", "FLY", "SURF", "STRENGTH", "FLASH",
                           "WHIRLPOOL", "WATERFALL"}
+    assert d.game_state_calls == 1
 
 
 def test_field_moves_prefers_the_nickname(monkeypatch):

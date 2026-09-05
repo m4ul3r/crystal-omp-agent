@@ -7,24 +7,25 @@ find a way either, because cutting is not a move it can make.
 """
 import pytest
 
-import trek
+from crystalagent.driver import Driver
+from crystalagent.nav import _tile_kind
 
 pytestmark = pytest.mark.unit
 
 
 def test_the_collision_byte_reads_as_a_cut_tree():
     """$12/$1a are trees, $15 is a headbutt tree -- all were 'blocked'."""
-    assert trek._tile_kind(0x12) == "cut-tree"
-    assert trek._tile_kind(0x1A) == "cut-tree"
-    assert trek._tile_kind(0x15) == "headbutt-tree"
-    assert trek._tile_kind(0x00) == "floor"
+    assert _tile_kind(0x12) == "cut-tree"
+    assert _tile_kind(0x1A) == "cut-tree"
+    assert _tile_kind(0x15) == "headbutt-tree"
+    assert _tile_kind(0x00) == "floor"
 
 
 def test_cut_is_registered_with_the_badge_the_engine_checks():
-    assert trek.Driver.OW_FIELD_MOVES["CUT"] == ("cut-tree", "HIVE")
+    assert Driver.OW_FIELD_MOVES["CUT"] == ("cut-tree", "HIVE")
 
 
-class Cutter(trek.Driver):
+class Cutter(Driver):
     """cut() only: the field-move press and nav are faked."""
 
     def __init__(self, tiles, here=(8, 26), used=True):

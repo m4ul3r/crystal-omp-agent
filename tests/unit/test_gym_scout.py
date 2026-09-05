@@ -1,14 +1,14 @@
 """gym_scout: parse repo ground truth for gym rosters (parties.asm)."""
 import pytest
 
-import trek
+from crystalagent.driver import Driver
 
 
 pytestmark = pytest.mark.unit
 
 
 def _scout_driver():
-    d = trek.Driver.__new__(trek.Driver)
+    d = Driver.__new__(Driver)
 
     class Nav:
         consts = {"VIOLET_GYM": "VIOLET_GYM",

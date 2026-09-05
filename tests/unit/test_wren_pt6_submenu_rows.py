@@ -9,7 +9,9 @@ and verify after every press (Menus.select_row_text, exposed as
 Driver.select_menu_row)."""
 import pytest
 
-from trek import Driver, _item_row_matches, _norm_item
+from crystalagent.battle import norm_item
+from crystalagent.driver import Driver
+from crystalagent.driver.inventory import _item_row_matches
 from crystalagent.menus import Menus
 
 pytestmark = pytest.mark.unit
@@ -175,7 +177,7 @@ class PackWorld:
 
 
 def _item_match(name):
-    want = _norm_item(name)
+    want = norm_item(name)
     return lambda t: _item_row_matches(t, want)
 
 

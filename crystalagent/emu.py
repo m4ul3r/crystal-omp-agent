@@ -54,13 +54,32 @@ def parse_sequence(text):
     """
     steps = []
     for token in text.replace(",", " ").split():
+        source = token
         repeat = 1
         if "*" in token:
-            token, n = token.rsplit("*", 1)
-            repeat = int(n)
+            token, raw_repeat = token.rsplit("*", 1)
+            try:
+                repeat = int(raw_repeat)
+            except ValueError as e:
+                raise InputError(
+                    f"invalid repeat count {raw_repeat!r} in token {source!r}"
+                ) from e
+            if repeat <= 0:
+                raise InputError(
+                    f"repeat count must be positive in token {source!r}"
+                )
         if ":" in token:
-            token, f = token.rsplit(":", 1)
-            frames = int(f)
+            token, raw_frames = token.rsplit(":", 1)
+            try:
+                frames = int(raw_frames)
+            except ValueError as e:
+                raise InputError(
+                    f"invalid frame count {raw_frames!r} in token {source!r}"
+                ) from e
+            if frames <= 0:
+                raise InputError(
+                    f"frame count must be positive in token {source!r}"
+                )
         else:
             frames = None
         if token in (".", "WAIT"):
@@ -68,9 +87,13 @@ def parse_sequence(text):
             frames = 1 if frames is None else frames
         else:
             try:
-                buttons = frozenset(_BUTTONS[b.upper()] for b in token.split("+"))
+                buttons = frozenset(
+                    _BUTTONS[button.upper()] for button in token.split("+")
+                )
             except KeyError as e:
-                raise InputError(f"unknown button {e.args[0]!r} in token {token!r}")
+                raise InputError(
+                    f"unknown button {e.args[0]!r} in token {token!r}"
+                ) from e
             frames = 8 if frames is None else frames
         steps.extend([(buttons, frames)] * repeat)
     return steps
@@ -91,29 +114,42 @@ class Crystal:
         # PyBoy's frame counter is per-process; carry the cumulative count
         # across invocations in a sidecar next to the state file.
         self._base_frames = 0
-        if state_path is not None:
-            with open(state_path, "rb") as f:
-                self.py.load_state(f)
-            meta = Path(f"{state_path}.meta")
-            stamped = {}
-            if meta.exists():
-                stamped = json.loads(meta.read_text())
-                self._base_frames = stamped.get("frames", 0)
-            missing = [k for k in ("pyboy", "rom_sha256") if k not in stamped]
-            if missing:
-                print(f"note: {meta.name} lacks provenance stamps "
-                      f"({', '.join(missing)}); assuming compatible",
-                      file=sys.stderr)
-            for key, ours in (("pyboy", self._pyboy_version),
-                              ("rom_sha256", self._rom_sha256)):
-                theirs = stamped.get(key)
-                if theirs is not None and theirs != ours:
-                    raise RuntimeError(
-                        f"{state_path}: written by {key}={theirs!r}, running "
-                        f"{key}={ours!r}; refusing to load (savestate format "
-                        "is version-coupled)")
         self._start_count = self.py.frame_count
+        if state_path is not None:
+            self.load(state_path)
         self._observer = None
+
+    def load(self, state_path: str | Path) -> Path:
+        """Load a savestate only after its provenance has been validated."""
+        state_path = Path(state_path)
+        meta = Path(f"{state_path}.meta")
+        stamped = json.loads(meta.read_text()) if meta.exists() else {}
+        missing = [k for k in ("pyboy", "rom_sha256") if k not in stamped]
+        if missing:
+            print(f"note: {meta.name} lacks provenance stamps "
+                  f"({', '.join(missing)}); assuming compatible",
+                  file=sys.stderr)
+        for key, ours in (("pyboy", self._pyboy_version),
+                          ("rom_sha256", self._rom_sha256)):
+            theirs = stamped.get(key)
+            if theirs is not None and theirs != ours:
+                raise RuntimeError(
+                    f"{state_path}: written by {key}={theirs!r}, running "
+                    f"{key}={ours!r}; refusing to load (savestate format "
+                    "is version-coupled)")
+        with open(state_path, "rb") as f:
+            self.py.load_state(f)
+        self._base_frames = stamped.get("frames", 0)
+        self._start_count = self.py.frame_count
+        return state_path
+
+    def release_buttons(self, settle_frames=0):
+        """Release every Game Boy button once, then optionally settle."""
+        for button in ("up", "down", "left", "right",
+                       "a", "b", "start", "select"):
+            self.py.button_release(button)
+        if settle_frames:
+            self.tick(settle_frames)
 
     # -- frame observers ---------------------------------------------------
 

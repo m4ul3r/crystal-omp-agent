@@ -4,7 +4,7 @@ tree cell as walkable, then execute the path with live verification.
 import sys
 from collections import deque
 sys.path.insert(0, ".")
-from trek import Driver, _shared_nav
+from trek import Driver
 from crystalagent.nav import WALKABLE, WARPS, HOPS
 
 GOAL = (1, 5)
@@ -41,7 +41,7 @@ def bfs(grid):
 
 def main():
     d = Driver("saves/omp_speed_run.state")
-    md = _shared_nav()
+    md = d.nav
     grid = md.grid("ILEX_FOREST")
     dist = bfs(grid)
 

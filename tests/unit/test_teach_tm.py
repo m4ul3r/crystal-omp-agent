@@ -9,8 +9,8 @@ TM/HM number->move table in constants/item_constants.asm, the species'
 """
 import pytest
 
-import trek
-from trek import Driver
+import crystalagent.driver.inventory as inventory_driver
+from crystalagent.driver import Driver
 from crystalagent.tactics import parse_species_tmhm, parse_tmhm_moves
 from crystalagent import paths
 
@@ -81,7 +81,7 @@ def patched(monkeypatch):
     """game_state reads the driver's fake party."""
     def fake_state(emu, names, **kw):
         return {"party": list(emu.party)}
-    monkeypatch.setattr(trek, "game_state", fake_state)
+    monkeypatch.setattr(inventory_driver, "game_state", fake_state)
     return fake_state
 
 

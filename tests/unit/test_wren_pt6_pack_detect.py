@@ -10,7 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from trek import Driver, _pack_pocket_banner, _pack_quantity_rows
+from crystalagent.driver import Driver
+from crystalagent.driver.inventory import _pack_pocket_banner, _pack_quantity_rows
 
 pytestmark = pytest.mark.unit
 

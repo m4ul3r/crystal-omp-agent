@@ -103,3 +103,11 @@ def test_parse_sequence_default_press_is_eight_frames():
 def test_parse_sequence_garbage_button_raises():
     with pytest.raises(InputError):
         parse_sequence("X:5")
+
+
+@pytest.mark.parametrize("sequence", [
+    "A:nope", "A*nope", "A:0", "A:-1", "A*0", "A*-1",
+])
+def test_parse_sequence_rejects_bad_or_nonpositive_counts(sequence):
+    with pytest.raises(InputError):
+        parse_sequence(sequence)

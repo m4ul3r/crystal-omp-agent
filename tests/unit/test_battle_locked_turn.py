@@ -35,8 +35,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import trek
-from trek import Driver
+import crystalagent.driver.battle as battle_owner
+from crystalagent.driver import Driver
 from crystalagent.battle import Battle
 from crystalagent.menus import Menus, _cursor_x, _cursor_xs
 
@@ -700,8 +700,8 @@ def test_fight_reports_a_still_live_battle_and_keeps_the_budget(monkeypatch,
                     "max_hp": 146, "moves": [(1, 0)]},
         enemy=lambda: {"name": "ONIX", "level": 32, "hp": 65, "max_hp": 65},
         play=lambda **kw: "timeout")
-    monkeypatch.setattr(trek, "Battle", lambda *a, **k: fake)
-    monkeypatch.setattr(trek, "game_state", lambda *a: {
+    monkeypatch.setattr(battle_owner, "Battle", lambda *a, **k: fake)
+    monkeypatch.setattr(battle_owner, "game_state", lambda *a: {
         "player": {"money": 3000}, "party": []})
 
     with caplog.at_level(logging.WARNING, logger="trek"):

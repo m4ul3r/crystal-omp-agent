@@ -9,8 +9,8 @@ never reach YES and every fresh game stalled in PLAYERS_HOUSE_1F.
 """
 import pytest
 
-import trek
-from trek import Driver
+from crystalagent.driver import Driver
+from crystalagent.driver import Driver
 
 pytestmark = pytest.mark.unit
 
@@ -107,7 +107,7 @@ class _Emu:
         pass
 
 
-class _Driver(trek.Driver):
+class _Driver(Driver):
     """Real Driver methods; only the touched surface is faked."""
 
     def __init__(self, **kw):

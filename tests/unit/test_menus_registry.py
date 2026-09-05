@@ -10,7 +10,7 @@ from crystalagent import registry
 from crystalagent.menus import (
     Menus, _cursor_x, battle_menu_up, naming_keyboard_up, textbox_up,
 )
-from trek import Driver
+from crystalagent.driver import Driver
 
 pytestmark = pytest.mark.unit
 
@@ -92,8 +92,11 @@ class FakeDriver:
         self.in_battle = in_battle
         self.calls = []
 
+    def battle(self):
+        return self.in_battle
+
     def observe(self):
-        return {"ui": {"battle": self.in_battle}}
+        raise AssertionError("registry.check must not build an observation")
 
     def __getattr__(self, name):
         # record calls for any registered verb
@@ -103,13 +106,44 @@ class FakeDriver:
         return fn
 
 
+ACTION_CONTRACT = {
+    "goto": (("x", "y"), ("label", "map_name"), False),
+    "walk": (("path",), ("label",), False),
+    "fight": ((), ("max_frames", "policy", "require_decision"), True),
+    "catch": ((), ("ball", "max_balls", "nickname"), True),
+    "heal": ((), ("tries",), None),
+    "talk_to": (("x", "y"), ("label", "facing"), False),
+    "mart_buy": (("x", "y", "item_name"), ("qty", "label"), False),
+    "use_item": (("item_name",), ("target_slot", "mon", "field"), False),
+    "heal_party": ((), ("items", "max_items_per_mon"), False),
+    "settle": ((), ("quiet", "spacing", "max_frames"), None),
+    "drain_scene": ((), ("max_frames",), None),
+    "catch_up": (
+        (),
+        ("nickname", "ball", "max_balls", "max_encounters", "label"),
+        False,
+    ),
+    "resolve_choice": ((), ("choice",), None),
+    "who_fights": ((), (), True),
+    "gym_scout": (("map",), (), None),
+    "travel": (("dest_map",), ("label",), False),
+    "name_prompt": (("name",), (), False),
+    "step_dir": (("mv",), ("max_frames",), False),
+    "press": (("seq",), (), None),
+    "use_cut": (("tree_x", "tree_y"), ("label", "forget_move"), False),
+    "deposit": (("mon",), (), False),
+    "withdraw": (("mon",), (), False),
+    "box_list": ((), (), False),
+    "use_field_move": (("move",), ("facing",), False),
+    "teach_tm": (("tm", "mon"), ("forget",), False),
+}
+
 REQUIRED_KWARGS = {
     "goto": {"x": 6, "y": 5},
     "walk": {"path": "U*3"},
     "talk_to": {"x": 4, "y": 8},
     "mart_buy": {"x": 4, "y": 8, "item_name": "POTION"},
     "use_item": {"item_name": "POTION"},
-    "route": {"dest_map": "VIOLET_CITY"},
     "travel": {"dest_map": "VIOLET_CITY"},
     "step_dir": {"mv": "D"},
     "press": {"seq": "A:4"},
@@ -128,16 +162,30 @@ REQUIRED_KWARGS = {
 }
 
 
+def test_action_contract_is_exact():
+    assert {
+        name: (act.required, act.optional, act.need_battle)
+        for name, act in registry.ACTIONS.items()
+    } == ACTION_CONTRACT
+
+
+def test_action_expect_change_contract_is_exact():
+    assert {
+        name for name, action in registry.ACTIONS.items()
+        if not action.expect_change
+    } == {
+        "goto", "walk", "heal", "talk_to", "heal_party", "settle",
+        "drain_scene", "resolve_choice", "who_fights", "gym_scout",
+        "travel", "box_list",
+    }
+
+
 @pytest.mark.parametrize("name", sorted(registry.ACTIONS))
-def test_every_action_resolves(name, monkeypatch):
-    import trek
-    monkeypatch.setattr(trek, "heal_pokecenter",
-                        lambda d: "healed", raising=False)
+def test_every_action_resolves(name):
     d = FakeDriver(in_battle=(registry.ACTIONS[name].need_battle is True))
     kwargs = dict(REQUIRED_KWARGS.get(name, {}))
-    out = registry.resolve(d, name, kwargs)
-    if name != "heal":
-        assert d.calls, f"{name} never invoked its driver method"
+    registry.resolve(d, name, kwargs)
+    assert d.calls, f"{name} never invoked its driver method"
 
 
 def test_unknown_action_names_allowed_set():
@@ -160,12 +208,13 @@ def test_unknown_kwarg_rejected():
 
 def test_preconditions_against_live_state():
     d = FakeDriver(in_battle=True)
-    with pytest.raises(ValueError, match="needs no active battle"):
+    with pytest.raises(ValueError) as outside:
         registry.check(d, "goto", {"x": 6, "y": 5})
+    assert str(outside.value) == "goto: needs no active battle (ui.battle=True)"
     d2 = FakeDriver(in_battle=False)
-    with pytest.raises(ValueError, match="needs an active battle"):
+    with pytest.raises(ValueError) as inside:
         registry.check(d2, "fight", {})
-    # and the happy paths pass
+    assert str(inside.value) == "fight: needs an active battle (ui.battle=False)"
     registry.check(FakeDriver(in_battle=True), "fight", {})
     registry.check(FakeDriver(in_battle=False), "goto", {"x": 6, "y": 5})
 
@@ -177,34 +226,55 @@ def test_registry_methods_exist_on_driver():
             assert hasattr(Driver, attr), f"Driver.{attr} missing"
 
 
+CLI_ARITIES = {
+    "walk": (1, 1),
+    "goto": (2, 3),
+    "talk": (2, 2),
+    "route": (1, 1),
+    "travel": (1, 1),
+    "mart": (4, 4),
+    "verify": (1, 10),
+    "states": (0, 0),
+    "train": (1, 1),
+    "gc": (0, 2),
+    "map": (0, 1),
+    "catch": (0, 1),
+    "fight": (0, 0),
+    "flush": (0, 0),
+    "heal": (0, 0),
+    "route29": (0, 0),
+    "to_violet": (0, 0),
+    "errand1": (0, 0),
+    "errand2": (0, 0),
+    "errand3": (0, 0),
+    "errand4": (0, 0),
+    "violet": (0, 0),
+}
+
+
 def test_leg_table_matches_dispatch_chain():
-    """Regression: every dispatched leg must be in the arity spec and vice
-    versa. This exact drift made `trek catch/fight/flush/heal/route29`
-    unreachable while `mart` was a silent no-op."""
+    """The exact public CLI names and positional arities stay stable."""
     tree = ast.parse((REPO / "trek.py").read_text(encoding="utf-8"))
     main = next(n for n in ast.walk(tree)
                 if isinstance(n, ast.FunctionDef) and n.name == "main")
-    spec_keys, dispatched = set(), set()
+    spec = None
+    dispatched = set()
     for node in ast.walk(main):
         if (isinstance(node, (ast.Assign, ast.AnnAssign))
                 and isinstance(getattr(node, "value", None), ast.Dict)):
-            keys = {k.value for k in node.value.keys
-                    if isinstance(k, ast.Constant)}
             targets = (node.targets if isinstance(node, ast.Assign)
                        else [node.target])
             if any(isinstance(t, ast.Name) and t.id == "spec"
                    for t in targets):
-                spec_keys = keys
+                spec = ast.literal_eval(node.value)
         if (isinstance(node, ast.Compare)
                 and isinstance(node.left, ast.Name)
                 and node.left.id == "leg"
                 and len(node.ops) == 1
                 and isinstance(node.ops[0], ast.Eq)):
-            for cmp in node.comparators:
-                if isinstance(cmp, ast.Constant) and isinstance(
-                        cmp.value, str):
-                    dispatched.add(cmp.value)
-    assert spec_keys, "arity spec not found in trek.main()"
-    assert spec_keys == dispatched, (
-        f"drift: spec-only={sorted(spec_keys - dispatched)}, "
-        f"dispatch-only={sorted(dispatched - spec_keys)}")
+            dispatched.update(
+                cmp.value for cmp in node.comparators
+                if isinstance(cmp, ast.Constant) and isinstance(cmp.value, str)
+            )
+    assert spec == CLI_ARITIES
+    assert set(spec) == dispatched

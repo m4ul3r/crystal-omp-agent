@@ -4,7 +4,8 @@ PC warp exists it raises HealError, and registry resolve('heal') turns that
 into a structured {'ok': False, ...} instead of a bare RuntimeError."""
 import pytest
 
-import trek
+import crystalagent.driver.inventory as inventory_driver
+from crystalagent.driver import HealError, TravelError
 from crystalagent import registry
 
 pytestmark = pytest.mark.unit
@@ -87,6 +88,9 @@ class FakeWorldDriver:
     def party(self):
         hp = 24 if self.healed else 7
         return [{"species": "TOTODILE", "hp": hp, "max_hp": 24}]
+    def heal(self, tries=2):
+        return inventory_driver.heal_pokecenter(self, tries=tries)
+
 
 
 FAKE_GRAPH = {"edges": [
@@ -101,9 +105,9 @@ FAKE_GRAPH = {"edges": [
 
 
 def world(monkeypatch, d):
-    monkeypatch.setattr(trek, "game_state",
+    monkeypatch.setattr(inventory_driver, "game_state",
                         lambda emu, names: {"party": d.party()})
-    monkeypatch.setattr(trek, "mapgraph", lambda: FAKE_GRAPH)
+    monkeypatch.setattr(inventory_driver, "mapgraph", lambda: FAKE_GRAPH)
 
 
 # -- inside a Pokécenter: behavior unchanged ---------------------------------
@@ -111,7 +115,7 @@ def world(monkeypatch, d):
 def test_heal_inside_pokecenter_never_travels(monkeypatch):
     d = FakeWorldDriver("VIOLET_POKECENTER_1F")
     world(monkeypatch, d)
-    assert trek.heal_pokecenter(d) is None      # return shape unchanged
+    assert inventory_driver.heal_pokecenter(d) is None      # return shape unchanged
     assert d.travels == []
     assert d.healed
     assert d.steps and d.steps[-1] == "D"       # step-off preserved
@@ -122,7 +126,7 @@ def test_heal_inside_pokecenter_never_travels(monkeypatch):
 def test_heal_from_town_enters_pokecenter_then_heals(monkeypatch):
     d = FakeWorldDriver("VIOLET_CITY")
     world(monkeypatch, d)
-    assert trek.heal_pokecenter(d) is None
+    assert inventory_driver.heal_pokecenter(d) is None
     assert d.travels == ["VIOLET_POKECENTER_1F"]  # PC, not the mart
     assert d.healed
     assert "POKECENTER" in d.map_name()
@@ -131,8 +135,8 @@ def test_heal_from_town_enters_pokecenter_then_heals(monkeypatch):
 def test_heal_detour_bounded_by_tries(monkeypatch):
     d = FakeWorldDriver("VIOLET_CITY", travel_lands=False)
     world(monkeypatch, d)
-    with pytest.raises(trek.HealError) as ei:
-        trek.heal_pokecenter(d, tries=3)
+    with pytest.raises(HealError) as ei:
+        inventory_driver.heal_pokecenter(d, tries=3)
     assert len(d.travels) == 3                   # bounded, not forever
     assert ei.value.map_name == "VIOLET_CITY"
     assert d.gotos == 0                          # never talked to a nurse
@@ -147,11 +151,11 @@ def test_heal_detour_survives_travel_exception(monkeypatch):
     def flaky(dest_map, label=""):
         calls.append(dest_map)
         if len(calls) == 1:
-            raise trek.TravelError("glide landed weird")
+            raise TravelError("glide landed weird")
         return real_travel(dest_map, label)
 
     d.travel = flaky
-    assert trek.heal_pokecenter(d, tries=2) is None
+    assert inventory_driver.heal_pokecenter(d, tries=2) is None
     assert len(calls) == 2 and d.healed
 
 
@@ -160,21 +164,21 @@ def test_heal_detour_survives_travel_exception(monkeypatch):
 def test_heal_from_dungeon_raises_healerror_with_map(monkeypatch):
     d = FakeWorldDriver("SPROUT_TOWER_2F")
     world(monkeypatch, d)
-    with pytest.raises(trek.HealError, match="SPROUT_TOWER_2F"):
-        trek.heal_pokecenter(d)
+    with pytest.raises(HealError, match="SPROUT_TOWER_2F"):
+        inventory_driver.heal_pokecenter(d)
     assert d.travels == [] and d.gotos == 0
 
 
 def test_unroutable_pc_edge_does_not_count(monkeypatch):
     d = FakeWorldDriver("SPROUT_TOWER_1F")
     world(monkeypatch, d)
-    with pytest.raises(trek.HealError):
-        trek.heal_pokecenter(d)
+    with pytest.raises(HealError):
+        inventory_driver.heal_pokecenter(d)
     assert d.travels == []
 
 
 def test_healerror_is_still_a_runtimeerror():
-    assert issubclass(trek.HealError, RuntimeError)
+    assert issubclass(HealError, RuntimeError)
 
 
 # -- registry resolve('heal') path --------------------------------------------

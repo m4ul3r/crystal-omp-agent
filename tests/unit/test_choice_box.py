@@ -7,7 +7,7 @@ leak in as options."""
 import pytest
 
 from crystalagent.menus import CURSORS
-from trek import Driver
+from crystalagent.driver import Driver
 
 pytestmark = pytest.mark.unit
 

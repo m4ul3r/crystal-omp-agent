@@ -8,7 +8,8 @@ at 0/59 while every caller believed it was healed.
 """
 import pytest
 
-import trek
+import crystalagent.driver.battle as battle_owner
+from crystalagent.driver import Driver
 
 pytestmark = pytest.mark.unit
 
@@ -20,7 +21,7 @@ CHOICE = (BLANK[:8] + ["┌────┐", "│▶YES│", "│ NO │", "└�
           + ["", "Use next PKMN?", "", ""])
 
 
-class Wiped(trek.Driver):
+class Wiped(Driver):
     """_settle_whiteout only; the party revives after `pages` A presses."""
 
     def __init__(self, pages=2, rows=TEXT, revives=True):
@@ -52,7 +53,7 @@ class Wiped(trek.Driver):
 
 @pytest.fixture(autouse=True)
 def _party_state(monkeypatch):
-    monkeypatch.setattr(trek, "game_state",
+    monkeypatch.setattr(battle_owner, "game_state",
                         lambda emu, names: {"party": emu.owner._party()})
 
 

@@ -29,7 +29,8 @@ from crystalagent.tactics import (acc_percent, effective_accuracy,
                                  parse_badge_boosts, parse_effects,
                                  parse_species_tmhm, parse_species_types,
                                  parse_tmhm_moves)
-import trek
+from crystalagent.driver.inventory import _load_heal_table
+from crystalagent.driver.world import _load_move_base_pps
 
 pytestmark = pytest.mark.unit
 
@@ -145,7 +146,7 @@ def test_move_power_and_type_come_from_the_rom(bdata, names):
 
 def test_base_pps_come_from_the_rom(sym, names):
     """data/moves/moves.asm: TACKLE 35 PP, HYPER BEAM 5 PP."""
-    pps = trek._load_move_base_pps(paths.ROM, sym)
+    pps = _load_move_base_pps(paths.ROM, sym)
     ids = {n: i for i, n in names.moves.items()}
     assert pps[ids["TACKLE"] - 1] == 35
     assert pps[ids["HYPER BEAM"] - 1] == 5
@@ -164,7 +165,7 @@ def test_heal_table_prices_and_cure_masks_come_from_the_rom(sym, names):
     """The cheapest cure for paralysis must be PARLYZ HEAL (¥200), not
     FULL HEAL (¥600) or FULL RESTORE (¥3000) -- prices and cure masks are
     the ROM's own tables."""
-    table = trek._load_heal_table(paths.ROM, sym, names)
+    table = _load_heal_table(paths.ROM, sym, names)
     par = 1 << parse_const_defs(BATTLE_CONSTANTS)["PAR"]
     assert table["PARLYZHEAL"]["cures"] == par
     assert table["PARLYZHEAL"]["price"] == 200

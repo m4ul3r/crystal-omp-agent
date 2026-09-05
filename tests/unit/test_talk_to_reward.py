@@ -11,7 +11,8 @@ Two live failures from the ZEPHYR run:
 """
 import pytest
 
-import trek
+import crystalagent.driver.inventory as inventory_driver
+from crystalagent.driver import Driver
 
 pytestmark = pytest.mark.unit
 
@@ -33,7 +34,7 @@ class Nav:
         return ["step"] * (abs(a[0] - b[0]) + abs(a[1] - b[1]))
 
 
-class Approacher(trek.Driver):
+class Approacher(Driver):
     """Only _approach_cell runs."""
 
     def __init__(self, here, npcs, walkable):
@@ -76,7 +77,7 @@ def test_unreachable_sides_are_skipped():
     assert d._approach_cell(3, 10) == (2, 10)
 
 
-class Talker(trek.Driver):
+class Talker(Driver):
     """talk_to with every emu-touching primitive faked. The battle starts
     when the A press lands, like a sight-line trainer."""
 
@@ -188,7 +189,7 @@ def test_driver_exposes_heal_as_a_method(monkeypatch):
     """The capability table documents `d.heal()`; the only implementation
     was the module function, so a live gym run hit AttributeError."""
     seen = {}
-    monkeypatch.setattr(trek, "heal_pokecenter",
+    monkeypatch.setattr(inventory_driver, "heal_pokecenter",
                         lambda d, tries=2: seen.setdefault("tries", tries))
     d = Talker(battles=0)
     assert d.heal() == 2

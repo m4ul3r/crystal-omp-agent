@@ -11,7 +11,7 @@ import sys
 import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
-from trek import Driver  # noqa: E402
+from crystalagent.driver import Driver  # noqa: E402
 
 pytestmark = pytest.mark.unit
 

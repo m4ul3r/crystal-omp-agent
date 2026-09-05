@@ -15,7 +15,9 @@ from pathlib import Path
 
 import pytest
 
-import trek
+import crystalagent.driver.inventory as inventory_driver
+from crystalagent.driver import Driver
+from crystalagent.nav import script_guards
 from crystalagent import missables, paths
 
 pytestmark = pytest.mark.unit
@@ -121,9 +123,9 @@ class _NurseEmu:
 
 def test_heal_talks_to_the_nurse_the_map_declares(monkeypatch):
     d = NurseDriver(cell=(3, 7))
-    monkeypatch.setattr(trek, "game_state",
+    monkeypatch.setattr(inventory_driver, "game_state",
                         lambda emu, names: {"party": d.party()})
-    trek.heal_pokecenter(d)
+    inventory_driver.heal_pokecenter(d)
     assert d.talked == [(3, 7)]
     assert (3, 3) not in d.gotos          # never routes to the Johto counter
 
@@ -131,18 +133,18 @@ def test_heal_talks_to_the_nurse_the_map_declares(monkeypatch):
 def test_heal_falls_back_to_the_old_counter_when_no_nurse_is_declared(
         monkeypatch):
     d = NurseDriver(cell=None)
-    monkeypatch.setattr(trek, "game_state",
+    monkeypatch.setattr(inventory_driver, "game_state",
                         lambda emu, names: {"party": d.party()})
     d.healed = True                       # the (3,3) path heals in this fake
-    trek.heal_pokecenter(d)
+    inventory_driver.heal_pokecenter(d)
     assert d.gotos and d.gotos[0] == (3, 3)
 
 
 def test_heal_steps_away_from_whatever_it_faces(monkeypatch):
     d = NurseDriver()
-    monkeypatch.setattr(trek, "game_state",
+    monkeypatch.setattr(inventory_driver, "game_state",
                         lambda emu, names: {"party": d.party()})
-    trek.heal_pokecenter(d)
+    inventory_driver.heal_pokecenter(d)
     assert d.steps[-1] == "D"             # faced UP -> steps DOWN
     assert d.steps.count("D") == 1
 
@@ -150,7 +152,7 @@ def test_heal_steps_away_from_whatever_it_faces(monkeypatch):
 # -- scene blocks expire when the script's own guards say so ----------------
 
 def test_script_guards_reads_the_rival_guard_chain():
-    guards = trek.script_guards(paths.REPO_ROOT, "IndigoPlateauPokecenter1F",
+    guards = script_guards(paths.REPO_ROOT, "IndigoPlateauPokecenter1F",
                                 "PlateauRivalBattle1")
     assert guards[:2] == [
         ("checkevent", "EVENT_BEAT_RIVAL_IN_MT_MOON", "iffalse",
@@ -162,7 +164,7 @@ def test_script_guards_reads_the_rival_guard_chain():
 def test_script_guards_stops_at_the_first_non_guard():
     """readvar/ifequal weekday tests are not check/jump pairs, so the chain
     ends there -- anything past it is not provably guard-only."""
-    guards = trek.script_guards(paths.REPO_ROOT, "IndigoPlateauPokecenter1F",
+    guards = script_guards(paths.REPO_ROOT, "IndigoPlateauPokecenter1F",
                                 "PlateauRivalBattle1")
     assert len(guards) == 2
     assert all(g[0] in ("checkevent", "checkflag") for g in guards)
@@ -171,12 +173,12 @@ def test_script_guards_stops_at_the_first_non_guard():
 def test_a_guardless_scene_reports_no_guards():
     """Route 32's push-back cutscene -- the case nav.blocked exists for --
     has no leading guard chain, so nothing can call it spent."""
-    assert trek.script_guards(paths.REPO_ROOT, "Route32",
+    assert script_guards(paths.REPO_ROOT, "Route32",
                               "Route32CooltrainerMStopsYouScene") == []
 
 
 def guard_driver(events=(), flags=()):
-    d = trek.Driver.__new__(trek.Driver)
+    d = Driver.__new__(Driver)
     d.nav = _FakeNav()
     d._event_flag = lambda name: name in events
     d.engine_flag = lambda name: name in flags
@@ -218,7 +220,7 @@ def test_a_guardless_disruptive_scene_is_never_called_spent():
 
 
 def test_unreadable_flags_assume_the_scene_is_armed():
-    d = trek.Driver.__new__(trek.Driver)
+    d = Driver.__new__(Driver)
     d.nav = _FakeNav()
 
     def boom(name):
@@ -235,7 +237,7 @@ def test_heal_answers_a_residual_nurse_prompt(monkeypatch):
     travel reported "blocked by choice menu" from inside the Pokécenter
     and the gym leg never started."""
     d = NurseDriver()
-    monkeypatch.setattr(trek, "game_state",
+    monkeypatch.setattr(inventory_driver, "game_state",
                         lambda emu, names: {"party": d.party()})
     rows = ["", "", "┌────┐", "│▶YES│", "│ NO │", "└────┘"]
     d._choice_box = lambda r: {"cursor": 3, "options": [(3, "YES"), (4, "NO")],
@@ -250,5 +252,5 @@ def test_heal_answers_a_residual_nurse_prompt(monkeypatch):
 
     d.resolve_choice = resolve
     d.close_menus = lambda: answered.append("close_menus")
-    trek.heal_pokecenter(d)
+    inventory_driver.heal_pokecenter(d)
     assert answered == ["NO"], answered

@@ -11,8 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from crystalagent.battle import (
-    Battle, bag_item_index, bag_quantity, norm_item, _norm_item)
+from crystalagent.battle import Battle, bag_item_index, bag_quantity, norm_item
 
 pytestmark = pytest.mark.unit
 
@@ -284,10 +283,7 @@ def test_normalizer_resolves_all_spellings(spelling):
     assert bag_quantity(emu, names, spelling) == 3
 
 
-def test_normalizer_shared_export_for_trek():
-    """trek.py's legacy `_norm_item` import stays valid and IS the shared
-    normalizer; POKé glyph spellings still collapse."""
-    assert _norm_item is norm_item
+def test_normalizer_handles_poke_glyph_spellings():
     assert norm_item("# BALL") == norm_item("POK\u00e9 BALL") == "POKEBALL"
 
 

@@ -33,24 +33,36 @@ a human sentence (`ValueError: fight: needs an active battle
 (ui.battle=False)`). Rejection is information, not an obstacle — fix the
 decision or the precondition, don't bypass.
 
-| Action | Required kwargs | Optional | Precondition |
+| Action | Required kwargs | Optional kwargs | Precondition |
 |---|---|---|---|
 | `goto` | x, y | label, map_name | not in battle |
 | `walk` | path | label | not in battle |
-| `fight` | — | max_frames, policy | **in battle** |
+| `fight` | — | max_frames, policy, require_decision | **in battle** |
 | `catch` | — | ball, max_balls, nickname | **in battle** |
-| `heal` | — | — | inside a Pokécenter |
+| `heal` | — | tries | — |
 | `talk_to` | x, y | label, facing | not in battle |
 | `mart_buy` | x, y, item_name | qty, label | not in battle |
-| `use_item` | item_name | target_slot, field | not in battle |
+| `use_item` | item_name | target_slot, mon, field | not in battle |
+| `heal_party` | — | items, max_items_per_mon | not in battle |
 | `settle` | — | quiet, spacing, max_frames | — |
-| `route` | dest_map | max_cost | not in battle |
+| `drain_scene` | — | max_frames | — |
+| `catch_up` | — | nickname, ball, max_balls, max_encounters, label | not in battle |
+| `resolve_choice` | — | choice | — |
+| `who_fights` | — | — | **in battle** |
+| `gym_scout` | map | — | — |
 | `travel` | dest_map | label | not in battle |
+| `name_prompt` | name | — | not in battle |
 | `step_dir` | mv | max_frames | not in battle |
 | `press` | seq | — | — |
 | `use_cut` | tree_x, tree_y | label, forget_move | not in battle |
-| `catch_up` | — | nickname, ball, max_balls, max_encounters, label | on a map with grass; needs balls |
-| `drain_scene` | — | max_frames | scene owns input (wScriptMode/boxes) |
+| `deposit` | mon | — | not in battle |
+| `withdraw` | mon | — | not in battle |
+| `box_list` | — | — | not in battle |
+| `use_field_move` | move | facing | not in battle |
+| `teach_tm` | tm, mon | forget | not in battle |
+
+`d.route(dest_map)` remains a warm-Driver planning method; it is not a
+registry action and cannot be sent through serve/autopilot `run`.
 
 Call it from anywhere:
 
@@ -142,16 +154,35 @@ d.last_goto_reason        # None on success; see failure table below
 ## Autopilot / serve protocols (quick reference)
 
 Autopilot stdin commands: `decision`, `observe`, `screen`, `memory`,
-`save`, `quit`. Cycle replies carry `obs`, `ok`, `error`, `why`,
-`mem_tail` (recent rolling-memory lines). `{"cmd":"memory","args":
-{"tail":N}}` returns `{frontier, tail}` — the long-horizon view without
-reading files. Journal lines are JSONL in `journal/<session>.jsonl` with
-wall-clock `t`; cycle records include `used` frame spend.
+`save`, `quit`. Cycle replies carry `obs`, `ok`, optional `error`/`detail`,
+and `mem_tail` (recent rolling-memory lines). `why` belongs to journal cycle
+records, not replies. `{"cmd":"memory","args":{"tail":N}}` returns
+`{frontier, tail}` — the long-horizon view without reading files. Journal
+lines are JSONL in `journal/<session>.jsonl` with wall-clock `t`; cycle
+records include `used` frame spend.
 
 Serve commands: `observe`, `status`, `save`, `load`, `run`
 (registry-resolved), `quit`.
 
 Malformed requests get structured `ok:false`, never a dead pipe.
+
+## Changing the harness
+
+| Owner | Change here |
+|---|---|
+| `crystalagent/driver/core.py` | construction, lifecycle, save/reload, shared diagnostics |
+| `crystalagent/driver/world.py` | observation, map/state queries, objects, missables |
+| `crystalagent/driver/ui.py` | input, menus, text, choices, naming |
+| `crystalagent/driver/battle.py` | fight/catch/learn/train orchestration and tactics facade |
+| `crystalagent/driver/inventory.py` | items, TM/HM, PC, field moves, marts, healing |
+| `crystalagent/driver/navigation.py` | movement, goto/route/travel, warps, NPC approach |
+| `crystalagent/battle.py` | low-level battle data, pack operations, item normalization |
+| `crystalagent/nav.py` | map parsing, terrain, scripts, reachability, route graph |
+| `crystalagent/state.py` | symbol-derived WRAM/SRAM decoding |
+| `crystalagent/registry.py` | serve/autopilot action names, kwargs, preconditions |
+
+`crystalagent/driver/__init__.py` is the sole concrete `Driver` facade. Add a
+method to exactly one ownership mixin; do not add a forwarding copy elsewhere.
 
 ## Hygiene
 

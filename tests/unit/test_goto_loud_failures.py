@@ -7,8 +7,8 @@ from collections import deque
 
 import pytest
 
-import trek
-from trek import Driver, TravelError
+from crystalagent.nav import STEP
+from crystalagent.driver import Driver, TravelError
 
 pytestmark = pytest.mark.unit
 
@@ -68,7 +68,7 @@ def goto_driver(step_results=()):
         r = script.popleft() if script else "moved"
         if r == "moved":
             x, y = world["cell"]
-            dx, dy = trek.STEP[mv]
+            dx, dy = STEP[mv]
             world["cell"] = (x + dx, y + dy)
         return r
 

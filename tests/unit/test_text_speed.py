@@ -1,7 +1,7 @@
 """wOptions text-delay bit packing for Driver.set_text_speed."""
 import pytest
 
-from trek import Driver
+from crystalagent.driver import Driver
 
 pytestmark = pytest.mark.unit
 
