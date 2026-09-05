@@ -57,7 +57,15 @@ class NamingScreen:
         self.emu = emu
         self.state = state
         self.nsd = cstruct.layout("NamingScreenData", "naming_screen.h")
-        self._sprite_size = emu.sym.size("gSprites") // MAX_SPRITES
+        # gSprites holds MAX_SPRITES + 1 entries (pret/include/sprite.h), so
+        # dividing by MAX_SPRITES gives 4420 // 64 = 69 and every sprite after
+        # the first is read at the wrong offset -- which is exactly what
+        # `cursor()` does for any cursorSpriteId > 0. The correct stride is
+        # 4420 // 65 = 68, and `pokeagent/battle.py` already derives it that
+        # way. Found by a sibling agent reading this while driving the Name
+        # Rater's keyboard; it did not bite that run only because the cursor
+        # sprite happened to be id 0.
+        self._sprite_size = emu.sym.size("gSprites") // (MAX_SPRITES + 1)
         self._layout = None
 
     # ---- reading the screen ------------------------------------------
@@ -257,16 +265,41 @@ class NamingScreen:
         return typed
 
     def accept(self) -> str:
-        """Confirm whatever is in the buffer and return it.
+        """Confirm whatever is in the buffer, WITHOUT typing into it.
 
-        The escape hatch for a keyboard we could not drive: START jumps the
-        cursor to OK and A takes it (InputState_Enabled). An empty buffer is
-        not an error -- the game fills it with the species name, which is
-        exactly what declining the nickname prompt would have produced.
+        START moves the cursor to OK (`naming_screen.c:681-685` calls
+        `MoveCursorToOKButton`) and A takes it. The old one-shot
+        `START:4 .:20 A:4 .:30` was wrong in a way that produced real damage:
+        the first press after a menu is drawn gets swallowed, and when START
+        is the one lost, the A that follows lands on the KEYBOARD GRID and
+        types the character under it -- which starts on 'A'. That is where
+        every mon named "A" in this save file came from, and the log said
+        "accepted the default name 'A'" while doing it.
+
+        So this settles first, and then verifies by outcome: if the keyboard
+        did not close, the buffer is compared to what it was, and a character
+        we accidentally typed is removed with B (KBEVENT_PRESSED_B is
+        backspace) before trying again.
+
+        An empty buffer is not an error. For a catch the engine has already
+        loaded the species name as the destination, and `sub_80B74B0`
+        (`naming_screen.c:1577-1589`) only copies the buffer over it when the
+        buffer holds a real character -- so confirming empty gives exactly the
+        species name, which is what declining the prompt would have produced.
         """
-        text = self.text()
-        self.emu.run_sequence("START:4 .:20 A:4 .:30")
-        return text
+        for _ in range(8):
+            before = self.text()
+            # SETTLE FIRST: the frame a menu is drawn, its input loop is not
+            # running yet, and the press is discarded.
+            self.emu.run_sequence(".:24")
+            self.emu.run_sequence("START:6 .:30")
+            self.emu.run_sequence("A:6 .:30")
+            if not self.is_open():
+                return before
+            if self.text() != before:
+                # START was swallowed; the A typed. Take it back out.
+                self.emu.run_sequence("B:6 .:24")
+        return self.text()
 
 
 def type_name(emu, state, name):

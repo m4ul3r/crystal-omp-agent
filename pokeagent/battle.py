@@ -1189,9 +1189,12 @@ class BattleSession:
             )
         if name is None:
             balls = self.state.bag().get("poke_balls") or {}
-            name = self.tactics.pick_ball(balls)
-            if name is None:
-                return self._fail("no automatically usable balls in the bag")
+            if not balls:
+                return self._fail("no balls in the bag")
+            name = min(
+                balls,
+                key=lambda n: self.names.item_data(self._item_id(n)).price,
+            )
         item_id = self._item_id(name)
         if not item_id:
             return self._fail(f"{name!r} is not an item this ROM knows about")
@@ -1795,10 +1798,9 @@ class BattleSession:
                 self.emu.run_sequence(jitter.sequence("A:2 .:10"))
                 continue
 
-            safari = self.safari() or self.at_safari_menu()
-            analysis = None if safari else self.tactics.outlook()
-            if not safari and analysis is None:
-                # Ordinary gBattleMons is not ready; do not invent a matchup.
+            analysis = self.tactics.outlook()
+            if analysis is None:
+                # gBattleMons is not ready; do not invent a matchup.
                 self.emu.tick(8)
                 continue
 
@@ -1810,10 +1812,10 @@ class BattleSession:
                 action=action,
                 detail="",
                 why=why,
-                my_mon=frame["me"]["nickname"] or frame["me"]["species"],
-                their_mon=frame["enemy"]["species"],
-                my_hp_before=frame["me"]["hp"],
-                their_hp_before=frame["enemy"]["hp"],
+                my_mon=analysis["me"].nickname or analysis["me"].name,
+                their_mon=analysis["enemy"].name,
+                my_hp_before=analysis["me"].hp,
+                their_hp_before=analysis["enemy"].hp,
             )
             self.last_action_detail = ""
             # Read BEFORE the action: a thrown ball is spent whether or not
@@ -1826,11 +1828,7 @@ class BattleSession:
                 turn.note = self.last_reason or "action failed"
                 self._back_out()
             self._settle()
-            if safari:
-                # The player block is intentionally blank, even after a catch.
-                after_me, after_enemy = 0, self.battler(1).hp
-            else:
-                after_me, after_enemy = self._vitals()
+            after_me, after_enemy = self._vitals()
             turn.my_hp_after = after_me
             turn.their_hp_after = after_enemy
             turn.note = (turn.note + "; " if turn.note else "") + f"chosen by {source}"
@@ -1956,12 +1954,7 @@ class BattleSession:
             )
         else:
             reason_tail = ""
-        if analysis is None:
-            # Safari has no player BattleMon and therefore no combat outlook.
-            # A catch policy owns BALL/GO NEAR; without one, leave the encounter.
-            action, why = "flee", "no Safari policy action; leaving the encounter"
-        else:
-            action, why = self.tactics.recommend(analysis)
+        action, why = self.tactics.recommend(analysis)
         if repr(action) in getattr(self, "_dead_actions", ()):
             alt = self._live_alternative(analysis)
             log.warning(
@@ -1983,7 +1976,7 @@ class BattleSession:
         return isinstance(action, tuple) and len(action) > 1 and action[0] == "ball"
 
     def _ball_count(self) -> int:
-        """Total throwable balls in the bag, or the Safari encounter's pool.
+        """Total balls in the bag.
 
         The sum is enough: which ball was thrown does not matter, only that
         one left the bag. Never raises -- a failed bag read must not decide a
@@ -1991,8 +1984,6 @@ class BattleSession:
         so errs toward letting the catch continue.
         """
         try:
-            if self.safari():
-                return int(self.state.safari_balls())
             return sum((self.state.bag().get("poke_balls") or {}).values())
         except Exception:  # noqa: BLE001 - a diagnostic must not end a battle
             return -1

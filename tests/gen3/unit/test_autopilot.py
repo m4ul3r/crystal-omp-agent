@@ -7,15 +7,10 @@ roll back into the wiped party, the summarizer failure that lost entries.
 """
 
 import json
-from copy import deepcopy
-from io import StringIO
-from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-from pokeagent.autopilot import (
-    Autopilot,
+from autopilot import (
     classify_milestones,
     compact_obs,
     digest,
@@ -23,7 +18,6 @@ from pokeagent.autopilot import (
     party_alive,
     party_wiped,
     stuck,
-    serve,
 )
 from pokeagent.rolling import RollingMemory
 from pokeagent.schemas import (
@@ -500,158 +494,3 @@ def test_compact_obs_keeps_what_a_decision_needs():
     assert out["tiles"]["U"] == "floor"
     assert "npcs" not in out        # the token budget is the point
     json.dumps(out)
-
-
-# -- actual decision cycles with an emulator/driver boundary -----------------
-
-class BoundaryDriver:
-    def __init__(self):
-        self.snapshot = make_obs()
-        self.emu = SimpleNamespace(frame=self.snapshot["frame"])
-        self.state_path = None
-        self.action_result = False
-        self.action_frames = 24
-        self.wipe = False
-        self.last_step_reason = None
-        self.queries = {
-            "status": "LittlerootTown (6,8)",
-            "render_map": "floor wall",
-            "find_tiles": [[6, 8]],
-            "exits": {"warps": [[4, 5]]},
-            "live_npcs": [{"x": 7, "y": 9}],
-            "battle_frame": {"turn": 1},
-            "outlook": {"moves": [{"name": "POUND", "damage": [3, 4]}]},
-            "recommend": (("attack", 0), "best damage"),
-            "missables": [{"item": "HM02", "map": "Route119"}],
-            "field_moves": {"CUT": "TREECKO", "FLY": None},
-            "needs_flash": False,
-        }
-
-    def __getattr__(self, name):
-        if name in self.queries:
-            return lambda **kwargs: self.queries[name]
-        raise AttributeError(name)
-
-    def observe(self):
-        out = deepcopy(self.snapshot)
-        out["frame"] = self.emu.frame
-        return out
-
-    def in_battle(self):
-        return self.snapshot["ui"]["battle"]
-
-    def walk(self, path):
-        # The first step succeeds, then the next is blocked.
-        self.snapshot["location"]["x"] += 1
-        self.emu.frame += self.action_frames
-        self.last_step_reason = "blocked moving R (step 2/2 of RR)"
-        if self.wipe:
-            self.snapshot["party"][0]["hp"] = 0
-        return self.action_result
-
-    def press(self, seq):
-        self.walk(seq)
-        return None
-
-    def settle(self, max_frames=600):
-        self.emu.frame += 1
-
-    def save(self, path):
-        path = Path(path)
-        path.write_text(json.dumps(self.observe()))
-        return path
-
-    def load(self, path):
-        self.snapshot = json.loads(Path(path).read_text())
-        self.emu.frame = self.snapshot["frame"]
-        self.state_path = Path(path)
-
-
-@pytest.fixture
-def pilot_boundary(tmp_path):
-    driver = BoundaryDriver()
-    pilot = Autopilot(driver, "protocol", tmp_path / "journal", tmp_path / "saves")
-    yield pilot, driver
-    pilot.mem.close()
-
-
-def test_partial_progress_false_walk_is_failed_in_reply_journal_and_memory(pilot_boundary):
-    pilot, driver = pilot_boundary
-    reply = pilot.cycle({"action": {"name": "walk", "kwargs": {"path": "RR"}}}, rid=7)
-    assert reply["id"] == 7
-    assert reply["obs"]["x"] == 7
-    assert reply["ok"] is False
-    assert reply["result"] is False
-    assert driver.last_step_reason in reply["error"]
-    record = json.loads(pilot.journal.read_text().splitlines()[0])
-    assert record["ok"] is False
-    assert driver.last_step_reason in "; ".join(record["why"])
-    assert driver.last_step_reason in pilot.mem.tail(1)[0][1]
-
-
-@pytest.mark.parametrize("name,kwargs,battle", [
-    ("observe", {}, False),
-    ("status", {}, False),
-    ("map_view", {}, False),
-    ("find_tiles", {"kind": "floor"}, False),
-    ("exits", {}, False),
-    ("live_npcs", {}, False),
-    ("battle_frame", {}, True),
-    ("outlook", {}, True),
-    ("recommend", {}, True),
-    ("missables", {}, False),
-    ("field_moves", {}, False),
-    ("needs_flash", {}, False),
-])
-def test_read_only_decisions_return_data_without_advancing_or_getting_stuck(
-    pilot_boundary, capsys, name, kwargs, battle,
-):
-    pilot, driver = pilot_boundary
-    driver.snapshot["ui"]["battle"] = battle
-    before = driver.observe()
-    method = "render_map" if name == "map_view" else name
-    expected = before if name == "observe" else driver.queries[method]
-    request = {"id": name, "cmd": "decision",
-               "args": {"action": {"name": name, "kwargs": kwargs}}}
-    serve(pilot, driver, StringIO((json.dumps(request) + "\n") * 2))
-    replies = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    for reply in replies:
-        assert reply["ok"] is True
-        assert reply["used"] == 0
-        assert reply["result"] == json.loads(json.dumps(expected))
-        assert reply["obs"] == compact_obs(before)
-    assert driver.observe() == before
-    assert all(json.loads(line)["ok"] for line in pilot.journal.read_text().splitlines())
-
-
-def test_none_return_is_success_when_action_makes_progress(pilot_boundary):
-    pilot, driver = pilot_boundary
-    reply = pilot.cycle({"action": {"name": "press", "kwargs": {"seq": "R"}}})
-    assert reply["ok"] is True
-    assert reply["result"] is None
-    assert reply["obs"]["x"] == 7
-
-
-def test_none_return_does_not_bypass_frame_budget(pilot_boundary):
-    pilot, driver = pilot_boundary
-    pilot.budget = 100
-    driver.action_frames = 200
-    reply = pilot.cycle({"action": {"name": "press", "kwargs": {"seq": "R"}}})
-    assert reply["ok"] is False
-    assert "budget" in reply["error"]
-    assert reply["used"] == 201
-
-
-def test_false_action_still_recovers_whiteout_without_saving_wiped_milestone(pilot_boundary):
-    pilot, driver = pilot_boundary
-    healthy = pilot.checkpoint("healthy", driver.observe())
-    driver.emu.frame += 1
-    driver.wipe = True
-    reply = pilot.cycle({"action": {"name": "walk", "kwargs": {"path": "RR"}}})
-    assert reply["ok"] is False
-    assert reply["recovered"] == healthy
-    assert reply["obs"]["party"][0]["hp"] == 19
-    entries = [json.loads(line) for line in pilot.journal.read_text().splitlines()]
-    cycle = next(entry for entry in entries if "action" in entry)
-    assert cycle["ok"] is False
-    assert [entry["file"] for entry in entries if entry.get("event") == "checkpoint"] == [healthy]

@@ -64,6 +64,15 @@ def unwedge(d) -> bool:
     """
     from pokeagent.menus import Menus
 
+    # THE TITLE SCREEN IS THE OTHER WAY THIS WEDGES, and it does not look
+    # like a wedge at all: after a Champion win the credits roll and the game
+    # soft-resets, but SaveBlock RAM survives so the map, party and dex all
+    # read normally while the player simply cannot move.
+    if d.at_title():
+        log.info("  on the title screen -- taking CONTINUE")
+        if not d.resume_from_title():
+            log.info("  could not get back into the field from the title")
+            return False
     if not d.scene_active():
         return True
     menus = Menus(d.emu, d.state)

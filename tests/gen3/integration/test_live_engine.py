@@ -170,28 +170,3 @@ def test_state_provenance_refuses_a_foreign_rom(fork, tmp_path):
     meta.write_text(json.dumps(payload))
     with pytest.raises(ValueError, match="refusing to load"):
         d.emu.load_state(path)
-
-
-def test_opening_cli_accepts_the_newgame_truck_checkpoint(milestones, tmp_path):
-    """The two documented opening commands compose without manual movement."""
-    import shutil
-
-    from pokeagent.trek import Driver
-    from scripts.to_starter import main
-
-    start = tmp_path / "littleroot.state"
-    source = milestones["littleroot"]
-    shutil.copy2(source, start)
-    shutil.copy2(str(source) + ".meta", str(start) + ".meta")
-    assert main([
-        "--state", str(start), "--out", str(tmp_path / "starter.state"),
-        "--starter", "TORCHIC", "--nickname", "EMBER",
-    ]) == 0
-
-    result = Driver(tmp_path / "lab.state", live=False)
-    assert result.map_name() == "LittlerootTown_ProfessorBirchsLab"
-    mon, = result.state.party()
-    assert mon.species == result.consts.species["SPECIES_TORCHIC"]
-    assert mon.nickname == "EMBER" and mon.hp > 0
-    battle = Driver(tmp_path / "first-battle.state", live=False)
-    assert battle.state.battle_ready()

@@ -5,13 +5,10 @@ one Pokemon with nine uncovered types. These pin the two decisions and the
 judgement call that makes the first one usable early.
 """
 
-from types import SimpleNamespace
-
 import pytest
 
 from pokeagent import catching
 from pokeagent.catching import BALL_RESERVE, CORE_TEAM_SIZE, Catcher
-from pokeagent.tactics import Tactics
 
 pytestmark = pytest.mark.unit
 
@@ -55,21 +52,12 @@ class FakeNames:
     def species(self, sid):
         return {1: "TORCHIC", 4: "LOTAD"}.get(sid, f"SP{sid}")
 
-    def item_data(self, item_id):
-        return SimpleNamespace(price=200)
-
 
 class FakeBattler:
     species = 4
 
 
 class FakeBattle:
-    def __init__(self, names):
-        self.tactics = Tactics.__new__(Tactics)
-        self.tactics.names = names
-        self.tactics.items = {"ITEM_MASTER_BALL": 1}
-        self.tactics._item_ids = {"POKEBALL": 4}
-
     def battler(self, i):
         return FakeBattler()
 
@@ -78,7 +66,7 @@ class FakeDriver:
     def __init__(self, balls=10, party=None):
         self.state = FakeState(balls, party)
         self.names = FakeNames()
-        self.battle = FakeBattle(self.names)
+        self.battle = FakeBattle()
 
     def outlook(self):
         return None
