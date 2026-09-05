@@ -1,4 +1,5 @@
 .venv/
+.venv-gen3/
 saves/
 __pycache__/
 journal/
@@ -64,3 +65,7 @@ vendor/
 agbcc/
 pret/tools/agbcc/
 decomp/
+
+# Impeccable design skill, installed per-checkout by `npx impeccable install`
+# (ships an engine binary); not part of the project.
+.agents/skills/impeccable/

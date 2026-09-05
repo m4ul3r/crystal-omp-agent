@@ -153,13 +153,17 @@ class Session:
         self._grind_picked = 0.0
         self._restock_fails = 0
         # REUSE the Driver's feed when it already made one. Publishing became
-        # the Driver's default (any save under saves/ attaches one), so this
-        # explicit attach became a SECOND observer on the same emulator and the
-        # loop refused to start at all:
+        # the Driver's default (any save under saves/ attaches one, named after
+        # the state's stem), so an unconditional attach here was a SECOND
+        # observer on the same emulator and the loop refused to start at all:
         #   "already has tick observer <LiveFeed default ...>; detach it first"
-        # One publisher per emulator; the Driver's is as good as this one, and
-        # it is already publishing to the name the widget watches.
+        # One publisher per emulator -- but the name must be the one the widget
+        # watches: `--feed default` on saves/sapphire.state used to publish to
+        # live/sapphire.* and the bar widget pinned to `default` saw nothing.
         existing = getattr(self.d, "feed", None)
+        if existing is not None and existing.name != feed_name:
+            existing.detach()
+            self.d.feed = existing = None
         self.feed = existing or LiveFeed(feed_name).attach(self.d)
         #: minutes <= 0 means run until stopped. The user's framing for this
         #: project is an idle game -- something that keeps going in the
