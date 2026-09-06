@@ -196,29 +196,17 @@ class Autosave:
         frame = self.d.emu.frame
         if not force and frame - self._last_frame < self.every:
             return []
-        path = self.dir / f"{self.session}-auto{self._ring_next}.state"
-        written = self._write(path, "periodic")
-        if written is None:
-            return []
         self._last_frame = frame
+        path = self.dir / f"{self.session}-auto{self._ring_next}.state"
         self._ring_next = (self._ring_next + 1) % self.ring
-        return [written]
+        return [self._write(path, "periodic")]
 
     def checkpoint(self, kind):
         """A permanent, uniquely-named checkpoint."""
-        # Allocate from disk, like Autopilot._next_name: restarting a session
-        # must not reset its permanent checkpoint namespace.
-        n = 0
-        for path in self.dir.glob(f"{self.session}-{kind}-*.state"):
-            try:
-                n = max(n, int(path.stem.rsplit("-", 1)[1]))
-            except ValueError:
-                continue
-        path = self.dir / f"{self.session}-{kind}-{n + 1}.state"
-        written = self._write(path, kind)
-        if written is not None:
-            self.milestones.append((kind, written))
-        return written
+        n = sum(1 for m in self.milestones if m[0] == kind) + 1
+        path = self.dir / f"{self.session}-{kind}{n}.state"
+        self.milestones.append((kind, str(path)))
+        return self._write(path, kind)
 
     def _write(self, path, kind):
         try:

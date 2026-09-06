@@ -280,7 +280,29 @@ class GameState:
         return self._read_party("gPlayerParty", self.party_count())
 
     def enemy_party(self):
-        return self._read_party("gEnemyParty", self.emu.u8("gEnemyPartyCount"))
+        """The foe's party, with the count DERIVED rather than read.
+
+        `gEnemyPartyCount` is only ever written by `CalculateEnemyPartyCount`
+        (pret/src/pokemon_2.c:1025-1030) and the WILD encounter path never
+        calls it, so in a wild battle the variable holds whatever the last
+        trainer battle left -- frequently 0. This method therefore returned
+        `[]` for every wild mon in the game, silently: a catch policy that
+        asked "what am I facing?" got nothing, fell through to attacking, and
+        killed a NINCADA that was new to the dex.
+
+        So count the way the engine's own function counts -- scan slots until
+        the first empty species -- instead of trusting a cache the wild path
+        does not maintain. Six is `PARTY_SIZE`.
+        """
+        count = 0
+        base = self.emu.resolve("gEnemyParty")
+        while count < 6:
+            raw = self.emu.read(base + count * self._mon_size, self._mon_size)
+            mon = pokemon.parse_mon(raw)
+            if mon is None or not mon.species:
+                break
+            count += 1
+        return self._read_party("gEnemyParty", count)
 
     def bag(self) -> dict:
         """``{pocket: {item_name: quantity}}``, stopping at the first empty
@@ -385,6 +407,32 @@ class GameState:
             raw = self.emu.read(base + i * self._battle_mon_size, self._battle_mon_size)
             species = int.from_bytes(raw[b["species"] : b["species"] + 2], "little")
             if species == 0 or raw[b["level"]] == 0:
+                return False
+        # NON-ZERO IS NOT FRESH. `gBattleMons` is not cleared between battles,
+        # so the foe's slot still holds the LAST battle's mon through the whole
+        # intro -- and it passes the species/level test above perfectly. Two
+        # separate hunts read the wrong species off the first frame after this
+        # returned True: a cast that produced a FEEBAS was logged as a WINGULL
+        # KO'd two encounters earlier, and a hooked WAILMER read as "ZIGZAGOON
+        # L3". That is not merely a bad log line: `battle_policy` is asked ONCE
+        # per wild, so a decision made off a stale frame can FLEE a species
+        # that is new to the dex.
+        #
+        # For a WILD battle the encounter generator has already written the
+        # real mon to gEnemyParty[0] before the intro copies it into
+        # gBattleMons, so the two disagreeing means the copy has not happened
+        # yet. Scoped to wild battles on purpose: in a TRAINER battle
+        # gEnemyParty[0] is only the lead, and the active foe legitimately
+        # differs after a switch.
+        flags = self.emu.u16("gBattleTypeFlags")
+        if (flags & BATTLE_TYPE["wild"]) and not (flags & BATTLE_TYPE["trainer"]):
+            foe = self.emu.read(base + self._battle_mon_size, self._battle_mon_size)
+            live = int.from_bytes(foe[b["species"] : b["species"] + 2], "little")
+            try:
+                party = self._read_party("gEnemyParty", 1)
+            except Exception:                       # noqa: BLE001
+                return True                         # cannot cross-check; trust it
+            if party and party[0].species and party[0].species != live:
                 return False
         return True
 

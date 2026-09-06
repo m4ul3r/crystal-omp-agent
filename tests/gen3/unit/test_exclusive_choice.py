@@ -92,15 +92,58 @@ def test_taking_a_fossil_locks_the_other_line_and_ends_the_surplus():
 
 
 @pytest.mark.unit
-def test_merely_SEEING_a_fossil_mon_counts_as_the_choice():
-    """The item is what destroys the other fossil, and that happens long
-    before anything is registered as caught -- so `seen` has to count."""
-    t = _target(caught={1}, seen={390})
+def test_seeing_an_opponents_fossil_mon_is_NOT_our_choice():
+    """`seen` must never decide an either/or, because opponents set it.
+
+    This used to assert the opposite -- that seeing ANORITH locked the LILEEP
+    line -- on the reasoning that the ITEM destroys the other fossil long
+    before anything is registered. The reasoning is sound and the mechanism
+    was not: the Elite Four SHOW you the line you can never own. Steven's
+    CRADILY sets the LILEEP line's seen bit, so on a real post-Champion save
+    BOTH lines read as "held", the "exactly one taken" test found two, and the
+    group fell through and locked NOTHING. The dex target then advertised
+    LILEEP and CRADILY as achievable on a cartridge that had already revived
+    the claw fossil, which is how a hunt gets sent after a species the game
+    cannot produce.
+
+    Seeing both lines is the normal post-game state, so it must stay quiet.
+    """
+    t = _target(caught={1}, seen={388, 389, 390, 391})
 
     locked = t.choice_locked()
-    assert {388, 389} <= locked, "seeing ANORITH did not lock the LILEEP line"
-    assert 390 not in locked and 391 not in locked
-    assert t.exclusive_surplus() == 0
+    assert not ({388, 389} & locked), "an opponent's mon locked our own line"
+    assert not ({390, 391} & locked), "an opponent's mon locked the other line"
+    # The choice is still genuinely open, so the two slots remain surplus
+    # rather than silently vanishing from the target.
+    assert t.exclusive_surplus() == 2
+
+
+@pytest.mark.unit
+def test_the_game_s_own_record_decides_which_fossil_line_is_gone():
+    """VAR_WHICH_FOSSIL_REVIVED is the authority (1 = root, 2 = claw).
+
+    It is set at revival, and unlike the dex bits it cannot be contaminated by
+    what an opponent showed us.
+    """
+    class FakeState:
+        def __init__(self, revived):
+            self._revived = revived
+
+        def var(self, name):
+            assert name == "VAR_WHICH_FOSSIL_REVIVED"
+            return self._revived
+
+    # Claw revived: the LILEEP line is gone for good, even though every line
+    # has been seen and nothing of either is caught.
+    t = _target(caught={1}, seen={388, 389, 390, 391})
+    locked = t.choice_locked(FakeState(2))
+    assert {388, 389} <= locked, "claw revived did not lock the root line"
+    assert not ({390, 391} & locked), "locked the line we actually revived"
+
+    # And the mirror image, so the test cannot pass by locking a constant.
+    locked = t.choice_locked(FakeState(1))
+    assert {390, 391} <= locked, "root revived did not lock the claw line"
+    assert not ({388, 389} & locked), "locked the line we actually revived"
 
 
 @pytest.mark.unit

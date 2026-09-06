@@ -71,3 +71,19 @@ def test_the_active_battler_is_never_its_own_replacement():
     assert b._live_alternative(analysis) == ("switch", 3)
 
 
+def test_the_stall_escape_calls_a_method_that_exists():
+    """`self.wild()` never existed, and it sat on the only escape path.
+
+    Four stalled turns crashed the process with `'BattleSession' object has no
+    attribute 'wild'` instead of fleeing -- which killed a collection run
+    outright. The reachable-attribute check is the point: a crash on the
+    recovery path is worse than the thing it recovers from.
+    """
+    from pokeagent.battle import BattleSession
+
+    assert not hasattr(BattleSession, "wild")
+    assert callable(BattleSession.can_flee)
+    src = BattleSession.play.__code__.co_consts
+    names = BattleSession.play.__code__.co_names
+    assert "wild" not in names, "play() still calls the method that never was"
+    assert "can_flee" in names

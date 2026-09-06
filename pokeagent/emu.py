@@ -34,6 +34,10 @@ from . import paths
 
 log = logging.getLogger("pokeagent.emu")
 
+#: The GBA's real refresh rate. Not 60: the LCD runs 280896 cycles a frame off
+#: a 16.78 MHz clock, which is 59.7275 Hz. Used when real-time pacing is on.
+HARDWARE_FPS = 59.7275
+
 #: Buttons the DSL accepts, mapped to mGBA key indices (GBA order).
 KEYS = {
     "A": 0, "B": 1, "SELECT": 2, "START": 3,
@@ -117,10 +121,34 @@ def _preload_libmgba():
     )
 
 
+def _fps_from_env(value):
+    """Parse SAPPHIRE_FPS: a number, "hardware", or off.
+
+    Kept permissive on purpose -- this is a presentation knob a human sets
+    from a shell, so "hardware", "60" and "off" should all do the obvious
+    thing rather than raise.
+    """
+    if not value:
+        return None
+    text = str(value).strip().lower()
+    if text in ("0", "off", "none", "false", "max", "unlimited"):
+        return None
+    if text in ("hardware", "hw", "real", "gba"):
+        return HARDWARE_FPS
+    try:
+        fps = float(text)
+    except ValueError:
+        log.warning("SAPPHIRE_FPS=%r is not a rate; running unthrottled",
+                    value)
+        return None
+    return fps if fps > 0 else None
+
+
 class Sapphire:
     """One live emulator over one savestate timeline."""
 
-    def __init__(self, rom=None, state_path=None, sym=None, charmap=None, observer=None):
+    def __init__(self, rom=None, state_path=None, sym=None, charmap=None,
+                 observer=None, target_fps=None, clock=None, sleep=None):
         # Vendored libmgba, when the system package is not installed. Setting
         # LD_LIBRARY_PATH here would be too late -- the loader read it at
         # process start -- so dlopen the absolute path instead. The dependent
@@ -140,6 +168,23 @@ class Sapphire:
         self.sym = sym
         self.charmap = charmap
         self.observer = observer
+        # REAL-TIME PACING, off by default.
+        #
+        # `None` runs flat out, which is what the grind wants. Set a rate --
+        # or `SAPPHIRE_FPS=hardware` / `SAPPHIRE_FPS=59.7275` in the
+        # environment -- and the emulator is throttled to it, which is what
+        # makes a watched run look like an idle game on real hardware instead
+        # of a tool-assisted speedrun. `HARDWARE_FPS` is the GBA's true
+        # 59.7275 Hz rather than a round 60.
+        #
+        # The clock and sleep are injectable so the pacing arithmetic can be
+        # unit-tested without spending real seconds.
+        if target_fps is None:
+            target_fps = _fps_from_env(os.environ.get("SAPPHIRE_FPS"))
+        self.target_fps = target_fps
+        self._clock = clock or time.monotonic
+        self._sleep = sleep or time.sleep
+        self._frame_due = None
 
         self.core = mgba.core.load_path(str(self.rom_path))
         if self.core is None:
@@ -244,6 +289,7 @@ class Sapphire:
         if self.observer is None:
             for _ in range(frames):
                 self.core.run_frame()
+            self._pace(frames)
             return
         left = frames
         while left > 0:
@@ -251,7 +297,40 @@ class Sapphire:
             for _ in range(slice_):
                 self.core.run_frame()
             left -= slice_
+            self._pace(slice_)
             self.observer.after_slice(self)
+
+    def _pace(self, frames):
+        """Sleep so the emulator runs at `target_fps` instead of flat out.
+
+        EVERY frame this harness advances goes through `tick`, so this one
+        place governs the whole thing -- inputs, `settle`, `advance_scene`.
+        Nothing here is a TAS-style jump: a call like `advance_scene(40_000)`
+        is a frame BUDGET that returns as soon as the scene stops changing, so
+        the game is already stepped one frame at a time. What made it look
+        unlike hardware is that headless mGBA runs as fast as the CPU allows
+        -- thousands of frames a second -- with no throttle at all.
+
+        Paced against a running deadline rather than by sleeping a fixed
+        amount per call, so the rate does not drift with the cost of the work
+        between ticks. If it falls more than a second behind (a long BFS, a
+        savestate write) it resyncs instead of sprinting to catch up, because
+        catching up is exactly the visible stutter this is meant to remove.
+        """
+        fps = self.target_fps
+        if not fps:
+            return
+        now = self._clock()
+        due = self._frame_due
+        if due is None:
+            due = now
+        due += frames / fps
+        delay = due - now
+        if delay > 0:
+            self._sleep(delay)
+        elif delay < -1.0:
+            due = self._clock()
+        self._frame_due = due
 
     def run_sequence(self, seq):
         """Execute an input DSL string. Always releases every key at the end

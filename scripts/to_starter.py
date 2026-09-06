@@ -139,24 +139,6 @@ def choose_starter(d, menus, want, max_rounds=80):
     raise SystemExit("confirmed the starter but the party is still empty")
 
 
-def _leave_truck(d):
-    """Run the trigger column before the truck's dynamic exit."""
-    if d.map_name() != "InsideOfTruck":
-        return
-    for _ in range(4):
-        if d.map_name() != "InsideOfTruck":
-            break
-        # x=3 runs setdynamicwarp; the three exit tiles are at x=4.
-        d.step_dir("R")
-        d.advance_scene(40000)
-        if d.map_name() != "InsideOfTruck":
-            break
-        _x, y = d.pos()
-        if not d.take_warp(4, y if 1 <= y <= 3 else 2):
-            log.debug("truck exit refused: %s", d.last_warp_reason)
-    d.advance_scene(60000)
-
-
 def drive_intro(d, menus=None, starter=None, nickname="EMBER",
                 saves=None, out=None) -> bool:
     """Play the opening from wherever the game currently is up to a party.
@@ -186,7 +168,26 @@ def drive_intro(d, menus=None, starter=None, nickname="EMBER",
     d.advance_scene(60000)
     gender = d.state.gender()
     house = f"{HOUSE[gender]}_1F"
-    _leave_truck(d)
+    if d.map_name() == "InsideOfTruck":
+        # The truck opens on the RIGHT, not the bottom. Its three exit warps
+        # are at x=4 (y=1..3) and the arrival script sits on the column beside
+        # them at x=3, guarded on VAR_LITTLEROOT_INTRO_STATE == 0
+        # (InsideOfTruck/map.json warps + coord_events). So the order matters:
+        # step east ONTO the trigger column to run the script -- which is what
+        # calls `setdynamicwarp MAP_LITTLEROOT_TOWN`
+        # (InsideOfTruck/scripts.inc:29-46) and makes the exit lead anywhere at
+        # all -- and only then take the warp.
+        for _ in range(4):
+            if d.map_name() != "InsideOfTruck":
+                break
+            d.step_dir("R")
+            d.advance_scene(40000)
+            if d.map_name() != "InsideOfTruck":
+                break
+            x, y = d.pos()
+            if not d.take_warp(4, y if 1 <= y <= 3 else 2):
+                log.debug("truck exit refused: %s", d.last_warp_reason)
+        d.advance_scene(60000)
     if d.map_name() != house and not d.state.party():
         # Not in the house and no party: try to get there before giving up.
         try:
@@ -289,7 +290,6 @@ def main(argv=None):
 
     log.info("start        %s", d.status())
     d.advance_scene(60000)
-    _leave_truck(d)
     gender = d.state.gender()
     house = f"{HOUSE[gender]}_1F"
     if d.map_name() != house:

@@ -544,25 +544,45 @@ Panel {
               back.source = incoming + "&n=" + nonce
             }
 
-            // SELF-HEAL. The URL only changes when the frame counter does, and
-            // the emulator does not tick while the driver spends a minute
-            // planning a route -- so a panel that opens during one of those
-            // pauses gets a source assignment it has already seen, no load
-            // fires, and the box sits blank until the game moves again. It
-            // came back on its own, which is exactly the tell.
+            // THE IMAGE MUST NOT BE CLOCKED BY THE STATE JSON.
             //
-            // Also covers a failed decode: a load error leaves the buffer
-            // empty and nothing else would ever retry it.
+            // `feed.screenUrl` cache-busts on `?f=` + the frame counter, and
+            // that counter arrives in the STATE file -- which is published on
+            // a different, slower cadence than the picture and then polled
+            // slower still:
+            //
+            //   frame PNG   LiveFeed.fps      = 12 Hz  (live.py:183)
+            //   state JSON  LiveFeed.state_hz =  4 Hz  (live.py:184)
+            //   this widget detailPollMs      = 400 ms (Feed.qml:32)
+            //
+            // So the URL changed at best 2.5 times a second while the
+            // publisher was writing twelve fresh frames a second, and the
+            // game visibly ADVANCED IN JUMPS instead of moving -- reported
+            // repeatedly as pop-in and flashing, and never explained by the
+            // feed measurements because the FEED was clean the whole time.
+            // The stutter was on the reading end.
+            //
+            // Reload on our own clock instead, at the publisher's rate, using
+            // the nonce rather than the frame counter. The PNG is a ~5 KB
+            // local file and `os.replace` makes every read atomic
+            // (live.py:127-142), so re-reading it is cheap and can never tear.
+            //
+            // This also subsumes the old 1500 ms self-heal, which existed for
+            // two cases that fall out for free once the reload is unconditional:
+            // a panel opened while the emulator was paused (source assigned a
+            // URL it had already seen, so no load fired and the box sat blank)
+            // and a failed decode that nothing would ever retry.
             Timer {
-              interval: 1500
+              // ~11 Hz. Just inside the publisher's 12 Hz so a new frame is
+              // picked up within one interval without racing its writes.
+              interval: 90
               repeat: true
               running: screenBox.visible && feed.screenUrl !== ""
               onTriggered: {
-                var front = screenBox.frontIsA ? imageA : imageB
                 var back = screenBox.frontIsA ? imageB : imageA
-                if (screenBox.everLoaded
-                    && front.status === Image.Ready
-                    && back.status !== Image.Error) return
+                // Do not stack a second decode on a buffer still working: it
+                // drops the in-flight texture and wastes the load.
+                if (back.status === Image.Loading) return
                 screenBox.nonce++
                 screenBox.load()
               }
