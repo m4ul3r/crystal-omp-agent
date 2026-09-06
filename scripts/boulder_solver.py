@@ -655,8 +655,27 @@ def walk(d, target, tries=8, smashing=False) -> bool:
                     elif cell_ahead is None or not d.nav._is_water(cell_ahead):
                         note_wall(here, ahead)
                 elif pushing:
-                    # A REFUSED PUSH IS ABOUT THE LANDING, NOT THIS TILE.
-                    note_no_push(here, (ahead[0] + dx, ahead[1] + dy))
+                    # A REFUSED PUSH IS ABOUT THE LANDING, NOT THIS TILE --
+                    # but ONLY when the shove was legal to begin with. With
+                    # FLAG_SYS_USE_STRENGTH clear the engine refuses every
+                    # push regardless of what is behind the boulder, and
+                    # `note_no_push` writes to disk permanently and shared.
+                    # Shoal Cave's Lower Room is how this was found: its
+                    # boulder at (25,3) only spawns near the camera, so
+                    # `use_strength` (which enumerates LIVE objects) answers
+                    # "no boulder on this map" from across the room, the walk
+                    # arrives at (24,3) with strength still off, the push is
+                    # refused, and (26,3) -- the only legal landing, and the
+                    # only way to the Ice Room ladder -- was learned as
+                    # impossible. Every later solve then answered "no
+                    # solution" instantly, for this process and every one
+                    # after it.
+                    if d.state.flag("FLAG_SYS_USE_STRENGTH"):
+                        note_no_push(here, (ahead[0] + dx, ahead[1] + dy))
+                    else:
+                        log.info("  push refused with STRENGTH off -- not "
+                                 "learning %s",
+                                 (ahead[0] + dx, ahead[1] + dy))
                 if d.scene_active():
                     d.advance_scene(90000)
                     if d.in_battle():

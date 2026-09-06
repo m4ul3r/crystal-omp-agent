@@ -1166,7 +1166,7 @@ class DexTarget:
         """
         caught, seen = self.dex_flags(state)
         locked: set[int] = set()
-        for lines, taken in self._exclusive_groups(caught, seen):
+        for lines, taken in self._exclusive_groups(caught, seen, state):
             if taken is None:
                 continue
             for ln in lines:
@@ -1187,7 +1187,7 @@ class DexTarget:
             )
         return [self.evolutions.natdex(sp) for sp in out]
 
-    def _exclusive_groups(self, caught, seen):
+    def _exclusive_groups(self, caught, seen, state=None):
         """``[(lines, taken_or_None)]`` for the game's either/or gifts.
 
         Birch offers one starter of three; Route 111 offers one fossil of two.
@@ -1218,9 +1218,36 @@ class DexTarget:
             )
         if len(roots) == 2:
             lines = [self._line_natdex(sp) for sp in roots]
-            held = caught | seen
-            taken = [ln for ln in lines if any(n in held for n in ln)]
-            groups.append((lines, taken[0] if len(taken) == 1 else None))
+            # ASK THE GAME WHICH FOSSIL IT REVIVED. `caught | seen` cannot
+            # answer this: `seen` is poison for an exclusivity test, because
+            # the Elite Four SHOW you the line you can never own -- Steven's
+            # CRADILY sets the LILEEP line's seen bit, so BOTH lines read as
+            # "held", `len(taken)` came out 2, and the ternary below fell to
+            # None. The group therefore never locked, and the dex target kept
+            # advertising LILEEP and CRADILY as achievable on a save that had
+            # already revived the claw fossil. An over-counted target is not a
+            # cosmetic error: it sends a hunt after a species the cartridge
+            # cannot produce.
+            #
+            # VAR_WHICH_FOSSIL_REVIVED is the engine's own record (1 = root ->
+            # LILEEP, 2 = claw -> ANORITH; src/fossil_specials.c). The hide
+            # flags are the fallback: Route111/scripts.inc:55-58 sets BOTH on
+            # either pickup and nothing in the game clears them, and Sapphire
+            # has no MirageTower or DesertUnderpass map at all -- those are
+            # Emerald additions -- so once they are set the un-revived line is
+            # gone for good.
+            revived = 0
+            try:
+                revived = int(state.var("VAR_WHICH_FOSSIL_REVIVED"))
+            except Exception:                      # noqa: BLE001
+                revived = 0
+            if revived in (1, 2):
+                # 1 -> root/LILEEP is ours, so the ANORITH line is locked out;
+                # 2 -> the reverse. `taken` names the line we KEPT.
+                groups.append((lines, lines[0] if revived == 1 else lines[1]))
+            else:
+                taken = [ln for ln in lines if any(n in caught for n in ln)]
+                groups.append((lines, taken[0] if len(taken) == 1 else None))
         return groups
 
     def exclusive_surplus(self, state=None) -> int:
@@ -1242,7 +1269,7 @@ class DexTarget:
         """
         caught, seen = self.dex_flags(state)
         surplus = 0
-        for lines, taken in self._exclusive_groups(caught, seen):
+        for lines, taken in self._exclusive_groups(caught, seen, state):
             if taken is not None or len(lines) < 2:
                 continue
             surplus += (sum(len(ln) for ln in lines)
@@ -1481,13 +1508,27 @@ class DexTarget:
         blob = self.emu.read(base, span)
         found, bad = [], 0
         for i in range(span // pokemon.BOX_SIZE):
-            mon = pokemon.parse_mon(
-                blob[i * pokemon.BOX_SIZE:(i + 1) * pokemon.BOX_SIZE])
+            raw = blob[i * pokemon.BOX_SIZE:(i + 1) * pokemon.BOX_SIZE]
+            mon = pokemon.parse_mon(raw)
             if mon is None:
                 continue
             if not mon.checksum_ok:
                 bad += 1
                 continue
+            # parse_mon leaves the name blank on purpose -- it has no charmap
+            # ("filled by the caller", pokemon.py:194) -- and this caller never
+            # did, so EVERY boxed mon read as nickname ''. That is not cosmetic:
+            # it silently defeats matching a mon by name (a withdraw by nickname
+            # failed for a boxed PELIPPER earlier in this run) and it makes
+            # auditing names impossible, which is worse -- a scan for mons
+            # wrongly named "A" returned zero from the boxes no matter what was
+            # in them, so a real one hid there until it was withdrawn and
+            # evolved. A BoxPokemon is the first 80 bytes of a Pokemon, so the
+            # party's own offsets apply with box == 0.
+            mon.nickname = self.emu.charmap.decode(
+                raw[0x08:0x08 + pokemon.NICKNAME_LEN])
+            mon.ot_name = self.emu.charmap.decode(
+                raw[0x14:0x14 + pokemon.OT_NAME_LEN])
             if mon.species and not mon.is_egg:
                 found.append((i, mon))
         if bad:

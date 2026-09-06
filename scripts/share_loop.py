@@ -40,6 +40,14 @@ def owned_and_targets(state, budget):
     d = Driver(state)
     d.advance_scene(20_000)
     dex = DexTarget(d.emu, d.names, d.consts, d.nav, spec=d.spec)
+    # TARGET THE DEX, NOT THE BOXES. `owned_species` is what the player
+    # POSSESSES; the Pokedex is a separate set of caught flags. Using the
+    # former meant the loop happily spent laps re-making a GLOOM that was
+    # already registered -- it reported "DEX 79 -> 80 (GLOOM)" while the real
+    # count sat unchanged at 100/178. `dex.missing()` is the authoritative
+    # list of entries still needed, and it also excludes the 16 that are out
+    # of reach by design.
+    missing = {e.species for e in dex.missing(d.state)}
     own = set(dex.owned_species(d.state))
     et = dex.evolutions
     mons = [m for m in d.state.party() if not m.is_egg]
@@ -50,7 +58,9 @@ def owned_and_targets(state, budget):
     rows, seen = [], set()
     for m in mons:
         for e in et._forward.get(m.species, ()):
-            if not e.by_level or e.to_species in own or e.to_species in seen:
+            if not e.by_level or e.to_species in seen:
+                continue
+            if e.to_species not in missing:
                 continue
             need = max(0, e.param - lv[id(m)])
             if need > budget:
@@ -58,14 +68,23 @@ def owned_and_targets(state, budget):
             seen.add(e.to_species)
             rows.append((need, d.names.species(m.species).upper(),
                          lv[id(m)], d.names.species(e.to_species)))
-    # RANK BY THE LEVEL IT HAS TO REACH, NOT BY LEVELS NEEDED.
-    # Experience scales with the cube of level, so "+2 levels" on a L30
-    # HORSEA costs far more than "+5 levels" on a L5 CASCOON. Sorting by
-    # levels-needed put the expensive one first and spent laps on L36-L40
-    # mons that cannot make a level in one gauntlet, while CASCOON L5 -> 10
-    # and SILCOON L5 -> 10 sat in the queue behind them.
-    rows.sort(key=lambda r: (r[2] + r[0], r[0]))
-    n = len(own)
+    # RANK BY THE EXPERIENCE THE ENTRY ACTUALLY COSTS.
+    # Every cheaper proxy has ordered this wrongly. Levels-needed put a L40
+    # mon that cannot make one level in a gauntlet ahead of a L5 that gains
+    # eleven. Target-level then put MACHOP L15 -> 28 (+13) ahead of HORSEA
+    # L30 -> 32 (+2), because 28 < 32 -- but the cubic curve makes MACHOP
+    # more than three times the work:
+    #
+    #     MACHOP   28^3 - 15^3 = 18577
+    #     HORSEA   32^3 - 30^3 =  5768
+    #
+    # Gen 3 exp-to-level is a cubic in every growth group, so the difference
+    # of cubes is proportional to the real cost and is the right key. The
+    # growth RATE differs per species, which only scales each estimate by a
+    # constant -- it does not reorder them enough to be worth reading the
+    # table for.
+    rows.sort(key=lambda r: ((r[2] + r[0]) ** 3 - r[2] ** 3, r[0]))
+    n = len(missing)
     del d
     return n, rows
 
@@ -113,7 +132,7 @@ def main():
             a.budget += 8
             continue
         need, species, level, becomes = pick
-        log.info("=== lap %d | dex %d | %s L%s -> %s (+%d) | queue %s ===",
+        log.info("=== lap %d | %d missing | %s L%s -> %s (+%d) | queue %s ===",
                  lap, n, species, level, becomes, need,
                  [r[1] for r in rows[1:5]])
 
@@ -150,14 +169,17 @@ def main():
             run([py, "scripts/elite_four.py", "--state", a.state,
                  "--protect-bench", "--minutes", str(a.per_lap),
                  "--feed", "default"], minutes=a.per_lap + 6)
-            if owned_and_targets(a.state, a.budget)[0] > n:
+            # `n` is now the count of dex entries STILL MISSING, so a bank
+            # makes it go DOWN. Comparing the old way silently meant no lap
+            # could ever succeed.
+            if owned_and_targets(a.state, a.budget)[0] < n:
                 log.info("  banked on pass %d -- next target", pass_no + 1)
                 break
 
         after, rows_after = owned_and_targets(a.state, a.budget)
-        if after > n:
+        if after < n:
             failed.pop(species, None)
-            log.info("  *** DEX %d -> %d (%s) ***", n, after, becomes)
+            log.info("  *** DEX: %d missing -> %d (%s) ***", n, after, becomes)
         else:
             # A STRIKE ONLY COUNTS IF NO LEVELS WERE GAINED. One lap is worth
             # several levels to a low-level holder but not always enough to
@@ -175,7 +197,7 @@ def main():
                          species, level, failed[species])
 
     n, _ = owned_and_targets(a.state, a.budget)
-    log.info("FINAL dex %d", n)
+    log.info("FINAL: %d dex entries still missing", n)
     return 0
 
 

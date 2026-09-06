@@ -15,7 +15,7 @@ from the ROM's own table (pret/src/data/pokemon/evolution.h):
     WATER STONE + LOMBRE     -> LUDICOLO
     WATER STONE + STARYU     -> STARMIE
     FIRE  STONE + VULPIX     -> NINETALES
-    THUNDER STONE + PIKACHU  -> RAICHU
+    THUNDERSTONE  + PIKACHU  -> RAICHU
 """
 import argparse
 import logging
@@ -40,8 +40,34 @@ PAIRS = {
     "LOMBRE": ("WATER STONE", "Ludicolo"),
     "STARYU": ("WATER STONE", "Starmie"),
     "VULPIX": ("FIRE STONE", "Ninetales"),
-    "PIKACHU": ("THUNDER STONE", "Raichu"),
+    # THUNDERSTONE IS ONE WORD in this ROM. Every other stone carries a
+    # space, so "THUNDER STONE" reads perfectly natural and silently matched
+    # nothing: held() would refuse a stone sitting in the ITEMS pocket and
+    # report "no THUNDER STONE in the bag". Same class of trap as
+    # "EXP. SHARE" vs "EXP SHARE". Checked against the cartridge:
+    #   ITEM_THUNDER_STONE id=96 -> 'THUNDERSTONE'
+    #   ITEM_WATER_STONE   id=97 -> 'WATER STONE'
+    "PIKACHU": ("THUNDERSTONE", "Raichu"),
 }
+
+
+def verify_stone_names(d) -> None:
+    """Refuse to run on a stone name the cartridge does not know.
+
+    The THUNDERSTONE bug was invisible: a wrong display name simply never
+    matched the bag and the script reported the stone as absent. Resolving
+    every name in PAIRS against the ROM up front turns that into a crash with
+    the offending string in it.
+    """
+    from pokeagent.teaching import Teacher
+
+    t = Teacher(d)
+    bad = [name for name, _becomes in PAIRS.values() if not t._item_id(name)]
+    if bad:
+        raise SystemExit(
+            "these stone names are not items in this ROM: "
+            + ", ".join(sorted(set(bad)))
+        )
 
 
 def held(d, item: str) -> bool:
@@ -113,8 +139,22 @@ def main(argv=None) -> int:
         log.info("boxed %s L%s at flat slot %d (box %d slot %d)",
                  species, lv, slot, slot // BOX_SIZE, slot % BOX_SIZE)
         if not Storage(d).pc_cells():
+            # REUSE THE STAGING ESCAPE. `heal_at_nearest_center` alone cannot
+            # leave the Elite Four plateau -- the interior is a one-way chain
+            # and Fly is refused indoors -- so a run parked at Corridor4 just
+            # answered "no PC on EverGrandeCity_Corridor4". share_grind's
+            # to_center clears an open menu first, walks out through the map's
+            # own warps, then flies.
             try:
-                d.heal_at_nearest_center()
+                sys.path.insert(0, str(Path(__file__).resolve().parent))
+                from share_grind import to_center
+
+                to_center(d)
+            except Exception as exc:  # noqa: BLE001
+                log.info("to_center: %s", str(exc)[:90])
+            try:
+                if not Storage(d).pc_cells():
+                    d.heal_at_nearest_center()
             except Exception as exc:  # noqa: BLE001
                 log.info("centre: %s", str(exc)[:90])
         st = Storage(d)

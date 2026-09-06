@@ -842,6 +842,36 @@ class Flight:
         lands on a flyable map and re-checks rather than trusting it.
         """
         d = self.d
+        # UNDERWATER IS INDOORS WITH NO DOOR. MAP_TYPE_UNDERWATER refuses FLY
+        # like a building does, but there is no warp to walk out of -- you
+        # surface, which is the B button on a cell whose behaviour permits it.
+        # Without this branch every caller of the flyable_here()/step_outside()
+        # idiom is stuck forever on the sea floor: it returned False without
+        # moving, and callers then fell through to a land route from underwater
+        # and burned minutes at full CPU. FOUR separate hunts hit this on the
+        # same save and each hand-wrote the same escape before it was fixed
+        # here, which is the clearest possible signal it belonged in the
+        # library rather than in every script.
+        #
+        # The cell you are standing on may itself forbid surfacing
+        # (SEAWEED_NO_SURFACING is common), so ask nav for the gates rather
+        # than pressing B and hoping.
+        if d.map_name().startswith("Underwater"):
+            try:
+                gates = d.nav.dive_gates(d.map_name(), "emerge") or ()
+            except Exception:                       # noqa: BLE001
+                gates = ()
+            here = d.pos()
+            for cell in sorted(gates, key=lambda c: abs(c[0] - here[0])
+                               + abs(c[1] - here[1])):
+                try:
+                    if cell != here and not d.goto(*cell, on_battle="fight"):
+                        continue
+                    if d.dive() and not d.map_name().startswith("Underwater"):
+                        return self.flyable_here()
+                except Exception:                   # noqa: BLE001
+                    continue
+            return False
         for _ in range(tries):
             if self.flyable_here():
                 return True

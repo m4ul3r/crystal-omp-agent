@@ -374,12 +374,24 @@ class Catcher:
         return decide
 
     def _pick_ball(self):
-        """Cheapest stocked ordinary ball; MASTER BALL needs an explicit request."""
+        """The cheapest ball in the bag, by the ROM's own price."""
         try:
             balls = self.d.state.bag().get("poke_balls") or {}
-            return self.d.battle.tactics.pick_ball(balls)
         except Exception:  # noqa: BLE001
             return None
+        have = [n for n, q in balls.items() if isinstance(q, int) and q > 0]
+        if not have:
+            return None
+
+        def price(name):
+            # item_data() is keyed by ID; the bag reports names.
+            try:
+                item_id = self.d.battle.tactics.item_id(name)
+                return self.d.names.item_data(item_id).price
+            except Exception:  # noqa: BLE001
+                return 10_000
+
+        return min(have, key=price)
 
     def _would_ko(self, frame, enemy_hp) -> bool:
         """Would our own best move finish it this turn?

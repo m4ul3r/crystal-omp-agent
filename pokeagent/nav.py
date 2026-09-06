@@ -82,6 +82,14 @@ WATERFALL = 0x13
 #: so it slides back exactly like walking -- worth stating because "get a
 #: bike" is the obvious fix and half of the obvious fix is wrong.
 MUDDY_SLOPE = 0xD0
+
+#: Behaviours the ENGINE refuses on foot even though their collision byte is
+#: 0: MB_BUMPY_SLOPE and the four acro-bike rails. GetCollisionAtCoords
+#: returns 0 and check_acro_bike_metatile then overrides it to 9..13
+#: (pret/src/field_player_avatar.c:606-611, :661-672).
+BUMPY_SLOPE = 0xD1
+ACRO_RAILS = (0xD3, 0xD4, 0xD5, 0xD6)
+ACRO_ONLY = frozenset((BUMPY_SLOPE,) + ACRO_RAILS)
 _INCBIN = re.compile(
     r"^gMetatileAttributes_(\w+)::[^\n]*\n\s*\.incbin\s+\"([^\"]+)\"", re.M
 )
@@ -148,6 +156,12 @@ class MapData:
     #: cycle stays responsive: the loop must keep saving, keep its watchdog
     #: fed, and keep answering "where am I" while a search is running.
     plan_budget_s = 20.0
+    #: Acro bike. Required for MB_BUMPY_SLOPE and the four rail behaviours,
+    #: which the engine refuses on foot despite a collision byte of 0 (see
+    #: ACRO_ONLY). Default False, because "reachable on foot" is the question
+    #: nav is asked almost every time, and answering it optimistically is what
+    #: made 34 unreachable Jagged Pass cells look routable.
+    acro_bike = False
     #: Runtime refusals per map, `{map: {(x, y), ...}}` -- an NPC in a doorway,
     #: a coord_event whose guards still hold. Instances build their own in
     #: __init__; this default exists so a bare `__new__` instance answers
@@ -364,28 +378,14 @@ class MapData:
         return src[off] & METATILE_ATTR_BEHAVIOR_MASK
 
     def set_live_cells(self, map_name, cells: dict) -> int:
-        """Merge observed cells for one map; return changed effective cells.
+        """Override decoded cells for one map. Returns how many changed.
 
-        A cell matching the shipped grid removes its old override. Unobserved
-        cells remain untouched, including when a live-grid read is unavailable.
-        Clears reachability only when the effective map changes.
+        Clears the reachability memo, because a barrier that just opened
+        changes exactly the answer that cache is holding.
         """
-        if not cells:
-            return 0
-        grid = self.grid(map_name)
         book = self._live.setdefault(map_name, {})
-        changed = 0
-        for (x, y), cell in cells.items():
-            static = (grid[y][x]
-                      if 0 <= y < len(grid) and 0 <= x < len(grid[y])
-                      else None)
-            changed += book.get((x, y), static) != cell
-            if cell == static:
-                book.pop((x, y), None)
-            else:
-                book[(x, y)] = cell
-        if not book:
-            self._live.pop(map_name, None)
+        changed = sum(1 for k, v in cells.items() if book.get(k) != v)
+        book.update(cells)
         if changed:
             self._reach_cache.clear()
         return changed
@@ -571,6 +571,25 @@ class MapData:
             return None
         # Standing on one, every direction but south is taken from you.
         if here.behavior == MUDDY_SLOPE and d != "D" and not self.mach_bike:
+            return None
+        # THE ACRO-BIKE-ONLY BEHAVIOURS ARE WALLS ON FOOT, and the collision
+        # byte does not say so. GetCollisionAtCoords returns 0 for all of
+        # them and then check_acro_bike_metatile OVERRIDES it to 9..13
+        # (pret/src/field_player_avatar.c:606-611, :661-672), so a decoded
+        # grid that trusts collision alone reads a rail as ordinary floor.
+        #
+        # Measured cost of not modelling them: nav claimed all 34 Jagged Pass
+        # grass cells were reachable from the Route 112 door when the true
+        # on-foot count is ZERO, and every goto died as "stalled 12x at
+        # (9,33)". Jagged Pass is one-way DOWNHILL -- its only usable entrance
+        # on foot is the Mt Chimney door, i.e. the cable car. The same gap
+        # made the Safari Zone's rail staircase read as floor and cost another
+        # run before it was worked around by hand.
+        #
+        # A promise of a route that cannot exist is worse than a refusal: the
+        # refusal reroutes, the promise oscillates until a replan cap.
+        if not self.acro_bike and (there.behavior in ACRO_ONLY
+                                   or here.behavior in ACRO_ONLY):
             return None
 
         # Ledges are checked AFTER collision and override it: a ledge tile is
